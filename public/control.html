@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Stage Messenger — Control</title>
+  <script src="/socket.io.min.js"></script>
+  <script src="/qrcode.min.js"></script>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --green:  #00ff88;
+      --bg:     #0d0d1a;
+      --card:   #14142a;
+      --border: #2a2a4a;
+      --text:   #e0e0f0;
+      --muted:  #55557a;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      min-height: 100dvh;
+      padding: 1rem 1rem 3rem;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    header h1 {
+      font-size: 0.95rem;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--green);
+    }
+
+    #status {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    #status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    #status-dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #status-dot.off { background: #ff4444; }
+
+    /* ── Section label ── */
+    .label {
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+
+    /* ── Target chips ── */
+    #target-section { margin-bottom: 1.5rem; }
+
+    #all-chip {
+      width: 100%;
+      padding: 0.7rem 1rem;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      cursor: pointer;
+      text-align: center;
+      margin-bottom: 0.5rem;
+      transition: all 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #all-chip.active {
+      border-color: var(--green);
+      background: rgba(0,255,136,0.08);
+      color: var(--green);
+    }
+
+    #device-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .device-chip {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.6rem 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--card);
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .device-chip .chip-icon { font-size: 1rem; flex-shrink: 0; }
+
+    .device-chip .chip-name { flex: 1; }
+
+    .device-chip .chip-type {
+      font-size: 0.55rem;
+      letter-spacing: 0.08em;
+      color: #333355;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .device-chip.active {
+      border-color: var(--green);
+      background: rgba(0,255,136,0.08);
+      color: var(--green);
+    }
+
+    .device-chip.active .chip-type { color: rgba(0,255,136,0.4); }
+
+    #no-devices {
+      text-align: center;
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-style: italic;
+      padding: 0.75rem;
+      display: none;
+    }
+
+    /* ── Message input ── */
+    .input-wrap {
+      position: relative;
+      margin-bottom: 0.6rem;
+    }
+
+    #message-input {
+      width: 100%;
+      padding: 0.9rem 3rem 0.9rem 1rem;
+      background: var(--card);
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 1.05rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      outline: none;
+      caret-color: var(--green);
+      -webkit-appearance: none;
+    }
+
+    #message-input::placeholder {
+      color: #222244;
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    #message-input:focus { border-color: var(--green); }
+
+    #char-count {
+      position: absolute;
+      right: 0.75rem; top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.6rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    /* ── Quick messages ── */
+    .quick-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.35rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .quick-btn {
+      padding: 0.6rem 0.5rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .quick-btn:active { background: #1e1e3a; transform: scale(0.97); }
+
+    /* ── Color picker ── */
+    .color-row {
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+
+    .color-dot {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.12s, border-color 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .color-dot.active { border-color: #fff; transform: scale(1.18); }
+
+    /* ── Duration ── */
+    .dur-row {
+      display: flex;
+      gap: 0.35rem;
+      margin-bottom: 1.75rem;
+    }
+
+    .dur-btn {
+      flex: 1;
+      padding: 0.45rem 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .dur-btn.active {
+      border-color: var(--green);
+      color: var(--green);
+      background: rgba(0,255,136,0.07);
+    }
+
+    /* ── Send / Clear ── */
+    #send-btn {
+      width: 100%;
+      padding: 1rem;
+      background: var(--green);
+      color: #000;
+      border: none;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 900;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: opacity 0.12s, transform 0.1s, background 0.2s;
+      -webkit-tap-highlight-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+
+    #send-btn:active  { opacity: 0.8; transform: scale(0.98); }
+    #send-btn.sent    { background: #00cc66; }
+    #send-btn.no-target { background: #444; color: #888; cursor: default; }
+
+    #clear-btn {
+      width: 100%;
+      padding: 0.6rem;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #clear-btn:active { background: #1a1a2e; }
+
+    /* QR modal */
+    #qr-modal {
+      display: none; position: fixed; inset: 0; z-index: 500;
+      background: rgba(0,0,0,0.88);
+      flex-direction: column; align-items: center; justify-content: center; gap: 1rem;
+    }
+    #qr-modal.open { display: flex; }
+    #qr-modal-inner { background: #fff; border-radius: 16px; padding: 14px; line-height: 0; }
+    #qr-modal-label { color: #fff; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; text-align: center; }
+    #qr-modal-url   { color: #666; font-size: 0.6rem; letter-spacing: 0.05em; }
+    #qr-close-btn   { padding: 0.6rem 2rem; background: transparent; border: 1px solid #333; border-radius: 8px; color: #666; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; cursor: pointer; }
+
+    /* ── Incoming message overlay ── */
+    #msg-overlay {
+      position: fixed; inset: 0; z-index: 500;
+      display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      padding: 3vh 4vw 7vh;
+      text-align: center;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.2s;
+      font-family: 'Arial Black', Arial, sans-serif;
+      cursor: pointer;
+    }
+    #msg-overlay.visible { opacity: 1; pointer-events: all; }
+
+    #msg-ov-from {
+      font-size: min(4.5vw, 6vh); font-weight: 900;
+      color: rgba(0,0,0,0.5); line-height: 1;
+      letter-spacing: 0.05em; max-width: 96%;
+    }
+    #msg-ov-text {
+      font-size: min(22vw, 42vh); font-weight: 900;
+      color: #000; line-height: 1.05;
+      word-break: normal; overflow-wrap: normal; width: 100%;
+    }
+    #msg-ov-key {
+      font-size: min(5vw, 7vh); font-weight: 900;
+      color: rgba(0,0,0,0.7); line-height: 1.05;
+    }
+    #msg-ov-hint {
+      position: absolute; bottom: 1.5rem;
+      font-size: max(1.8vw, 11px); color: rgba(0,0,0,0.3);
+      font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    }
+    #msg-ov-bar-wrap {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      height: 8px; background: rgba(0,0,0,0.2);
+    }
+    #msg-ov-bar { height: 100%; width: 100%; background: rgba(0,0,0,0.35); }
+
+    @keyframes ctrl-flash {
+      0%   { background: var(--cfc); }
+      13%  { background: #fff; }
+      26%  { background: var(--cfc); }
+      39%  { background: #fff; }
+      52%  { background: var(--cfc); }
+      65%  { background: #fff; }
+      78%  { background: var(--cfc); }
+      100% { background: var(--cfc); }
+    }
+    #msg-overlay.flashing { animation: ctrl-flash 0.75s ease-in-out forwards; }
+    /* -- Link generator role buttons */
+    .link-role-btn {
+      flex: 1; padding: 0.45rem 0; background: var(--card);
+      border: 1px solid var(--border); border-radius: 8px; color: var(--muted);
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em;
+      text-align: center; cursor: pointer; transition: all 0.12s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .link-role-btn.active { border-color: var(--green); color: var(--green); background: rgba(0,255,136,0.07); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>🎸 Stage Messenger</h1>
+    <button id="qr-btn" style="background:transparent;border:1px solid #2a2a4a;border-radius:8px;padding:0.3rem 0.6rem;color:#55557a;font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;" onclick="openQR()">⬡ QR</button>
+      <div id="status">
+      <div id="status-dot" class="off"></div>
+      <span id="status-text">Offline</span>
+    </div>
+  </header>
+
+  <!-- Targets -->
+  <div class="label">Send To</div>
+  <div id="target-section">
+    <button id="all-chip" class="active">⬡ &nbsp;All Devices</button>
+    <div id="device-list"></div>
+    <div id="no-devices">No devices connected yet</div>
+  </div>
+
+  <!-- Message -->
+  <div class="label">Message</div>
+  <div class="input-wrap" style="margin-bottom:0.5rem">
+    <input type="text" id="message-input"
+           placeholder="Type a message…"
+           maxlength="160"
+           autocomplete="off" autocorrect="off"
+           autocapitalize="characters" spellcheck="false">
+    <span id="char-count">0/160</span>
+  </div>
+  <div style="display:flex;justify-content:flex-end;margin-top:0.3rem;margin-bottom:0.5rem;">
+    <button id="clear-msg-btn" style="background:transparent;border:none;color:var(--muted);font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;padding:0.15rem 0.5rem;-webkit-tap-highlight-color:transparent;">✕ Clear</button>
+  </div>
+
+  <div class="quick-grid">
+    <button class="quick-btn" data-msg="LOUDER">📢 LOUDER</button>
+    <button class="quick-btn" data-msg="SOFTER">🔉 SOFTER</button>
+    <button class="quick-btn" data-msg="LAST CHORUS">🎵 LAST CHORUS</button>
+    <button class="quick-btn" data-msg="ENDING">🏁 ENDING</button>
+    <button class="quick-btn" data-msg="VERSE">VERSE</button>
+    <button class="quick-btn" data-msg="CHORUS">CHORUS</button>
+    <button class="quick-btn" data-msg="SOLO">🎸 SOLO</button>
+    <button class="quick-btn" data-msg="GREAT SET! 🤘">GREAT SET!</button>
+  </div>
+
+  <!-- Color -->
+  <div class="label">Color</div>
+  <div class="color-row">
+    <div class="color-dot active" data-color="#cc0000" style="background:#cc0000"></div>
+    <div class="color-dot"        data-color="#dd6600" style="background:#dd6600"></div>
+    <div class="color-dot"        data-color="#bb9900" style="background:#bb9900"></div>
+    <div class="color-dot"        data-color="#0066cc" style="background:#0066cc"></div>
+    <div class="color-dot"        data-color="#006644" style="background:#006644"></div>
+    <div class="color-dot"        data-color="#770099" style="background:#770099"></div>
+    <div class="color-dot"        data-color="#222244" style="background:#222244"></div>
+  </div>
+
+  <!-- Duration -->
+  <div class="label">Auto-dismiss</div>
+  <div class="dur-row">
+    <div class="dur-btn"        data-dur="10000">10s</div>
+    <div class="dur-btn"        data-dur="20000">20s</div>
+    <div class="dur-btn active" data-dur="30000">30s</div>
+    <div class="dur-btn"        data-dur="60000">1 min</div>
+    <div class="dur-btn"        data-dur="0">∞</div>
+  </div>
+
+  <button id="send-btn">Send</button>
+  <button id="clear-btn">Clear Displays</button>
+
+  <!-- Link Generator -->
+  <div class="label" style="margin-top:1.75rem;">Create Join Link</div>
+  <div class="input-wrap" style="margin-bottom:0.5rem;">
+    <input type="text" id="link-name-input"
+           placeholder="Name..." maxlength="16"
+           autocomplete="off" autocorrect="off"
+           autocapitalize="characters" spellcheck="false">
+  </div>
+  <div style="display:flex;gap:0.35rem;margin-bottom:0.75rem;">
+    <button class="link-role-btn active" data-role="receiver">Receive Only</button>
+    <button class="link-role-btn" data-role="sender">Can Send</button>
+  </div>
+  <button id="gen-link-btn" style="width:100%;padding:0.75rem;background:var(--card);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:0.8rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;margin-bottom:0.75rem;-webkit-tap-highlight-color:transparent;">Generate Link</button>
+  <div id="link-output" style="display:none;">
+
+    <div style="font-size:0.6rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:0.35rem;">Local · on the band WiFi</div>
+    <div id="link-url-local" style="word-break:break-all;font-size:0.72rem;color:var(--green);background:var(--card);border:1px solid var(--border);border-radius:10px;padding:0.75rem 1rem;margin-bottom:0.5rem;font-family:monospace;"></div>
+    <div style="display:flex;gap:0.35rem;margin-bottom:0.75rem;">
+      <button id="copy-link-local" style="flex:1;padding:0.55rem;background:transparent;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent;">Copy Link</button>
+      <button id="qr-link-local" style="flex:1;padding:0.55rem;background:transparent;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent;">QR Code</button>
+    </div>
+    <div id="qr-wrap-local" style="display:none;text-align:center;margin-bottom:1.25rem;">
+      <div id="qr-canvas-local" style="display:inline-block;background:#fff;padding:10px;border-radius:12px;line-height:0;"></div>
+    </div>
+
+    <div style="font-size:0.6rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:0.35rem;">Internet · works anywhere</div>
+    <div id="link-url-net" style="word-break:break-all;font-size:0.72rem;color:var(--green);background:var(--card);border:1px solid var(--border);border-radius:10px;padding:0.75rem 1rem;margin-bottom:0.5rem;font-family:monospace;"></div>
+    <div style="display:flex;gap:0.35rem;margin-bottom:0.75rem;">
+      <button id="copy-link-net" style="flex:1;padding:0.55rem;background:transparent;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent;">Copy Link</button>
+      <button id="qr-link-net" style="flex:1;padding:0.55rem;background:transparent;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent;">QR Code</button>
+    </div>
+    <div id="qr-wrap-net" style="display:none;text-align:center;margin-bottom:1rem;">
+      <div id="qr-canvas-net" style="display:inline-block;background:#fff;padding:10px;border-radius:12px;line-height:0;"></div>
+    </div>
+  </div>
+
+  <div id="qr-modal">
+    <div id="qr-modal-label">Band Join Link</div>
+    <div id="qr-modal-inner"><div id="qr-canvas"></div></div>
+    <div id="qr-modal-url"></div>
+    <button id="qr-close-btn" onclick="document.getElementById('qr-modal').classList.remove('open')">Close</button>
+  </div>
+  <div id="msg-overlay">
+    <div id="msg-ov-from"></div>
+    <div id="msg-ov-text"></div>
+    <div id="msg-ov-key"></div>
+    <div id="msg-ov-hint">TAP TO DISMISS</div>
+    <div id="msg-ov-bar-wrap"><div id="msg-ov-bar"></div></div>
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────────────────
+    let selectedColor    = '#cc0000';
+    let selectedDuration = 30000;
+    let sendToAll        = true;           // true = ALL, false = use selectedRooms
+    let selectedRooms    = new Set();      // room names when not ALL
+
+    let currentDevices   = [];             // latest device list from server
+
+    // ── Target logic ───────────────────────────────────────────────────────────
+    const allChip    = document.getElementById('all-chip');
+    const deviceList = document.getElementById('device-list');
+    const noDevices  = document.getElementById('no-devices');
+    const sendBtn    = document.getElementById('send-btn');
+
+    function setAllMode(active) {
+      sendToAll = active;
+      allChip.classList.toggle('active', active);
+      if (active) {
+        selectedRooms.clear();
+        deviceList.querySelectorAll('.device-chip')
+          .forEach(c => c.classList.remove('active'));
+      }
+      updateSendBtn();
+    }
+
+    function toggleRoom(room, chip) {
+      if (sendToAll) {
+        // First individual selection — deactivate ALL
+        sendToAll = false;
+        allChip.classList.remove('active');
+        selectedRooms.clear();
+      }
+      if (selectedRooms.has(room)) {
+        selectedRooms.delete(room);
+        chip.classList.remove('active');
+      } else {
+        selectedRooms.add(room);
+        chip.classList.add('active');
+      }
+      // If nothing selected, revert to ALL
+      if (selectedRooms.size === 0) setAllMode(true);
+      updateSendBtn();
+    }
+
+    function updateSendBtn() {
+      const hasTarget = sendToAll || selectedRooms.size > 0;
+      sendBtn.classList.toggle('no-target', !hasTarget);
+    }
+
+    allChip.addEventListener('click', () => setAllMode(true));
+
+    // ── Render device list ─────────────────────────────────────────────────────
+    function renderDevices(devices) {
+      currentDevices = devices;
+      deviceList.innerHTML = '';
+
+      const hasDevices = devices.length > 0;
+      noDevices.style.display = hasDevices ? 'none' : 'block';
+
+      // Keep existing room selections valid
+      const validRooms = new Set(devices.map(d => d.room));
+      for (const r of [...selectedRooms]) {
+        if (!validRooms.has(r)) selectedRooms.delete(r);
+      }
+      if (!sendToAll && selectedRooms.size === 0 && hasDevices) setAllMode(true);
+
+      // Sort: displays first, then personal
+      const sorted = [...devices].sort((a, b) => {
+        if (a.type === b.type) return a.name.localeCompare(b.name);
+        return a.type === 'display' ? -1 : 1;
+      });
+
+      for (const device of sorted) {
+        const chip = document.createElement('button');
+        chip.className = 'device-chip';
+        if (selectedRooms.has(device.room)) chip.classList.add('active');
+        chip.dataset.room = device.room;
+
+        const icon     = device.type === 'display' ? '🖥' : '📱';
+        const typeLabel = device.type === 'display' ? 'Monitor' : 'Personal';
+
+        chip.innerHTML = `
+          <span class="chip-icon">${icon}</span>
+          <span class="chip-name">${device.name}</span>
+          <span class="chip-type">${typeLabel}</span>
+        `;
+
+        chip.addEventListener('click', () => toggleRoom(device.room, chip));
+        deviceList.appendChild(chip);
+      }
+
+      updateSendBtn();
+    }
+
+    // ── Color ──────────────────────────────────────────────────────────────────
+    document.querySelectorAll('.color-dot').forEach(dot => {
+      dot.addEventListener('click', () => {
+        document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
+        dot.classList.add('active');
+        selectedColor = dot.dataset.color;
+      });
+    });
+
+    // ── Duration ───────────────────────────────────────────────────────────────
+    document.querySelectorAll('.dur-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.dur-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedDuration = parseInt(btn.dataset.dur);
+      });
+    });
+
+    // ── Char count ─────────────────────────────────────────────────────────────
+    const msgInput  = document.getElementById('message-input');
+    const charCount = document.getElementById('char-count');
+    msgInput.addEventListener('input', () => {
+      charCount.textContent = `${msgInput.value.length}/160`;
+    });
+
+    // ── Quick messages ─────────────────────────────────────────────────────────
+    document.querySelectorAll('.quick-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        msgInput.value = btn.dataset.msg;
+        charCount.textContent = `${msgInput.value.length}/160`;
+        sendMessage();
+      });
+    });
+
+    // ── Send ───────────────────────────────────────────────────────────────────
+    function sendMessage() {
+      const msg = msgInput.value.trim();
+      if (!msg || !socket.connected) return;
+      if (sendBtn.classList.contains('no-target')) return;
+
+      const targets = sendToAll ? ['all'] : [...selectedRooms];
+
+      socket.emit('send-message', {
+        targets,
+        message:  msg,
+        color:    selectedColor,
+        duration: selectedDuration || 86400000,
+      });
+
+      sendBtn.textContent = 'Sent ✓';
+      sendBtn.classList.add('sent');
+      setTimeout(() => {
+        sendBtn.textContent = 'Send';
+        sendBtn.classList.remove('sent');
+      }, 1200);
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    msgInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
+
+    document.getElementById('clear-msg-btn').addEventListener('click', () => {
+      msgInput.value = '';
+      charCount.textContent = '0/160';
+    });
+
+    document.getElementById('clear-msg-btn').addEventListener('click', () => {
+      msgInput.value = '';
+      charCount.textContent = '0/160';
+    });
+
+    // ── Clear ──────────────────────────────────────────────────────────────────
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      const targets = sendToAll ? ['all'] : [...selectedRooms];
+      socket.emit('clear', { targets });
+    });
+
+    // ── Socket.io ──────────────────────────────────────────────────────────────
+    const statusDot  = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const socket     = io();
+
+    socket.on('connect', () => {
+      socket.emit('register-control');
+      statusDot.className = 'on';
+      statusText.textContent = 'Live';
+    });
+
+    socket.on('disconnect', () => {
+      statusDot.className = 'off';
+      statusText.textContent = 'Offline';
+      renderDevices([]);
+    });
+
+    socket.on('devices-updated', renderDevices);
+
+    // ── QR Code ────────────────────────────────────────────────────────────────
+    let qrGenerated = false;
+    function openQR() {
+      const modal = document.getElementById('qr-modal');
+      modal.classList.add('open');
+      if (!qrGenerated) {
+        const url = `${window.location.protocol}//${window.location.host}/`;
+        document.getElementById('qr-modal-url').textContent = url;
+        new QRCode(document.getElementById('qr-canvas'), {
+          text: url, width: 200, height: 200,
+          colorDark: '#000000', colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M,
+        });
+        qrGenerated = true;
+      }
+    }
+    document.getElementById('qr-modal').addEventListener('click', function(e) {
+      if (e.target === this) this.classList.remove('open');
+    });
+
+
+    // ── Incoming message overlay ───────────────────────────────────────────────
+    const msgOverlay = document.getElementById('msg-overlay');
+    const msgOvFrom  = document.getElementById('msg-ov-from');
+    const msgOvText  = document.getElementById('msg-ov-text');
+    const msgOvKey   = document.getElementById('msg-ov-key');
+    const msgOvBar   = document.getElementById('msg-ov-bar');
+    let   msgTimer   = null;
+
+    function fitSingleLine(el) {
+      if (!el || !el.textContent.trim()) return;
+      let px = parseFloat(window.getComputedStyle(el).fontSize);
+      el.style.fontSize = px + 'px';
+      while (px > 10) {
+        if (el.scrollWidth <= el.parentElement.clientWidth * 0.94 &&
+            el.offsetHeight <= px * 1.5) break;
+        px -= 2;
+        el.style.fontSize = px + 'px';
+      }
+    }
+
+    function fitMsgText() {
+      if (!msgOvText.textContent.trim()) return;
+      const availH     = window.innerHeight * 0.82;
+      const fromH      = msgOvFrom.textContent.trim() ? msgOvFrom.offsetHeight : 0;
+      const keyH       = msgOvKey.textContent.trim()  ? msgOvKey.offsetHeight  : 0;
+      const gapH       = (fromH && keyH) ? 16 : (fromH || keyH) ? 8 : 0;
+      const textAvailH = Math.max(availH - fromH - keyH - gapH, 30);
+      const availW     = msgOverlay.clientWidth * 0.92;
+
+      msgOvText.style.width    = availW + 'px';
+      msgOvText.style.maxWidth = availW + 'px';
+
+      let lo = 10, hi = 280;
+      while (hi - lo > 2) {
+        const mid = (lo + hi) >> 1;
+        msgOvText.style.fontSize = mid + 'px';
+        if (msgOvText.offsetHeight <= textAvailH && msgOvText.scrollWidth <= availW + 2)
+          lo = mid;
+        else hi = mid - 1;
+      }
+      msgOvText.style.fontSize = lo + 'px';
+    }
+
+    function showIncoming(data) {
+      clearTimeout(msgTimer);
+      msgOverlay.classList.remove('flashing');
+
+      const color    = data.color    || '#cc0000';
+      const duration = data.duration || 30000;
+
+      msgOverlay.style.setProperty('--cfc', color);
+      msgOverlay.style.background = color;
+      msgOvFrom.textContent = data.from     || '';
+      msgOvText.textContent = (data.message || '').toUpperCase();
+      msgOvKey.textContent  = data.subtitle || '';
+      msgOvKey.style.display = data.subtitle ? 'block' : 'none';
+
+      msgOvFrom.style.fontSize = '';
+      msgOvText.style.fontSize = '';
+      msgOvKey.style.fontSize  = '';
+
+      msgOverlay.classList.add('visible');
+
+      requestAnimationFrame(() => {
+        fitSingleLine(msgOvFrom);
+        fitSingleLine(msgOvKey);
+        fitMsgText();
+        void msgOverlay.offsetWidth;
+        msgOverlay.classList.add('flashing');
+        setTimeout(() => msgOverlay.classList.remove('flashing'), 800);
+      });
+
+      msgOvBar.style.transition = 'none';
+      msgOvBar.style.width = '100%';
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        msgOvBar.style.transition = `width ${duration}ms linear`;
+        msgOvBar.style.width = '0%';
+      }));
+
+      msgTimer = setTimeout(dismissIncoming, duration);
+    }
+
+    function dismissIncoming() {
+      clearTimeout(msgTimer);
+      msgOverlay.classList.remove('visible', 'flashing');
+    }
+
+    msgOverlay.addEventListener('click', dismissIncoming);
+    socket.on('message', showIncoming);
+
+    // -- Link generator (dual-path: local + internet)
+    const LOCAL_BASE  = 'http://lights.local:3000';     // singers on the band WiFi
+    const TUNNEL_BASE = 'https://stage-messenger.com';  // singers over the internet
+    let selectedLinkRole = 'receiver';
+    const linkNameInput  = document.getElementById('link-name-input');
+    const linkOutput     = document.getElementById('link-output');
+    const linkRows = {
+      local: { base: LOCAL_BASE,  url: '', qrDone: false },
+      net:   { base: TUNNEL_BASE, url: '', qrDone: false },
+    };
+
+    document.querySelectorAll('.link-role-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.link-role-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedLinkRole = btn.dataset.role;
+        linkOutput.style.display = 'none';
+      });
+    });
+
+    document.getElementById('gen-link-btn').addEventListener('click', () => {
+      const name = linkNameInput.value.trim();
+      if (!name) { linkNameInput.focus(); return; }
+      const query = '/?name=' + encodeURIComponent(name) + '&role=' + selectedLinkRole;
+      ['local', 'net'].forEach(k => {
+        linkRows[k].url    = linkRows[k].base + query;
+        linkRows[k].qrDone = false;
+        document.getElementById('link-url-' + k).textContent = linkRows[k].url;
+        document.getElementById('qr-wrap-'  + k).style.display = 'none';
+        document.getElementById('qr-canvas-' + k).innerHTML = '';
+      });
+      linkOutput.style.display = 'block';
+    });
+
+    function wireLinkRow(k) {
+      document.getElementById('copy-link-' + k).addEventListener('click', () => {
+        navigator.clipboard.writeText(linkRows[k].url).then(() => {
+          const btn  = document.getElementById('copy-link-' + k);
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        });
+      });
+      document.getElementById('qr-link-' + k).addEventListener('click', () => {
+        const wrap = document.getElementById('qr-wrap-' + k);
+        if (wrap.style.display === 'none') {
+          wrap.style.display = 'block';
+          if (!linkRows[k].qrDone) {
+            new QRCode(document.getElementById('qr-canvas-' + k), {
+              text: linkRows[k].url, width: 180, height: 180,
+              colorDark: '#000000', colorLight: '#ffffff',
+              correctLevel: QRCode.CorrectLevel.M,
+            });
+            linkRows[k].qrDone = true;
+          }
+        } else {
+          wrap.style.display = 'none';
+        }
+      });
+    }
+    ['local', 'net'].forEach(wireLinkRow);
+
+    // ── Reconnect on tab/app focus ─────────────────────────────────────────────
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        socket.disconnect();
+        setTimeout(() => socket.connect(), 200);
+      }
+    });
+  </script> <!-- QR Modal -->
+
+  <!-- Incoming message overlay -->
+
+
+</body>
+</html>

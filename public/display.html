@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Stage Monitor</title>
+  <script src="/socket.io.min.js"></script>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root { --green: #00ff88; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: 'Arial Black', Arial, sans-serif;
+      overflow: hidden;
+      cursor: none;
+      user-select: none;
+    }
+
+    /* ── Clock ────────────────────────────────────────────────────────────── */
+    #clock-screen {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      transition: opacity 0.3s;
+    }
+
+    #clock-time    { font-size: 26vw; font-weight: 900; color: var(--green); letter-spacing: -0.04em; line-height: 1; }
+    #clock-seconds { font-size: 7vw; color: #00aa55; font-weight: 700; letter-spacing: 0.05em; margin-top: -1vw; }
+    #clock-date    { font-size: 3.5vw; color: #333; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 1.5vw; }
+
+    #device-badge {
+      position: absolute; top: 1.2rem; right: 1.5rem;
+      font-size: max(1.5vw, 11px); color: #2a2a2a;
+      font-weight: 900; letter-spacing: 0.15em; text-transform: uppercase;
+    }
+
+    #conn-dot {
+      position: absolute; bottom: 1rem; left: 1.2rem;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #222; transition: background 0.4s;
+    }
+    #conn-dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #conn-dot.off { background: #ff4444; }
+
+    /* ── Message overlay ──────────────────────────────────────────────────── */
+    #msg-screen {
+      position: absolute; inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 1.5vh;
+      /* padding: top leaves room for hint text, bottom for progress bar */
+      padding: 3vh 4vw 7vh;
+      text-align: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+
+    #msg-screen.visible { opacity: 1; pointer-events: all; }
+
+    /* Sender name — half the max song size, vh-capped so it doesn't crowd */
+    #msg-from {
+      font-size: min(4.5vw, 6vh);
+      font-weight: 900;
+      color: rgba(0,0,0,0.5);
+      line-height: 1;
+      max-width: 96%;
+      word-break: break-word;
+      letter-spacing: 0.05em;
+    }
+
+    /* Song / message — largest element */
+    #msg-text {
+      font-size: min(22vw, 42vh);
+      font-weight: 900;
+      color: #000;
+      line-height: 1.05;
+      word-break: normal;
+      overflow-wrap: normal;
+      width: 100%;
+    }
+
+    /* Key — slightly smaller than song */
+    #msg-key {
+      font-size: min(11vw, 20vh);
+      font-weight: 900;
+      color: rgba(0,0,0,0.7);
+      line-height: 1.05;
+    }
+
+    #msg-hint {
+      position: absolute;
+      bottom: 1.5rem;
+      font-size: max(1.8vw, 11px);
+      color: rgba(0,0,0,0.3);
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    #msg-bar-wrap {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 8px;
+      background: rgba(0,0,0,0.2);
+    }
+    #msg-bar { height: 100%; width: 100%; background: rgba(0,0,0,0.35); }
+
+    @keyframes flash {
+      0%   { background: var(--fc); }
+      13%  { background: #fff; }
+      26%  { background: var(--fc); }
+      39%  { background: #fff; }
+      52%  { background: var(--fc); }
+      65%  { background: #fff; }
+      78%  { background: var(--fc); }
+      100% { background: var(--fc); }
+    }
+    #msg-screen.flashing { animation: flash 0.75s ease-in-out forwards; }
+  </style>
+</head>
+<body>
+
+  <!-- Clock -->
+  <div id="clock-screen">
+    <div id="clock-time">00:00</div>
+    <div id="clock-seconds">:00</div>
+    <div id="clock-date">Mon Jan 1</div>
+    <div id="device-badge"></div>
+    <div id="conn-dot"></div>
+  </div>
+
+  <!-- Message overlay — all three elements in flex flow, no absolute overlap -->
+  <div id="msg-screen">
+    <div id="msg-from"></div>
+    <div id="msg-text"></div>
+    <div id="msg-key"></div>
+    <div id="msg-hint">TAP TO DISMISS</div>
+    <div id="msg-bar-wrap"><div id="msg-bar"></div></div>
+  </div>
+
+  <script>
+    // ── Redirect personal devices ──────────────────────────────────────────────
+    const params      = new URLSearchParams(window.location.search);
+    const monitorId   = params.get('monitor');
+    const monitorName = params.get('name');
+    if (!monitorId || !monitorName) { window.location.href = '/'; }
+
+    // ── Clock ──────────────────────────────────────────────────────────────────
+    const DAYS   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    function tick() {
+      const now = new Date();
+      document.getElementById('clock-time').textContent    = `${String(now.getHours() % 12 || 12).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+      document.getElementById('clock-seconds').textContent = `:${String(now.getSeconds()).padStart(2,'0')}`;
+      document.getElementById('clock-date').textContent    = `${DAYS[now.getDay()]}  ${MONTHS[now.getMonth()]} ${now.getDate()}`;
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    // ── Text sizing ────────────────────────────────────────────────────────────
+    // Single-line fit: shrink until no horizontal overflow AND no wrapping.
+    // Used for sender name and key — these must stay on one line.
+    function fitSingleLine(el) {
+      if (!el || !el.textContent.trim()) return;
+      let px = parseFloat(window.getComputedStyle(el).fontSize);
+      el.style.fontSize = px + 'px';
+      while (px > 10) {
+        const tooWide = el.scrollWidth > el.parentElement.clientWidth * 0.94;
+        const wrapped = el.offsetHeight > px * 1.5;
+        if (!tooWide && !wrapped) break;
+        px -= 2;
+        el.style.fontSize = px + 'px';
+      }
+    }
+    // Binary search for the largest font size that fits the height budget.
+    // Ratio-based approaches fail because line count changes non-linearly
+    // as font size changes — binary search is the only reliable method.
+    function fitMessageText() {
+      if (!msgText.textContent.trim()) return;
+
+      const availH     = msgScreen.clientHeight * 0.82;
+      const fromH      = msgFrom.textContent.trim() ? msgFrom.offsetHeight : 0;
+      const keyH       = msgKey.textContent.trim()  ? msgKey.offsetHeight  : 0;
+      const gapH       = (fromH && keyH) ? 16 : (fromH || keyH) ? 8 : 0;
+      const textAvailH = Math.max(availH - fromH - keyH - gapH, 30);
+      const availW     = msgScreen.clientWidth * 0.94;
+
+      // Force element to correct width before measuring
+      msgText.style.width    = availW + 'px';
+      msgText.style.maxWidth = availW + 'px';
+
+      // Binary search: checks both height and width so single words
+      // shrink to fit on one line without breaking mid-character
+      let lo = 10, hi = 280;
+      while (hi - lo > 2) {
+        const mid = (lo + hi) >> 1;
+        msgText.style.fontSize = mid + 'px';
+        const fitsH = msgText.offsetHeight <= textAvailH;
+        const fitsW = msgText.scrollWidth  <= availW + 2;
+        if (fitsH && fitsW) lo = mid;
+        else hi = mid - 1;
+      }
+      msgText.style.fontSize = lo + 'px';
+    }
+
+    // ── Message display ────────────────────────────────────────────────────────
+    const clockScreen = document.getElementById('clock-screen');
+    const msgScreen   = document.getElementById('msg-screen');
+    const msgFrom     = document.getElementById('msg-from');
+    const msgText     = document.getElementById('msg-text');
+    const msgKey      = document.getElementById('msg-key');
+    const msgBar      = document.getElementById('msg-bar');
+    let   dismissTimer = null;
+
+    function showMessage(data) {
+      clearTimeout(dismissTimer);
+      msgScreen.classList.remove('flashing');
+
+      const color    = data.color    || '#cc0000';
+      const duration = data.duration || 30000;
+
+      msgScreen.style.setProperty('--fc', color);
+      msgScreen.style.background = color;
+
+      msgFrom.textContent = data.from     || '';
+      msgText.textContent = (data.message || '').toUpperCase();
+      msgKey.textContent  = data.subtitle || '';
+      msgKey.style.display = data.subtitle ? 'block' : 'none';
+
+      // Reset sizes so CSS min(vw,vh) takes effect before we measure
+      msgFrom.style.fontSize = '';
+      msgText.style.fontSize = '';
+      msgKey.style.fontSize  = '';
+
+      clockScreen.style.opacity = '0';
+      msgScreen.classList.add('visible');
+
+      requestAnimationFrame(() => {
+        // Width fit each element, then height fit the group
+        fitSingleLine(msgFrom);
+        fitSingleLine(msgKey);
+        fitMessageText();
+
+        void msgScreen.offsetWidth;
+        msgScreen.classList.add('flashing');
+        setTimeout(() => msgScreen.classList.remove('flashing'), 800);
+      });
+
+      // Progress bar
+      msgBar.style.transition = 'none';
+      msgBar.style.width = '100%';
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        msgBar.style.transition = `width ${duration}ms linear`;
+        msgBar.style.width = '0%';
+      }));
+
+      dismissTimer = setTimeout(dismiss, duration);
+    }
+
+    function dismiss() {
+      clearTimeout(dismissTimer);
+      msgScreen.classList.remove('visible', 'flashing');
+      clockScreen.style.opacity = '1';
+    }
+
+    msgScreen.addEventListener('click', dismiss);
+
+    // ── Socket ─────────────────────────────────────────────────────────────────
+    const connDot = document.getElementById('conn-dot');
+    const socket  = io();
+
+    socket.on('connect', () => {
+      connDot.className = 'on';
+      socket.emit('register', {
+        type:      'display',
+        name:      monitorName,
+        monitorId: parseInt(monitorId),
+      });
+    });
+
+    socket.on('disconnect', () => { connDot.className = 'off'; });
+
+    socket.on('register-accepted', (data) => {
+      document.getElementById('device-badge').textContent = data.name;
+    });
+
+    socket.on('message', showMessage);
+    socket.on('clear',   dismiss);
+
+    // ── Reconnect on tab/app focus ─────────────────────────────────────────────
+    // Force a disconnect/reconnect cycle — on mobile, socket.connected can
+    // still be true even when the server has already timed out the connection.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        socket.disconnect();
+        setTimeout(() => socket.connect(), 200);
+      }
+    });
+  </script></body>
+</html>
