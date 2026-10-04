@@ -5,7 +5,9 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
   * Query = address with an empty type tag. Reply args: [display_str, norm_0_1, native].
     String params (names, USB grp) reply with a single string arg.
   * '/*S' subscribes this socket to change pushes (1 arg, native value). Renewed every 5 s.
-    Pushes also arrive on '$'-prefixed shadow paths (/ch/1/$fdr) -- ignored.
+    Pushes also arrive on '$'-prefixed shadow paths (/ch/1/$fdr) -- ignored, except
+    '$name' = the displayed name (plain 'name' can be stale when the name follows the source).
+  * Input routing: /ch/N/in/conn/grp ('A', 'LCL', 'B', ...) + /ch/N/in/conn/in (1-based).
   * Writes: fader / send levels take a FLOAT in dB (an int is ignored).
     Mutes and send on/off take an INT 0/1.
   * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
@@ -71,12 +73,13 @@ def strip_addrs():
     a = []
     for kind, n in (('ch', N_CH), ('aux', N_AUX)):
         for i in range(1, n + 1):
-            a += [f'/{kind}/{i}/name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute']
+            a += [f'/{kind}/{i}/name', f'/{kind}/{i}/$name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute',
+                  f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in']
     for i in range(1, N_BUS + 1):
-        a += [f'/bus/{i}/name', f'/bus/{i}/fdr', f'/bus/{i}/mute']
-    a += ['/main/1/name', '/main/1/fdr', '/main/1/mute']
+        a += [f'/bus/{i}/name', f'/bus/{i}/$name', f'/bus/{i}/fdr', f'/bus/{i}/mute']
+    a += ['/main/1/name', '/main/1/$name', '/main/1/fdr', '/main/1/mute']
     for i in range(1, N_MTX + 1):
-        a += [f'/mtx/{i}/name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute']
+        a += [f'/mtx/{i}/name', f'/mtx/{i}/$name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute']
     # Sends last: the page is usable (LR mode) before these finish loading.
     for kind, n in (('ch', N_CH), ('aux', N_AUX)):
         for i in range(1, n + 1):
@@ -156,7 +159,10 @@ class Wing:
                 self.connected = True
                 self.on_conn(True)
                 threading.Thread(target=self._load_all, daemon=True, name='wing-load').start()
-            if '$' in addr:
+            # '$' paths are read-only shadows (e.g. /ch/1/$fdr duplicates every fader push).
+            # Keep '$name': it is the name the console actually displays (it can follow the
+            # input source), while plain 'name' may hold a stale stored value.
+            if '$' in addr and not addr.endswith('/$name'):
                 continue
             v = value_from_reply(addr, args)
             if v is None:

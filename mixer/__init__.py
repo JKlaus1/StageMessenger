@@ -9,6 +9,7 @@ Remote (tunnel) requests are refused unless mixer_config.json sets
 "remote_enabled": true -- flip it only after the Access rule for /mixer exists.
 """
 import json
+import logging
 import os
 import queue
 import re
@@ -48,7 +49,7 @@ def load_config():
     except FileNotFoundError:
         pass
     except Exception as e:
-        print(f'[mixer] bad {CONFIG_PATH}: {e} (using defaults)')
+        print(f'[mixer] bad {CONFIG_PATH}: {e} (using defaults)', flush=True)
     return cfg
 
 
@@ -68,6 +69,11 @@ def feed_table():
     return t
 
 AMBIENT_USB = 43
+
+# WING input-source group codes -> labels shown in the UI
+SRC_NAMES = {'LCL': 'Local', 'A': 'AES A', 'B': 'AES B', 'C': 'AES C', 'SC': 'StageCon',
+             'USB': 'USB', 'CRD': 'Card', 'MOD': 'Module', 'PLAY': 'Player', 'AES': 'AES/EBU',
+             'USR': 'User', 'OSC': 'Osc', 'AUX': 'Aux'}
 
 
 # ── SSE hub ─────────────────────────────────────────────────────────────────────
@@ -110,6 +116,7 @@ class Mixer:
         self.cfg = cfg
         self.hub = Hub()
         self.feed_id = 'main1'
+        self.ambient_label = 'Ambient mic'
         self.patch_note = ''
         self._last_patch = 0.0
         self._patch_lock = threading.Lock()
@@ -124,9 +131,12 @@ class Mixer:
     # ── WING callbacks ──
     def _on_update(self, addr, v):
         self.hub.publish({'t': 'upd', 'a': addr, 'v': v})
-        if addr.startswith('/io/out/USB/') or '/in/conn/' in addr:
+        if not self.wing.loaded:
+            return                                   # initial load: one snapshot at the end
+        follow = (self.cfg.get('ambient') or {}).get('follow_channel')
+        if addr.startswith('/io/out/USB/') or (follow and addr.startswith(f'/ch/{follow}/in/conn/')):
             threading.Thread(target=self.ensure_patch, daemon=True).start()
-        if addr.endswith('/name'):
+        if addr.endswith('name'):
             self.hub.publish({'t': 'feeds', 'feeds': self.feeds()})
 
     def _on_conn(self, ok):
@@ -138,8 +148,12 @@ class Mixer:
 
     # ── feeds ──
     def _name(self, addr, fallback):
-        n = self.wing.get(addr)
-        return n if isinstance(n, str) and n.strip() else fallback
+        """Displayed name: prefer '$name' (what the console shows), then stored 'name'."""
+        for a in (addr.replace('/name', '/$name'), addr):
+            n = self.wing.get(a)
+            if isinstance(n, str) and n.strip():
+                return n
+        return fallback
 
     def feeds(self):
         out = []
@@ -151,12 +165,7 @@ class Mixer:
             else:
                 m = fid[3:]; label = f"Mtx {m} – {self._name(f'/mtx/{m}/name', '')}".rstrip(' –')
             out.append({'id': fid, 'label': label, 'usb': [ul, ur]})
-        amb = self.cfg.get('ambient') or {}
-        ch = amb.get('follow_channel')
-        lab = 'Ambient mic'
-        if ch:
-            lab += f" (Ch {ch} {self._name(f'/ch/{ch}/name', '')})".replace(' )', ')')
-        out.append({'id': 'ambient', 'label': lab, 'usb': [AMBIENT_USB, AMBIENT_USB]})
+        out.append({'id': 'ambient', 'label': self.ambient_label, 'usb': [AMBIENT_USB, AMBIENT_USB]})
         return out
 
     def select_feed(self, fid):
@@ -179,6 +188,15 @@ class Mixer:
                 return g, i, f'follows Ch {ch}'
         return amb.get('grp', 'B'), int(amb.get('in', 4)), 'fixed'
 
+    def _set_ambient_label(self, g, i):
+        src = self.wing.query(f'/io/in/{g}/{i}/name')
+        lab = f'Ambient \u00b7 {SRC_NAMES.get(g, g)} {i}'
+        if isinstance(src, str) and src.strip():
+            lab += f' ({src.strip()})'
+        if lab != self.ambient_label:
+            self.ambient_label = lab
+            self.hub.publish({'t': 'feeds', 'feeds': self.feeds()})
+
     def ensure_patch(self, force=False):
         """Make WING USB outs match feed_table + ambient. Writes only what differs."""
         if not self.cfg.get('usb_patch', True) or not self.wing.connected:
@@ -191,6 +209,7 @@ class Mixer:
             for _, ul, ur, grp, il, ir in feed_table():
                 want += [(ul, grp, il), (ur, grp, ir)]
             ag, ai, how = self._ambient_source()
+            self._set_ambient_label(ag, ai)
             want.append((AMBIENT_USB, ag, ai))
             fixed = 0
             for usb, grp, idx in want:
@@ -202,7 +221,7 @@ class Mixer:
                 if cur_i != idx or cur_g != grp:
                     self.wing.set(base + '/in', idx); time.sleep(0.02); fixed += 1
             self.patch_note = (f'USB patch OK ({fixed} writes); ambient {ag} {ai} ({how})')
-            print(f'[mixer] {self.patch_note}')
+            print(f'[mixer] {self.patch_note}', flush=True)
             self.hub.publish({'t': 'patch', 'note': self.patch_note})
 
     # ── snapshot ──
@@ -322,5 +341,8 @@ def init_mixer(app):
     app.register_blueprint(bp)
     _mixer.start()
     print(f"[mixer] WING at {_mixer.cfg['mixer_ip']}; remote "
-          f"{'ENABLED' if _mixer.cfg.get('remote_enabled') else 'disabled'}")
+          f"{'ENABLED' if _mixer.cfg.get('remote_enabled') else 'disabled'}", flush=True)
+    # A fader drag is ~20 POSTs/s: keep those (and the meter/event plumbing) out of the journal.
+    logging.getLogger('werkzeug').addFilter(
+        lambda r: not any(p in r.getMessage() for p in ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed')))
     return _mixer

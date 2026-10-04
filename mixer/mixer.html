@@ -61,13 +61,14 @@
     .chip.sel small { color: var(--green); }
 
     /* strips */
-    .strip { display: grid; grid-template-columns: 6.2rem 1fr 3.1rem 2.6rem; gap: .5rem; align-items: center;
+    .strip { display: grid; grid-template-columns: 7rem 1fr 3.1rem 2.6rem; gap: .5rem; align-items: center;
       padding: .45rem 0; border-top: 1px solid #1c1c38; }
     .strip:first-child { border-top: 0; }
     .strip.hidden { display: none; }
     .nm { overflow: hidden; }
     .nm b { display: block; font-size: .8rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .nm i { font-style: normal; font-size: .6rem; color: var(--muted); font-weight: 700; letter-spacing: .06em; }
+    .nm i { display: block; font-style: normal; font-size: .6rem; color: var(--muted); font-weight: 700; letter-spacing: .04em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .nm i.cm { color: var(--red); }
     .db { font-size: .72rem; font-variant-numeric: tabular-nums; text-align: right; color: var(--text); }
     .mute { height: 2.1rem; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted);
@@ -249,9 +250,20 @@
     parent.appendChild(el);
   }
 
+  // '$name' is what the console displays (can follow the input source); 'name' may be stale.
   function nameOf(addr, fallback) {
-    const n = S[addr];
-    return (typeof n === 'string' && n.trim()) ? n : fallback;
+    for (const a of [addr.replace('/name', '/$name'), addr]) {
+      const n = S[a];
+      if (typeof n === 'string' && n.trim()) return n;
+    }
+    return fallback;
+  }
+  const SRC = { LCL: 'Local', A: 'AES A', B: 'AES B', C: 'AES C', SC: 'StageCon', USB: 'USB', CRD: 'Card',
+                MOD: 'Module', PLAY: 'Player', AES: 'AES/EBU', USR: 'User', OSC: 'Osc', AUX: 'Aux' };
+  function srcOf(r) {
+    const g = S[`/${r.kind}/${r.n}/in/conn/grp`], i = S[`/${r.kind}/${r.n}/in/conn/in`];
+    if (typeof g !== 'string' || !g || g === 'OFF') return '';
+    return (SRC[g] || g) + (i != null ? ' ' + i : '');
   }
 
   function paintRow(r) {
@@ -259,7 +271,10 @@
     const tag = r.master ? (mix === 'lr' ? 'MAIN' : 'BUS ' + mix) : (r.kind === 'ch' ? 'CH ' : 'AUX ') + r.n;
     r.nb.textContent = nameOf(A.name, r.master ? (mix === 'lr' ? 'LR' : 'Bus ' + mix) : tag);
     const chMuted = A.chMute && S[A.chMute];
-    r.ni.textContent = chMuted ? tag + ' · CH MUTED' : tag;
+    const src = r.master ? '' : srcOf(r);
+    const info = src ? tag + ' · ' + src : tag;
+    r.ni.textContent = chMuted ? 'M · ' + info : info;   // red = channel muted
+    r.ni.title = info;
     r.ni.className = chMuted ? 'cm' : '';
     const d = S[A.lvl];
     if (!r.fader.isDragging()) r.fader.setPos(dbToPos(d));
@@ -345,6 +360,7 @@
     $('pk-r').style.width = st.running ? pct(st.peak[1]) : '0%';
     $('listen-note').textContent = st.error ? st.error
       : st.running ? `Streaming · ${st.listeners} listener${st.listeners === 1 ? '' : 's'} · USB ${st.pair[0] + 1}/${st.pair[1] + 1}`
+        + (st.overruns ? ` · ${st.overruns} capture overrun${st.overruns === 1 ? '' : 's'}` : '')
       : (wantPlay ? 'Starting…' : '');
   }
 
