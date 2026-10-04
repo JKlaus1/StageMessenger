@@ -491,6 +491,17 @@ def _guard():
             abort(403, 'Cloudflare Access is not protecting /mixer.')
 
 
+@bp.after_request
+def _log_rejects(resp):
+    # The werkzeug filter in init_mixer hides successful control traffic; rejected requests land here.
+    if resp.status_code >= 400:
+        who = request.headers.get('Cf-Connecting-Ip')
+        src = f"tunnel {who} (Access JWT {'yes' if request.headers.get('Cf-Access-Jwt-Assertion') else 'NO'})" \
+            if who else f'local {request.remote_addr}'
+        print(f'[mixer] REJECTED {resp.status_code} {request.method} {request.path} from {src}', flush=True)
+    return resp
+
+
 @bp.route('', strict_slashes=False)
 def page():
     resp = send_from_directory(HERE, 'mixer.html')
@@ -644,8 +655,17 @@ def init_mixer(app):
     _mixer.start()
     print(f"[mixer] WING at {_mixer.cfg['mixer_ip']}; remote "
           f"{'ENABLED' if _mixer.cfg.get('remote_enabled') else 'disabled'}", flush=True)
-    # A fader drag is ~20 POSTs/s: keep those (and the meter/event plumbing) out of the journal.
-    logging.getLogger('werkzeug').addFilter(
-        lambda r: not any(p in r.getMessage() for p in ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed',
-                                                        '/mixer/api/node', '/mixer/api/mute')))
+    # A fader drag is ~20 POSTs/s: keep the successful ones (and the meter/event plumbing) out of
+    # the journal. Anything that was NOT 2xx still gets logged, so rejected control is visible.
+    noisy = ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed', '/mixer/api/node', '/mixer/api/mute')
+    ansi, status = re.compile(r'\x1b\[[0-9;]*m'), re.compile(r'HTTP/[\d.]+" (\d{3}) ')
+
+    def _quiet(r):
+        msg = ansi.sub('', r.getMessage())
+        if not any(p in msg for p in noisy):
+            return True
+        m = status.search(msg)
+        return not (m and m.group(1).startswith('2'))
+
+    logging.getLogger('werkzeug').addFilter(_quiet)
     return _mixer

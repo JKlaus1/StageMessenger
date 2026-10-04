@@ -207,6 +207,13 @@
     .gtrack.gr .g-fill { background: var(--amber); }
     .gtrack .thr { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--red); }
     .note.small { font-size: .6rem; }
+    #link-banner { display: none; position: sticky; top: 0; z-index: 50; align-items: center; gap: .6rem;
+      margin: 0 0 1rem; padding: .6rem .75rem; border-radius: 10px; background: #3a0d16;
+      border: 1px solid var(--red); color: #ffd6db; font-size: .78rem; font-weight: 700; line-height: 1.3; }
+    #link-banner.show { display: flex; }
+    #link-msg { flex: 1; }
+    #link-reload { flex: none; border: 1px solid var(--red); background: var(--red); color: #fff; border-radius: 8px;
+      padding: .4rem .8rem; font-size: .72rem; font-weight: 900; letter-spacing: .06em; }
   </style>
 </head>
 <body>
@@ -217,6 +224,7 @@
       <div id="status"><span id="status-dot"></span><span id="status-text">Connecting</span></div>
     </div>
   </header>
+  <div id="link-banner" role="alert"><span id="link-msg"></span><button id="link-reload">RELOAD</button></div>
 
   <section class="card">
     <div class="label">Listen</div>
@@ -367,9 +375,45 @@
 
   // ── network ──
   const lastSent = {}, pendingVal = {}, timers = {};
+  // Every request is checked. A failure (expired sign-in, Cloudflare challenge, Pi unreachable,
+  // server refusal) puts up the red banner and re-reads the mixer so the screen can't lie.
+  const linkErr = { ctl: null, ev: null };     // source -> [message, offerReload] | null
+  let piLink = true, resyncAt = 0;
+  function setLink(src, err) {
+    linkErr[src] = err;
+    const e = linkErr.ev || linkErr.ctl;
+    $('link-banner').classList.toggle('show', !!e);
+    if (e) { $('link-msg').textContent = e[0]; $('link-reload').style.display = e[1] ? '' : 'none'; }
+  }
+  async function why(r) {      // failed Response (null = never got one) -> [message, offerReload]
+    const NOT = ' Your changes are NOT reaching the mixer.';
+    if (!r) return ["Can't reach the Pi." + NOT, true];
+    if (r.type === 'opaqueredirect' || r.status === 401)
+      return ['Your sign-in has expired. Reload to sign in again.' + NOT, true];
+    if (r.headers.get('cf-mitigated')) return ['Cloudflare security is blocking this device.' + NOT, true];
+    let detail = '';
+    try { const j = await r.clone().json(); detail = j.err ? ': ' + j.err : ''; } catch (e) {}
+    if (r.status === 403) return ['Mixer control refused (403).' + NOT, true];
+    return [`The Pi rejected a change (HTTP ${r.status}${detail}).`, false];
+  }
+  async function api(url, opts) {    // -> Response on 2xx, else null (banner shown, screen re-synced)
+    let r = null;
+    try { r = await fetch(url, Object.assign({ redirect: 'manual', cache: 'no-store' }, opts)); } catch (e) {}
+    if (r && r.ok) { if (linkErr.ctl) setLink('ctl', null); return r; }
+    setLink('ctl', await why(r));
+    resync();
+    return null;
+  }
+  async function resync() {          // re-read the real mixer state after a failed request
+    if (Date.now() - resyncAt < 2000) return;
+    resyncAt = Date.now();
+    try {
+      const r = await fetch('/mixer/api/state', { redirect: 'manual', cache: 'no-store' });
+      if (r.ok) { for (const k in localSetAt) delete localSetAt[k]; applySnap(await r.json()); }
+    } catch (e) {}
+  }
   function postJSON(url, body) {
-    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body) }).catch(() => {});
+    return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }
   function postSet(a, v) { localSetAt[a] = Date.now(); postJSON('/mixer/api/set', { a, v }); }
   function sendThrottled(a, v, final) {      // <= 20 Hz per address, final value always sent
@@ -507,10 +551,9 @@
         else if (st.grp) { OVR.add(b); S[b + '/$mute'] = 0; }
         else { S[b + '/mute'] = st.own ? 0 : 1; S[b + '/$mute'] = st.own ? 0 : 1; }
         localSetAt[b + '/$mute'] = localSetAt[b + '/mute'] = Date.now();
-        fetch('/mixer/api/mute', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: r.kind, n: r.n }) })
-          .then(x => x.json()).then(res => {
-            if (res.action === 'override-failed') { OVR.delete(b); paintRow(r);
+        postJSON('/mixer/api/mute', { kind: r.kind, n: r.n })
+          .then(x => x && x.json()).then(res => {
+            if (res && res.action === 'override-failed') { OVR.delete(b); paintRow(r);
               alert('The WING did not unmute this channel - the group mute is unchanged.'); }
           }).catch(() => {});
       }
@@ -841,7 +884,7 @@
     document.querySelectorAll('#sh-groups .btn').forEach(b => b.classList.toggle('sel', b.dataset.g === g));
     const grid = $('sh-inputs'); grid.innerHTML = '<div class="note">Loading…</div>';
     let list = [];
-    try { list = (await (await fetch('/mixer/api/srcnames?g=' + encodeURIComponent(g))).json()).inputs || []; } catch (e) {}
+    try { const x = await api('/mixer/api/srcnames?g=' + encodeURIComponent(g)); if (x) list = (await x.json()).inputs || []; } catch (e) {}
     if (pickGroup !== g) return;
     grid.innerHTML = '';
     list.forEach(it => {
@@ -862,9 +905,8 @@
     const who = `${rowTag(r)} ${nameOf(`/${r.kind}/${r.n}/name`, '')}`.trim();
     if (!confirm(`Patch ${who} to ${SRC[g] || g} ${n}${nm ? ' (' + nm + ')' : ''}?\nCurrent: ${srcLabel()}`)) return;
     try {
-      const res = await (await fetch('/mixer/api/patch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: r.kind, n: r.n, grp: g, in: n }) })).json();
-      if (!res.ok) alert('The WING did not confirm the new patch — check the console.');
+      const x = await postJSON('/mixer/api/patch', { kind: r.kind, n: r.n, grp: g, in: n });
+      if (x && !(await x.json()).ok) alert('The WING did not confirm the new patch — check the console.');
     } catch (e) { alert('Patch request failed.'); }
     $('sh-picker').style.display = 'none'; pickGroup = null;
   }
@@ -879,7 +921,7 @@
   async function fetchNode(t) {
     const path = nodePath(t); if (!path) return;
     let res;
-    try { res = await (await fetch('/mixer/api/node?path=' + encodeURIComponent(path))).json(); } catch (e) { return; }
+    try { const x = await api('/mixer/api/node?path=' + encodeURIComponent(path)); if (!x) return; res = await x.json(); } catch (e) { return; }
     if (!res.ok || nodePath(t) !== path) return;
     const old = NODE[path] || [];
     for (const p of res.params) {                 // keep values the user is moving right now
@@ -1145,6 +1187,7 @@
   // ── status / events ──
   function setStatus(conn, loaded) {
     const d = $('status-dot'), t = $('status-text');
+    if (!piLink) { d.className = 'off'; t.textContent = 'No link to Pi'; return; }
     d.className = conn ? (loaded ? 'on' : 'load') : 'off';
     t.textContent = conn ? (loaded ? 'WING' : 'Loading') : 'WING offline';
   }
@@ -1169,19 +1212,44 @@
     else if (a.startsWith('/mgrp/')) { paintMuteGroups(); rows.forEach(paintRow); }
   }
 
+  function applySnap(m) {
+    S = m.state || {}; feeds = m.feeds || []; feedId = m.feed || feedId; srcGroups = m.srcgroups || srcGroups;
+    paintSheet();
+    setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
+    soloCount = countSolos(); $('solo-clear').classList.toggle('show', soloCount > 0);
+    OVR = new Set(m.ovr || []); rows.forEach(paintRow);
+    $('patch-note').textContent = m.patch || '';
+  }
+
+  // Live updates. If the stream drops (or is bounced to a sign-in page, which kills it for good),
+  // say why and keep trying -- a page that silently stops listening is what hid the problem before.
+  let es = null, esCheck = null;
+  function linkUp() {
+    piLink = true;
+    if (linkErr.ev) setLink('ev', null);
+  }
+  async function linkCheck() {
+    if (es && es.readyState === EventSource.OPEN) return;
+    let r = null;
+    try { r = await fetch('/mixer/api/state', { redirect: 'manual', cache: 'no-store' }); } catch (e) {}
+    if (es && es.readyState === EventSource.OPEN) return;
+    piLink = false; setStatus(false, false);
+    setLink('ev', (r && r.ok) ? ['Lost the live connection to the Pi. Reconnecting…', true] : await why(r));
+    esCheck = (!es || es.readyState === EventSource.CLOSED) ? setTimeout(connect, 5000)   // dead: rebuild it
+                                                            : setTimeout(linkCheck, 5000); // browser is retrying
+  }
   function connect() {
-    const es = new EventSource('/mixer/api/events');
+    clearTimeout(esCheck);
+    if (es) es.close();
+    es = new EventSource('/mixer/api/events');
+    es.onopen = linkUp;
+    es.onerror = () => { clearTimeout(esCheck); esCheck = setTimeout(linkCheck, es.readyState === EventSource.CLOSED ? 1000 : 4000); };
     es.onmessage = ev => {
+      if (!piLink || linkErr.ev) linkUp();
       const m = JSON.parse(ev.data);
       if (m.t === 'm') { M = m; paintMeters(); }
-      else if (m.t === 'snap') {
-        S = m.state || {}; feeds = m.feeds || []; feedId = m.feed || feedId; srcGroups = m.srcgroups || srcGroups;
-        paintSheet();
-        setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
-        soloCount = countSolos(); $('solo-clear').classList.toggle('show', soloCount > 0);
-        OVR = new Set(m.ovr || []); rows.forEach(paintRow);
-        $('patch-note').textContent = m.patch || '';
-      } else if (m.t === 'upd') onUpd(m.a, m.v);
+      else if (m.t === 'snap') applySnap(m);
+      else if (m.t === 'upd') onUpd(m.a, m.v);
       else if (m.t === 'conn') setStatus(m.ok, false);
       else if (m.t === 'listen') paintListen(m.s);
       else if (m.t === 'feeds') { feeds = m.feeds; paintFeeds(); }
@@ -1189,8 +1257,8 @@
       else if (m.t === 'patch') $('patch-note').textContent = m.note;
       else if (m.t === 'ovr') { OVR = new Set(m.v || []); rows.forEach(paintRow); }
     };
-    es.onerror = () => setStatus(false, false);
   }
+  $('link-reload').addEventListener('click', () => location.reload());
 
   $('hide-btn').addEventListener('click', () => {
     hideInf = !hideInf; $('hide-btn').classList.toggle('on', hideInf); paintAll();
