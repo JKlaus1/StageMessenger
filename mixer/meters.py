@@ -142,7 +142,11 @@ class Meters:
                 for _ in range(n):
                     inn = max(w[k], w[k + 1]) / 256.0
                     out = max(w[k + 2], w[k + 3]) / 256.0
-                    rows.append((round(max(-99.0, inn)), round(max(-99.0, out))))
+                    # gate/dyn: key level in dB; gain reduction as % of the model's full scale
+                    # (positive raw word = more reduction; 256 = full scale)
+                    rows.append((round(max(-99.0, inn)), round(max(-99.0, out)),
+                                 round(max(-99.0, w[k + 4] / 256.0)), max(0, min(100, round(w[k + 5] / 2.56))),
+                                 round(max(-99.0, w[k + 6] / 256.0)), max(0, min(100, round(w[k + 7] / 2.56)))))
                     k += WORDS
                 lv[key] = rows
             self.levels = lv

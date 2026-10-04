@@ -143,6 +143,8 @@ class Wing:
         self.loaded = False
         self.last_rx = 0.0
         self._waiters = {}            # addr -> threading.Event, for blocking query()
+        self._raw = {}                # node addr -> [Event, text] for describe()
+        self._raw_lock = threading.Lock()
         self._stop = threading.Event()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('', 0))
@@ -166,7 +168,7 @@ class Wing:
     def _rx_loop(self):
         while not self._stop.is_set():
             try:
-                data, _ = self.sock.recvfrom(4096)
+                data, _ = self.sock.recvfrom(65535)
             except socket.timeout:
                 continue
             except OSError:
@@ -180,6 +182,10 @@ class Wing:
                 self.connected = True
                 self.on_conn(True)
                 threading.Thread(target=self._load_all, daemon=True, name='wing-load').start()
+            raw = self._raw.get(addr)
+            if raw and args and isinstance(args[0], str) and len(args) == 1 and '\n' in args[0]:
+                raw[1] = args[0]; raw[0].set()           # node describe text -- not a value
+                continue
             # '$' paths are read-only shadows (e.g. /ch/1/$fdr duplicates every fader push).
             # Keep '$name': it is the name the console actually displays (it can follow the
             # input source), while plain 'name' may hold a stale stored value.
@@ -270,6 +276,16 @@ class Wing:
                 self._waiters.pop(a, None)
             return {a: self.state.get(a) for a in addrs}
 
+    def describe(self, node, timeout=1.0):
+        """Node description with values ('#'): one line per parameter. Serialized per node."""
+        with self._raw_lock:
+            slot = [threading.Event(), None]
+            self._raw[node] = slot
+            self._send(node, '#')
+            slot[0].wait(timeout)
+            self._raw.pop(node, None)
+            return slot[1]
+
     def poke(self, addrs, pace=0.001):
         """Fire-and-forget refresh: replies update the cache (and push changes) via _rx_loop."""
         for a in addrs:
@@ -282,3 +298,52 @@ class Wing:
     def snapshot(self):
         with self.lock:
             return dict(self.state)
+
+
+# ── node describe parsing ('#') ─────────────────────────────────────────────────
+# e.g. "    thr            -28.0               lin [-80.0 .. 0.0 dB], 161 steps"
+#      "    mix            100             r/o lin [0 .. 100 %], 101 steps"
+#      "    ratio          gate                list [1:1.5, 1:2, 1:3, 1:4, gate]"
+import re as _re
+_DESC = _re.compile(r'^\s*(\S+)\s+(.*?)\s+(r/o\s+)?(int|lin|log|list|string)\b\s*(.*)$')
+
+
+def wing_num(txt):
+    """'2k89' -> 2890.0, '+8.3' -> 8.3, '11k74' -> 11740.0"""
+    t = str(txt).strip().replace('+', '')
+    m = _re.match(r'^(-?\d+)k(\d*)$', t)
+    if m:
+        return float(f'{m.group(1)}.{m.group(2) or 0}') * 1000
+    return float(t)
+
+
+def parse_describe(text):
+    out = []
+    for line in (text or '').splitlines():
+        m = _DESC.match(line)
+        if not m:
+            continue
+        key, val, ro, typ, rest = m.groups()
+        if key.startswith('$'):
+            continue
+        p = {'key': key, 'type': typ, 'ro': bool(ro)}
+        try:
+            if typ == 'list':
+                opts = rest[rest.index('[') + 1:rest.rindex(']')]
+                p['opts'] = [o.strip() for o in opts.split(',')]
+                p['value'] = val.strip().strip("'")
+            elif typ in ('lin', 'log', 'int'):
+                rng = rest[rest.index('[') + 1:rest.index(']')]
+                lo, hi = [x.strip() for x in rng.split('..')]
+                hi_parts = hi.split()
+                p['lo'], p['hi'] = wing_num(lo.split()[0]), wing_num(hi_parts[0])
+                p['unit'] = hi_parts[1] if len(hi_parts) > 1 else ''
+                sm = _re.search(r'(\d+)\s+steps', rest)
+                p['steps'] = int(sm.group(1)) if sm else None
+                p['value'] = wing_num(val)
+            else:
+                p['value'] = val.strip().strip("'")
+        except (ValueError, IndexError):
+            continue
+        out.append(p)
+    return out

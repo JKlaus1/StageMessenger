@@ -18,7 +18,7 @@ import time
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory, abort
 
-from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, SRC_GROUPS, SRC_LEAVES
+from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, SRC_GROUPS, SRC_LEAVES, parse_describe
 from .listen import Listener
 from .meters import Meters
 
@@ -114,6 +114,13 @@ SETTABLE = re.compile(
     r'|(?:ch|aux)/\d{1,2}/(?:in/set/(?:trim|inv)|flt/(?:lc|lcf|hc|hcf))'
     r'|io/in/(?:LCL|A|B|C|SC|USB|CRD|MOD|PLAY|AES)/\d{1,2}/(?:g|vph|pol))$')
 SRC_COUNT = dict(SRC_GROUPS)
+NODE_PATH = re.compile(r'^/(ch|aux)/(\d{1,2})/(eq|gate|dyn)$')
+NODE_LOCKED = ('mdl',)          # model changes stay at the console for now
+
+
+def _node_ok(path):
+    m = NODE_PATH.match(path or '')
+    return bool(m) and 1 <= int(m.group(2)) <= {'ch': N_CH, 'aux': N_AUX}[m.group(1)]
 
 
 class Mixer:
@@ -122,6 +129,7 @@ class Mixer:
         self.hub = Hub()
         self.feed_id = 'main1'
         self.ambient_label = 'Ambient mic'
+        self.node_cache = {}
         self.patch_note = ''
         self._last_patch = 0.0
         self._patch_lock = threading.Lock()
@@ -176,6 +184,35 @@ class Mixer:
         print(f'[mixer] patched {kind} {n} -> {grp} {idx}', flush=True)
         return got.get(base + '/grp') == grp and got.get(base + '/in') == idx
 
+    # ── processing nodes (EQ / gate / dyn): driven by the console's own '#' description ──
+    def node(self, path):
+        params = parse_describe(self.wing.describe(path))
+        if params:
+            self.node_cache[path] = params
+        return params
+
+    def node_set(self, path, key, value):
+        params = self.node_cache.get(path) or self.node(path)
+        p = next((x for x in params if x['key'] == key), None)
+        if not p or p['ro'] or key in NODE_LOCKED:
+            return None, 'parameter not writable'
+        t = p['type']
+        if t == 'list':
+            v = str(value).strip()
+            if v not in p['opts']:
+                return None, 'not an option'
+            self.wing._send(f'{path}/{key}', v)
+        elif t == 'int':
+            v = int(max(p['lo'], min(p['hi'], round(float(value)))))
+            self.wing._send(f'{path}/{key}', v)
+        elif t in ('lin', 'log'):
+            v = round(max(p['lo'], min(p['hi'], float(value))), 3)
+            self.wing._send(f'{path}/{key}', float(v))
+        else:
+            return None, 'unsupported type'
+        p['value'] = v
+        return v, None
+
     def source_names(self, grp):
         n = SRC_COUNT[grp]
         got = self.wing.query_many([f'/io/in/{grp}/{i}/{leaf}' for i in range(1, n + 1) for leaf in ('name', 'mode')],
@@ -191,8 +228,10 @@ class Mixer:
             if not lv or not self.hub.subs:
                 continue
             self.hub.publish({'t': 'm',
-                              'c': lv['ch'], 'a': lv['aux'],
-                              'b': [o for _, o in lv['bus']], 'm': [o for _, o in lv['main']]})
+                              'c': [r[:2] for r in lv['ch']], 'a': [r[:2] for r in lv['aux']],
+                              # gate key dB, gate GR %, dyn key dB, dyn GR %
+                              'cd': [r[2:] for r in lv['ch']], 'ad': [r[2:] for r in lv['aux']],
+                              'b': [r[1] for r in lv['bus']], 'm': [r[1] for r in lv['main']]})
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
@@ -399,6 +438,30 @@ def api_srcnames():
     return jsonify(ok=True, g=grp, inputs=_mixer.source_names(grp))
 
 
+@bp.route('/api/node')
+def api_node():
+    path = request.args.get('path', '')
+    if not _node_ok(path):
+        return jsonify(ok=False, err='bad node'), 400
+    params = _mixer.node(path)
+    return jsonify(ok=bool(params), path=path, params=params)
+
+
+@bp.route('/api/nodeset', methods=['POST'])
+def api_nodeset():
+    d = request.get_json(silent=True) or {}
+    path, key = str(d.get('path', '')), str(d.get('key', ''))
+    if not _node_ok(path):
+        return jsonify(ok=False, err='bad node'), 400
+    try:
+        v, err = _mixer.node_set(path, key, d.get('value'))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, err='bad value'), 400
+    if err:
+        return jsonify(ok=False, err=err), 400
+    return jsonify(ok=True, value=v)
+
+
 @bp.route('/api/repatch', methods=['POST'])
 def api_repatch():
     threading.Thread(target=_mixer.ensure_patch, kwargs={'force': True}, daemon=True).start()
@@ -437,5 +500,6 @@ def init_mixer(app):
           f"{'ENABLED' if _mixer.cfg.get('remote_enabled') else 'disabled'}", flush=True)
     # A fader drag is ~20 POSTs/s: keep those (and the meter/event plumbing) out of the journal.
     logging.getLogger('werkzeug').addFilter(
-        lambda r: not any(p in r.getMessage() for p in ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed')))
+        lambda r: not any(p in r.getMessage() for p in ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed',
+                                                        '/mixer/api/node')))
     return _mixer
