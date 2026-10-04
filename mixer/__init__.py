@@ -189,23 +189,46 @@ class Mixer:
         return [t.strip() for t in str(tags or '').split(',') if t.strip()]
 
     def _load_state(self):
+        self.overrides, self.order = {}, []
         try:
             with open(STATE_PATH) as f:
-                self.overrides = {k: list(v) for k, v in json.load(f).get('overrides', {}).items()}
+                data = json.load(f)
+            self.overrides = {k: list(v) for k, v in data.get('overrides', {}).items()}
+            self.order = self.clean_order(data.get('order', []))
         except FileNotFoundError:
-            self.overrides = {}
+            pass
         except Exception as e:
-            print(f'[mixer] bad {STATE_PATH}: {e}', flush=True); self.overrides = {}
+            print(f'[mixer] bad {STATE_PATH}: {e}', flush=True)
 
-    def _save_state(self):
+    def _write_state(self):
         try:
             tmp = STATE_PATH + '.tmp'
             with open(tmp, 'w') as f:
-                json.dump({'overrides': self.overrides}, f)
+                json.dump({'overrides': self.overrides, 'order': self.order}, f)
             os.replace(tmp, STATE_PATH)
         except OSError as e:
             print(f'[mixer] could not save {STATE_PATH}: {e}', flush=True)
+
+    def _save_state(self):
+        self._write_state()
         self.hub.publish({'t': 'ovr', 'v': sorted(self.overrides)})
+
+    # ── channel display order (page only; shared by every device, never sent to the WING) ──
+    @staticmethod
+    def clean_order(order):
+        valid = {f'{k}/{n}' for k, n in [('ch', i) for i in range(1, N_CH + 1)] + [('aux', i) for i in range(1, N_AUX + 1)]}
+        out = []
+        for k in order if isinstance(order, list) else []:
+            if isinstance(k, str) and k in valid and k not in out:
+                out.append(k)
+        return out
+
+    def set_order(self, order):
+        with self._ovr_lock:
+            self.order = self.clean_order(order)
+            self._write_state()
+        self.hub.publish({'t': 'order', 'v': self.order})
+        return self.order
 
     def _restore_tags(self, b, groups=None):
         """Put removed '#Mn' tags back on strip b (all, or just `groups`). Keeps any other tag edits."""
@@ -472,6 +495,7 @@ class Mixer:
             'meters': self.meters.levels is not None,
             'srcgroups': SRC_GROUPS,
             'ovr':    sorted(self.overrides),
+            'order':  self.order,
         }
 
 
@@ -617,6 +641,14 @@ def api_mute():
         return jsonify(ok=False, err='bad strip'), 400
     ok, action, state = _mixer.toggle_mute(kind, n)
     return jsonify(ok=ok, action=action, state=state)
+
+
+@bp.route('/api/order', methods=['POST'])
+def api_order():
+    d = request.get_json(silent=True) or {}
+    if not isinstance(d.get('order'), list):
+        return jsonify(ok=False, err='order must be a list'), 400
+    return jsonify(ok=True, order=_mixer.set_order(d['order']))
 
 
 @bp.route('/api/repatch', methods=['POST'])

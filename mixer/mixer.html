@@ -207,6 +207,29 @@
     .gtrack.gr .g-fill { background: var(--amber); }
     .gtrack .thr { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--red); }
     .note.small { font-size: .6rem; }
+    /* buses: collapsible list of bus masters */
+    #bus-toggle { width: 100%; display: flex; align-items: center; gap: .5rem;
+      background: transparent; border: 0; color: var(--text); padding: .1rem 0; }
+    #bus-toggle .label { margin: 0; }
+    #bus-sum { flex: 1; text-align: right; font-size: .62rem; font-weight: 900; letter-spacing: .08em; color: var(--red); }
+    #bus-caret { color: var(--muted); font-size: .8rem; transition: transform .15s; }
+    #bus-card.open #bus-caret { transform: rotate(180deg); }
+    #bus-strips { display: none; margin-top: .4rem; }
+    #bus-card.open #bus-strips { display: block; }
+    .tool-btns { display: flex; gap: .4rem; }
+    .tool-btns [hidden] { display: none; }
+    /* channel ordering: compact rows with a drag handle */
+    .hd { display: none; grid-area: hd; align-items: center; justify-content: center; height: 2.3rem;
+      border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 1.2rem; touch-action: none; cursor: grab; }
+    #strips.ordering .strip { grid-template-columns: 2.6rem 1fr; grid-template-areas: "hd nm"; padding-top: .3rem; padding-bottom: .3rem; }
+    #strips.ordering .strip.hidden { display: grid; }
+    #strips.ordering .fw, #strips.ordering .db, #strips.ordering .solo, #strips.ordering .mute { display: none; }
+    #strips.ordering .hd { display: flex; }
+    #strips.ordering .nm { cursor: default; }
+    #strips.ordering .nm b::after { content: ''; }
+    .strip.lift { background: rgba(0,255,136,.08); outline: 1px solid var(--green); border-radius: 8px; position: relative; z-index: 2; }
+    .strip.lift .hd { color: var(--green); border-color: var(--green); }
+    #order-note[hidden] { display: none; }
     #link-banner { display: none; position: sticky; top: 0; z-index: 50; align-items: center; gap: .6rem;
       margin: 0 0 1rem; padding: .6rem .75rem; border-radius: 10px; background: #3a0d16;
       border: 1px solid var(--red); color: #ffd6db; font-size: .78rem; font-weight: 700; line-height: 1.3; }
@@ -238,6 +261,24 @@
     <audio id="player" preload="none"></audio>
   </section>
 
+  <section class="card master" id="master-card">
+    <div class="label" id="master-label">Master</div>
+  </section>
+
+  <section class="card">
+    <div class="label">Mute groups</div>
+    <div id="mg-grid"></div>
+  </section>
+
+  <section class="card" id="bus-card">
+    <button id="bus-toggle">
+      <span class="label">Buses</span>
+      <span id="bus-sum"></span>
+      <span id="bus-caret">&#9662;</span>
+    </button>
+    <div id="bus-strips"></div>
+  </section>
+
   <section class="card" id="mix-card">
     <button id="mix-toggle">
       <span class="label">Mix</span>
@@ -248,19 +289,15 @@
   </section>
 
   <section class="card">
-    <div class="label">Mute groups</div>
-    <div id="mg-grid"></div>
-  </section>
-
-  <section class="card master" id="master-card">
-    <div class="label" id="master-label">Master</div>
-  </section>
-
-  <section class="card">
     <div class="tools">
       <div class="label" id="strips-label" style="margin:0">Channels</div>
-      <button class="toggle" id="hide-btn">Hide &minus;&infin;</button>
+      <div class="tool-btns">
+        <button class="toggle" id="reset-order" hidden>Reset</button>
+        <button class="toggle" id="order-btn">Order</button>
+        <button class="toggle" id="hide-btn">Hide &minus;&infin;</button>
+      </div>
     </div>
+    <div class="note" id="order-note" hidden>Drag &#8801; to move a channel. Tap Done to save &mdash; the order is kept on the Pi and shows on every device. Reset puts back console order.</div>
     <div id="strips"></div>
   </section>
 
@@ -353,6 +390,9 @@
   let M = null;               // latest meters {c:[[in,out]..], a:[..], b:[out..], m:[out..]}
   const localSetAt = {};      // addr -> ms; suppress echoes while dragging
   const rows = [];            // strip descriptors
+  const busRows = [];         // the 16 bus-master rows (Buses card)
+  let ORDER = [], ordering = false, orderBefore = '';   // channel display order ('ch/3', 'aux/1' ...)
+  const keyOf = r => `${r.kind}/${r.n}`;
 
   // ── WING fader law (matches the console's 0..1 normalised position) ──
   function posToDb(p) {
@@ -509,6 +549,7 @@
   // r.master: 'mix' (LR or the selected bus) | 'main2' (subs).  Others: {kind:'ch'|'aux', n}
   function addrs(r) {
     if (r.master === 'main2') return { lvl: '/main/2/fdr', mute: '/main/2/mute', name: '/main/2/name' };
+    if (r.master === 'bus') return { lvl: `/bus/${r.bus}/fdr`, mute: `/bus/${r.bus}/mute`, name: `/bus/${r.bus}/name` };
     if (r.master) return mix === 'lr'
       ? { lvl: '/main/1/fdr', mute: '/main/1/mute', name: '/main/1/name' }
       : { lvl: `/bus/${mix}/fdr`, mute: `/bus/${mix}/mute`, name: `/bus/${mix}/name` };
@@ -519,10 +560,19 @@
       : { ...base, lvl: `${b}/send/${mix}/lvl`, on: `${b}/send/${mix}/on`, chMute: b + '/mute' };
   }
 
+  // console base address of a row: '/main/1', '/bus/3', '/ch/12' ...
+  function stripBase(r) {
+    if (r.master === 'main2') return '/main/2';
+    if (r.master === 'bus') return `/bus/${r.bus}`;
+    if (r.master) return mix === 'lr' ? '/main/1' : `/bus/${mix}`;
+    return `/${r.kind}/${r.n}`;
+  }
+
   function buildRow(r, parent) {
     const el = document.createElement('div');
     el.className = 'strip';
-    el.innerHTML = '<div class="nm"><b></b><i></i></div>'
+    if (!r.master) el.dataset.key = keyOf(r);
+    el.innerHTML = '<div class="hd" title="Drag to reorder">&#8801;</div><div class="nm"><b></b><i></i></div>'
       + '<div class="fw"><div class="lvl off"><i></i></div></div>'
       + '<div class="db"></div><button class="solo">S</button><button class="mute">MUTE</button>';
     r.el = el; r.nb = el.querySelector('.nm b'); r.ni = el.querySelector('.nm i');
@@ -535,7 +585,11 @@
     });
     el.querySelector('.fw').prepend(r.fader);
     if (r.master) r.sb.classList.add('none');
-    else el.querySelector('.nm').addEventListener('click', () => openSheet(r));
+    if (r.master === 'bus') el.querySelector('.nm').addEventListener('click', () => selectMix(r.bus, true));
+    else if (!r.master) {
+      el.querySelector('.nm').addEventListener('click', () => { if (!ordering) openSheet(r); });
+      el.querySelector('.hd').addEventListener('pointerdown', e => startDrag(r, e));
+    }
     r.sb.addEventListener('click', () => {
       const A = addrs(r);
       if (!A.solo) return;
@@ -559,12 +613,14 @@
       }
       else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); }
       paintRow(r);
+      if (r.master === 'bus') paintBusSum();
     });
     parent.appendChild(el);
   }
 
   function rowTag(r) {
     if (r.master === 'main2') return 'MAIN 2';
+    if (r.master === 'bus') return 'BUS ' + r.bus;
     if (r.master) return mix === 'lr' ? 'MAIN 1' : 'BUS ' + mix;
     return (r.kind === 'ch' ? 'CH ' : 'AUX ') + r.n;
   }
@@ -572,7 +628,8 @@
   function paintRow(r) {
     const A = addrs(r);
     const tag = rowTag(r);
-    r.nb.textContent = nameOf(A.name, r.master === 'main2' ? 'Main 2' : r.master ? (mix === 'lr' ? 'LR' : 'Bus ' + mix) : tag);
+    r.nb.textContent = nameOf(A.name, r.master === 'main2' ? 'Main 2' : r.master === 'bus' ? 'Bus ' + r.bus
+      : r.master ? (mix === 'lr' ? 'LR' : 'Bus ' + mix) : tag);
     const st = muteState(r), gm = !!(st && st.grp);
     const chMuted = !!(st && A.chMute && (st.own || st.grp));          // bus view: muted at the channel
     const src = r.master ? '' : srcOf(r);
@@ -582,8 +639,7 @@
     r.ni.title = info + (groupsOf(r).length ? ' · mute groups ' + groupsOf(r).join(',') : '')
       + (st && st.ovr ? (st.piOvr ? ' · pulled out of its mute group by this page (MUTE again or releasing the group puts it back)' : ' · group mute overridden at the console') : '');
     r.ni.className = chMuted ? 'cm' : (st && st.ovr ? 'ovr' : '');
-    r.el.style.borderLeftColor = colorOf(r.master === 'main2' ? '/main/2'
-      : r.master ? (mix === 'lr' ? '/main/1' : `/bus/${mix}`) : `/${r.kind}/${r.n}`);
+    r.el.style.borderLeftColor = colorOf(stripBase(r));
     const d = S[A.lvl];
     if (!r.fader.isDragging()) r.fader.setPos(dbToPos(d));
     r.db.textContent = fmtDb(typeof d === 'number' ? d : null);
@@ -601,11 +657,13 @@
     }
   }
 
-  function paintAll() { rows.forEach(paintRow); paintMix(); paintMuteGroups(); }
+  function paintAll() { rows.forEach(paintRow); paintMix(); paintMuteGroups(); paintBusSum(); }
 
   function buildStrips() {
     const mc = $('master-card');
     for (const kind of ['mix', 'main2']) { const m = { master: kind }; buildRow(m, mc); rows.push(m); }
+    const bc = $('bus-strips');
+    for (let b = 1; b <= NBUS; b++) { const r = { master: 'bus', bus: b }; buildRow(r, bc); rows.push(r); busRows.push(r); }
     const box = $('strips');
     for (let i = 1; i <= NCH; i++) { const r = { kind: 'ch', n: i }; buildRow(r, box); rows.push(r); }
     for (let i = 1; i <= NAUX; i++) { const r = { kind: 'aux', n: i }; buildRow(r, box); rows.push(r); }
@@ -616,6 +674,7 @@
   function meterOf(r) {
     if (!M) return null;
     if (r.master === 'main2') return M.m[1];
+    if (r.master === 'bus') return M.b ? M.b[r.bus - 1] : null;
     if (r.master) return mix === 'lr' ? M.m[0] : M.b[mix - 1];
     const v = (r.kind === 'ch' ? M.c : M.a)[r.n - 1];
     return v ? v[mix === 'lr' ? 1 : 0] : null;
@@ -637,17 +696,95 @@
     const mk = (id, small) => {
       const b = document.createElement('button'); b.className = 'mixbtn'; b.dataset.mix = id;
       b.innerHTML = `<small>${small}</small><span></span>`;
-      b.addEventListener('click', () => {
-        mix = id === 'lr' ? 'lr' : +id;
-        $('mix-card').classList.remove('open');
-        paintAll(); paintMeters();
-      });
+      b.addEventListener('click', () => selectMix(id === 'lr' ? 'lr' : +id));
       box.appendChild(b);
     };
     mk('lr', 'MAIN');
     for (let b = 1; b <= NBUS; b++) mk(String(b), 'BUS ' + b);
   }
+  function selectMix(id, reveal) {
+    mix = id;
+    $('mix-card').classList.remove('open');
+    paintAll(); paintMeters();
+    if (reveal) $('mix-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   $('mix-toggle').addEventListener('click', () => $('mix-card').classList.toggle('open'));
+
+  // ── buses card ──
+  const LS = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+               set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+  if (LS.get('mixer.busesOpen') === '1') $('bus-card').classList.add('open');
+  $('bus-toggle').addEventListener('click', () => {
+    LS.set('mixer.busesOpen', $('bus-card').classList.toggle('open') ? '1' : '0');
+  });
+  function paintBusSum() {
+    const n = busRows.filter(r => S[`/bus/${r.bus}/mute`]).length;
+    $('bus-sum').textContent = n ? `${n} MUTED` : '';
+  }
+
+  // ── channel order: kept on the Pi so every device shows the same order ──
+  function chanRows() { return rows.filter(r => !r.master); }
+  const domOrder = () => [...$('strips').children].map(el => el.dataset.key);
+  function applyOrder() {
+    if (ordering) return;                        // never shuffle rows mid-edit
+    const byKey = {}, seen = new Set(), box = $('strips');
+    chanRows().forEach(r => { byKey[keyOf(r)] = r; });
+    for (const k of ORDER) if (byKey[k] && !seen.has(k)) { box.appendChild(byKey[k].el); seen.add(k); }
+    for (const r of chanRows()) if (!seen.has(keyOf(r))) box.appendChild(r.el);   // anything unlisted: console order
+  }
+  function setOrdering(on) {
+    ordering = on;
+    $('strips').classList.toggle('ordering', on);
+    $('order-btn').textContent = on ? 'Done' : 'Order';
+    $('order-btn').classList.toggle('on', on);
+    $('reset-order').hidden = !on; $('hide-btn').hidden = on; $('order-note').hidden = !on;
+  }
+  async function saveOrder(order) {
+    const x = await postJSON('/mixer/api/order', { order });
+    if (!x) return;                              // banner shown; resync re-applies the Pi's order
+    try { ORDER = (await x.json()).order || order; } catch (e) { ORDER = order; }
+    applyOrder();
+  }
+  $('order-btn').addEventListener('click', () => {
+    if (!ordering) { orderBefore = domOrder().join(); setOrdering(true); return; }
+    const now = domOrder();
+    setOrdering(false);
+    if (now.join() !== orderBefore) saveOrder(now); else applyOrder();
+  });
+  $('reset-order').addEventListener('click', () => {
+    if (!confirm('Put channels back in console order on every device?')) return;
+    setOrdering(false); ORDER = []; applyOrder(); saveOrder([]);
+  });
+  // Drag by the handle. Only the neighbours move (the dragged row is never detached),
+  // so the pointer capture holds; the page scrolls when the finger nears the top/bottom.
+  function startDrag(r, e) {
+    if (!ordering) return;
+    e.preventDefault();
+    const box = $('strips'), el = r.el, h = e.currentTarget, pid = e.pointerId;
+    try { h.setPointerCapture(pid); } catch (err) {}
+    el.classList.add('lift');
+    let y = e.clientY, raf = 0;
+    const mid = c => { const b = c.getBoundingClientRect(); return b.top + b.height / 2; };
+    const place = () => {
+      let p, n;
+      while ((p = el.previousElementSibling) && y < mid(p)) box.insertBefore(p, el.nextSibling);
+      while ((n = el.nextElementSibling) && y > mid(n)) box.insertBefore(n, el);
+    };
+    const tick = () => {
+      const edge = 70, H = window.innerHeight;
+      const v = y < edge ? -Math.ceil((edge - y) / 4) : (y > H - edge ? Math.ceil((y - (H - edge)) / 4) : 0);
+      if (v) { window.scrollBy(0, v); place(); }
+      raf = requestAnimationFrame(tick);
+    };
+    const move = ev => { if (ev.pointerId === pid) { y = ev.clientY; place(); } };
+    const up = ev => {
+      if (ev.pointerId !== pid) return;
+      cancelAnimationFrame(raf); el.classList.remove('lift');
+      h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
+    };
+    h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+    raf = requestAnimationFrame(tick);
+  }
   function mixName(id) { return id === 'lr' ? nameOf('/main/1/name', 'LR') : nameOf(`/bus/${id}/name`, 'Bus ' + id); }
   function paintMix() {
     document.querySelectorAll('.mixbtn').forEach(c => {
@@ -1208,7 +1345,11 @@
       if (a.endsWith('/$solo')) soloChanged();
       return;
     }
-    if (a.startsWith('/main/') || a.startsWith('/bus/')) { paintRow(rows[0]); paintRow(rows[1]); paintMix(); }
+    if (a.startsWith('/main/') || a.startsWith('/bus/')) {
+      paintRow(rows[0]); paintRow(rows[1]); paintMix();
+      const bm = a.match(/^\/bus\/(\d+)\//);
+      if (bm && busRows[bm[1] - 1]) { paintRow(busRows[bm[1] - 1]); paintBusSum(); }
+    }
     else if (a.startsWith('/mgrp/')) { paintMuteGroups(); rows.forEach(paintRow); }
   }
 
@@ -1219,6 +1360,7 @@
     soloCount = countSolos(); $('solo-clear').classList.toggle('show', soloCount > 0);
     OVR = new Set(m.ovr || []); rows.forEach(paintRow);
     $('patch-note').textContent = m.patch || '';
+    ORDER = m.order || []; applyOrder();
   }
 
   // Live updates. If the stream drops (or is bounced to a sign-in page, which kills it for good),
@@ -1256,6 +1398,7 @@
       else if (m.t === 'feed') { feedId = m.id; $('feed-sel').value = feedId; }
       else if (m.t === 'patch') $('patch-note').textContent = m.note;
       else if (m.t === 'ovr') { OVR = new Set(m.v || []); rows.forEach(paintRow); }
+      else if (m.t === 'order') { ORDER = m.v || []; applyOrder(); }
     };
   }
   $('link-reload').addEventListener('click', () => location.reload());
