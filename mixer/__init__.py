@@ -156,9 +156,45 @@ class Mixer:
             time.sleep(3)
             if not self.wing.loaded:
                 continue
-            self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips() for leaf in ('grp', 'in')])
+            self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips() for leaf in ('grp', 'in')]
+                           + self._mute_addrs())
             time.sleep(0.2)
             self.wing.poke(self._source_addrs())
+
+    def _mute_addrs(self):
+        return [f'/{k}/{n}/$mute' for k, n in self._strips()]
+
+    def refresh_mutes(self, delay=0.15):
+        def go():
+            time.sleep(delay)
+            self.wing.poke(self._mute_addrs())
+        threading.Thread(target=go, daemon=True).start()
+
+    def toggle_mute(self, kind, n):
+        """Console MUTE-button semantics (verified on a WING Rack, fw 3.1):
+        $mute 2 (group-muted) -> write $mute 0 = override, the group stays engaged
+        $mute 0 while a member group is engaged (overridden) -> $mute 2 = back to group-muted
+        otherwise toggle the strip's own 'mute'."""
+        b = f'/{kind}/{n}'
+        got = self.wing.query_many([b + '/$mute', b + '/mute', b + '/tags']
+                                   + [f'/mgrp/{g}/mute' for g in range(1, 9)], timeout=0.6)
+        cur, own = got.get(b + '/$mute'), got.get(b + '/mute')
+        tags = got.get(b + '/tags') or ''
+        grp_on = any(got.get(f'/mgrp/{g}/mute') for g in range(1, 9) if f'#M{g}' in str(tags))
+        if cur == 2:
+            self.wing.set(b + '/$mute', 0); action = 'override'
+        elif grp_on and not own:
+            self.wing.set(b + '/$mute', 2); action = 'regroup'
+        else:
+            self.wing.set(b + '/mute', 0 if own else 1); action = 'own'
+        time.sleep(0.08)
+        after = self.wing.query_many([b + '/$mute', b + '/mute'], timeout=0.6)
+        for a, v in after.items():
+            if v is not None:
+                self.hub.publish({'t': 'upd', 'a': a, 'v': v})
+        want = {'override': 0, 'regroup': 2}.get(action)
+        ok = want is None or after.get(b + '/$mute') == want
+        return ok, action, after.get(b + '/$mute')
 
     def _source_addrs(self, extra=()):
         srcs = set(extra)
@@ -407,6 +443,8 @@ def api_set():
     except (TypeError, ValueError):
         return jsonify(ok=False, err='bad value'), 400
     _mixer.hub.publish({'t': 'upd', 'a': addr, 'v': v})
+    if addr.startswith('/mgrp/'):
+        _mixer.refresh_mutes()            # members' $mute changes silently
     return jsonify(ok=True, v=v)
 
 
@@ -462,6 +500,21 @@ def api_nodeset():
     return jsonify(ok=True, value=v)
 
 
+@bp.route('/api/mute', methods=['POST'])
+def api_mute():
+    d = request.get_json(silent=True) or {}
+    kind = str(d.get('kind', ''))
+    try:
+        n = int(d.get('n'))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, err='bad number'), 400
+    lim = {'ch': N_CH, 'aux': N_AUX}.get(kind)
+    if not lim or not 1 <= n <= lim:
+        return jsonify(ok=False, err='bad strip'), 400
+    ok, action, state = _mixer.toggle_mute(kind, n)
+    return jsonify(ok=ok, action=action, state=state)
+
+
 @bp.route('/api/repatch', methods=['POST'])
 def api_repatch():
     threading.Thread(target=_mixer.ensure_patch, kwargs={'force': True}, daemon=True).start()
@@ -501,5 +554,5 @@ def init_mixer(app):
     # A fader drag is ~20 POSTs/s: keep those (and the meter/event plumbing) out of the journal.
     logging.getLogger('werkzeug').addFilter(
         lambda r: not any(p in r.getMessage() for p in ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed',
-                                                        '/mixer/api/node')))
+                                                        '/mixer/api/node', '/mixer/api/mute')))
     return _mixer

@@ -102,6 +102,7 @@
     .nm i { display: block; font-style: normal; font-size: .6rem; color: var(--muted); font-weight: 700; letter-spacing: .04em;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .nm i.cm { color: var(--red); }
+    .nm i.ovr { color: var(--amber); }
     .mute, .solo { height: 2.1rem; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted);
       font-size: .62rem; font-weight: 900; letter-spacing: .06em; }
     .mute.on { background: var(--red); border-color: var(--red); color: #fff; }
@@ -447,7 +448,16 @@
     const t = S[`/${r.kind}/${r.n}/tags`];
     return typeof t === 'string' ? (t.match(/#M(\d)/g) || []).map(x => +x.slice(2)) : [];
   }
-  const groupMuted = r => !r.master && groupsOf(r).some(g => S[`/mgrp/${g}/mute`]);
+  const groupActive = r => !r.master && groupsOf(r).some(g => S[`/mgrp/${g}/mute`]);
+  // console MUTE-button state: $mute 0 off, 1 own mute, 2 muted by a group
+  function muteState(r) {
+    if (r.master) return null;
+    const b = `/${r.kind}/${r.n}`, m = S[b + '/$mute'], own = !!S[b + '/mute'];
+    const grp = typeof m === 'number' ? m === 2 : (groupActive(r) && !own);
+    return { own: typeof m === 'number' ? m === 1 || own : own, grp,
+             ovr: groupActive(r) && !own && m === 0 };          // group engaged but overridden here
+  }
+  const groupMuted = r => { const st = muteState(r); return !!(st && st.grp); };
 
   // ── strip rows ──
   // r.master: 'mix' (LR or the selected bus) | 'main2' (subs).  Others: {kind:'ch'|'aux', n}
@@ -489,6 +499,14 @@
     r.mb.addEventListener('click', () => {
       const A = addrs(r);
       if (A.on) { const v = S[A.on] ? 0 : 1; S[A.on] = v; postSet(A.on, v); }
+      else if (!r.master) {                       // channel/aux: console semantics incl. group override
+        const b = `/${r.kind}/${r.n}`, st = muteState(r);
+        if (st.grp) S[b + '/$mute'] = 0;
+        else if (st.ovr) S[b + '/$mute'] = 2;
+        else { S[b + '/mute'] = st.own ? 0 : 1; S[b + '/$mute'] = st.own ? (groupActive(r) ? 2 : 0) : 1; }
+        localSetAt[b + '/$mute'] = localSetAt[b + '/mute'] = Date.now();
+        postJSON('/mixer/api/mute', { kind: r.kind, n: r.n });
+      }
       else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); }
       paintRow(r);
     });
@@ -505,13 +523,15 @@
     const A = addrs(r);
     const tag = rowTag(r);
     r.nb.textContent = nameOf(A.name, r.master === 'main2' ? 'Main 2' : r.master ? (mix === 'lr' ? 'LR' : 'Bus ' + mix) : tag);
-    const gm = groupMuted(r);
-    const chMuted = (A.chMute && S[A.chMute]) || gm;
+    const st = muteState(r), gm = !!(st && st.grp);
+    const chMuted = !!(st && A.chMute && (st.own || st.grp));          // bus view: muted at the channel
     const src = r.master ? '' : srcOf(r);
     const info = src ? tag + ' · ' + src : tag;
-    r.ni.textContent = chMuted ? (gm ? 'MG · ' : 'M · ') + info : info;   // red = muted at the channel / by a group
-    r.ni.title = info + (groupsOf(r).length ? ' · mute groups ' + groupsOf(r).join(',') : '');
-    r.ni.className = chMuted ? 'cm' : '';
+    const lead = chMuted ? (gm ? 'MG · ' : 'M · ') : (st && st.ovr ? 'OVR · ' : '');
+    r.ni.textContent = lead + info;
+    r.ni.title = info + (groupsOf(r).length ? ' · mute groups ' + groupsOf(r).join(',') : '')
+      + (st && st.ovr ? ' · group mute overridden' : '');
+    r.ni.className = chMuted ? 'cm' : (st && st.ovr ? 'ovr' : '');
     r.el.style.borderLeftColor = colorOf(r.master === 'main2' ? '/main/2'
       : r.master ? (mix === 'lr' ? '/main/1' : `/bus/${mix}`) : `/${r.kind}/${r.n}`);
     const d = S[A.lvl];
@@ -519,7 +539,7 @@
     r.db.textContent = fmtDb(typeof d === 'number' ? d : null);
     if (A.on) { const off = S[A.on] === 0; r.mb.textContent = off ? 'OFF' : 'ON'; r.mb.classList.toggle('on', off); }
     else {
-      const m = !!S[A.mute];
+      const m = st ? st.own : !!S[A.mute];
       r.mb.textContent = (!m && gm) ? 'MG' : 'MUTE';
       r.mb.classList.toggle('on', m); r.mb.classList.toggle('mg', !m && gm);
     }

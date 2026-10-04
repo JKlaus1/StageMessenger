@@ -10,6 +10,9 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
   * Solo: /ch/N/$solo is writable (int 0/1); it lands on the monitor buses (MON group).
   * Color: col / $col (displayed) = palette 1..18 (display string; native is 0-based).
   * Mute groups: /mgrp/1-8/name|mute; a strip's membership is in its 'tags' ("#M1,#M2").
+    /ch/N/$mute = the console's MUTE button state: 0 off, 1 own mute, 2 muted by a group.
+    Pressing MUTE on a group-muted strip sets $mute 0 (override) while 'mute' stays 0.
+    No push is sent for $mute changes -- poll it.
   * Input stage: /ch/N/in/set/trim (+-18 dB), in/set/inv (polarity), flt/lc|lcf|hc|hcf.
     Physical input /io/in/<grp>/<n>: g (preamp dB), vph (48V), pol, name, mode (M/ST).
     Re-patching pushes NOTHING -- routing must be polled.
@@ -79,7 +82,7 @@ FLOAT_RANGES = {'g': (-2.5, 45.0), 'trim': (-18.0, 18.0), 'lcf': (20.0, 2000.0),
 SRC_GROUPS = [('LCL', 24), ('A', 48), ('B', 48), ('C', 48), ('SC', 32), ('USB', 48),
               ('CRD', 64), ('MOD', 64), ('PLAY', 4), ('AES', 2)]
 SRC_LEAVES = ('name', 'mode', 'g', 'vph', 'pol')
-KEEP_SHADOW = ('/$name', '/$solo', '/$col')     # '$' paths we do track (see _rx_loop)
+KEEP_SHADOW = ('/$name', '/$solo', '/$col', '/$mute')     # '$' paths we do track (see _rx_loop)
 
 def strip_addrs():
     """Every control address the mixer page reads (names, levels, mutes, sends)."""
@@ -87,7 +90,7 @@ def strip_addrs():
     for kind, n in (('ch', N_CH), ('aux', N_AUX)):
         for i in range(1, n + 1):
             a += [f'/{kind}/{i}/name', f'/{kind}/{i}/$name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute',
-                  f'/{kind}/{i}/$solo', f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in',
+                  f'/{kind}/{i}/$solo', f'/{kind}/{i}/$mute', f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in',
                   f'/{kind}/{i}/col', f'/{kind}/{i}/$col', f'/{kind}/{i}/tags',
                   f'/{kind}/{i}/in/set/trim', f'/{kind}/{i}/in/set/inv',
                   f'/{kind}/{i}/flt/lc', f'/{kind}/{i}/flt/lcf', f'/{kind}/{i}/flt/hc', f'/{kind}/{i}/flt/hcf']
@@ -247,6 +250,9 @@ class Wing:
             lo, hi = FLOAT_RANGES[leaf]
             v = round(max(lo, min(hi, float(value))), 2)
             self._send(addr, float(v))
+        elif leaf == '$mute':
+            v = max(0, min(2, int(value)))
+            self._send(addr, v)
         elif leaf in ('mute', 'on', '$solo', 'inv', 'vph', 'pol', 'lc', 'hc'):
             v = 1 if int(value) else 0
             self._send(addr, v)
