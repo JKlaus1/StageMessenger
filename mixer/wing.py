@@ -10,6 +10,9 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
   * Solo: /ch/N/$solo is writable (int 0/1); it lands on the monitor buses (MON group).
   * Color: col / $col (displayed) = palette 1..18 (display string; native is 0-based).
   * Mute groups: /mgrp/1-8/name|mute; a strip's membership is in its 'tags' ("#M1,#M2").
+  * Input stage: /ch/N/in/set/trim (+-18 dB), in/set/inv (polarity), flt/lc|lcf|hc|hcf.
+    Physical input /io/in/<grp>/<n>: g (preamp dB), vph (48V), pol, name, mode (M/ST).
+    Re-patching pushes NOTHING -- routing must be polled.
   * Input routing: /ch/N/in/conn/grp ('A', 'LCL', 'B', ...) + /ch/N/in/conn/in (1-based).
   * Writes: fader / send levels take a FLOAT in dB (an int is ignored).
     Mutes and send on/off take an INT 0/1.
@@ -70,6 +73,12 @@ def osc_parse(b):
 # ── Address model ───────────────────────────────────────────────────────────────
 
 N_CH, N_AUX, N_BUS, N_MTX, N_MAIN, N_MGRP = 40, 8, 16, 8, 2, 8
+# Float leaves written in native units, clamped to the console's ranges
+FLOAT_RANGES = {'g': (-2.5, 45.0), 'trim': (-18.0, 18.0), 'lcf': (20.0, 2000.0), 'hcf': (200.0, 20000.0)}
+# Physical input groups and sizes (WING Rack fw 3.1, from /io/in '?')
+SRC_GROUPS = [('LCL', 24), ('A', 48), ('B', 48), ('C', 48), ('SC', 32), ('USB', 48),
+              ('CRD', 64), ('MOD', 64), ('PLAY', 4), ('AES', 2)]
+SRC_LEAVES = ('name', 'mode', 'g', 'vph', 'pol')
 KEEP_SHADOW = ('/$name', '/$solo', '/$col')     # '$' paths we do track (see _rx_loop)
 
 def strip_addrs():
@@ -79,7 +88,9 @@ def strip_addrs():
         for i in range(1, n + 1):
             a += [f'/{kind}/{i}/name', f'/{kind}/{i}/$name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute',
                   f'/{kind}/{i}/$solo', f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in',
-                  f'/{kind}/{i}/col', f'/{kind}/{i}/$col', f'/{kind}/{i}/tags']
+                  f'/{kind}/{i}/col', f'/{kind}/{i}/$col', f'/{kind}/{i}/tags',
+                  f'/{kind}/{i}/in/set/trim', f'/{kind}/{i}/in/set/inv',
+                  f'/{kind}/{i}/flt/lc', f'/{kind}/{i}/flt/lcf', f'/{kind}/{i}/flt/hc', f'/{kind}/{i}/flt/hcf']
     for i in range(1, N_BUS + 1):
         a += [f'/bus/{i}/name', f'/bus/{i}/$name', f'/bus/{i}/fdr', f'/bus/{i}/mute',
               f'/bus/{i}/col', f'/bus/{i}/$col']
@@ -226,7 +237,11 @@ class Wing:
         if leaf in ('fdr', 'lvl'):
             v = round(max(NEG_INF, min(10.0, float(value))), 2)
             self._send(addr, float(v))
-        elif leaf in ('mute', 'on', '$solo'):
+        elif leaf in FLOAT_RANGES:
+            lo, hi = FLOAT_RANGES[leaf]
+            v = round(max(lo, min(hi, float(value))), 2)
+            self._send(addr, float(v))
+        elif leaf in ('mute', 'on', '$solo', 'inv', 'vph', 'pol', 'lc', 'hc'):
             v = 1 if int(value) else 0
             self._send(addr, v)
         elif leaf in ('grp',):
@@ -238,6 +253,27 @@ class Wing:
         with self.lock:
             self.state[addr] = v
         return v
+
+    def query_many(self, addrs, timeout=1.0):
+        """Fire a batch of queries, wait (bounded) for the replies, return {addr: value}."""
+        evs = {}
+        with self.lock:
+            for a in addrs:
+                evs[a] = self._waiters[a] = threading.Event()
+        for a in addrs:
+            self._send(a); time.sleep(0.001)
+        end = time.time() + timeout
+        for a, ev in evs.items():
+            ev.wait(max(0.0, end - time.time()))
+        with self.lock:
+            for a in addrs:
+                self._waiters.pop(a, None)
+            return {a: self.state.get(a) for a in addrs}
+
+    def poke(self, addrs, pace=0.001):
+        """Fire-and-forget refresh: replies update the cache (and push changes) via _rx_loop."""
+        for a in addrs:
+            self._send(a); time.sleep(pace)
 
     def get(self, addr, default=None):
         with self.lock:

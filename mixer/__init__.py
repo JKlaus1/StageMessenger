@@ -18,7 +18,7 @@ import time
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory, abort
 
-from .wing import Wing, N_BUS, N_MTX
+from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, SRC_GROUPS, SRC_LEAVES
 from .listen import Listener
 from .meters import Meters
 
@@ -110,7 +110,10 @@ class Hub:
 SETTABLE = re.compile(
     r'^/(?:(?:ch|aux)/\d{1,2}/(?:fdr|mute|\$solo|send/\d{1,2}/(?:lvl|on))'
     r'|(?:bus|main|mtx)/\d{1,2}/(?:fdr|mute)'
-    r'|mgrp/[1-8]/mute)$')
+    r'|mgrp/[1-8]/mute'
+    r'|(?:ch|aux)/\d{1,2}/(?:in/set/(?:trim|inv)|flt/(?:lc|lcf|hc|hcf))'
+    r'|io/in/(?:LCL|A|B|C|SC|USB|CRD|MOD|PLAY|AES)/\d{1,2}/(?:g|vph|pol))$')
+SRC_COUNT = dict(SRC_GROUPS)
 
 
 class Mixer:
@@ -133,6 +136,52 @@ class Mixer:
         self.wing.start()
         self.meters.start()
         threading.Thread(target=self._meter_pump, daemon=True, name='meter-pump').start()
+        threading.Thread(target=self._routing_poll, daemon=True, name='routing-poll').start()
+
+    def _strips(self):
+        return [('ch', i) for i in range(1, N_CH + 1)] + [('aux', i) for i in range(1, N_AUX + 1)]
+
+    def _routing_poll(self):
+        """The WING pushes nothing when a channel is re-patched, so re-read every strip's input
+        patch and the physical-input settings (gain/48V/name) behind it every few seconds."""
+        while True:
+            time.sleep(3)
+            if not self.wing.loaded:
+                continue
+            self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips() for leaf in ('grp', 'in')])
+            time.sleep(0.2)
+            self.wing.poke(self._source_addrs())
+
+    def _source_addrs(self, extra=()):
+        srcs = set(extra)
+        for k, n in self._strips():
+            g, i = self.wing.get(f'/{k}/{n}/in/conn/grp'), self.wing.get(f'/{k}/{n}/in/conn/in')
+            if g in SRC_COUNT and isinstance(i, int) and 1 <= i <= SRC_COUNT[g]:
+                srcs.add((g, i))
+        return [f'/io/in/{g}/{i}/{leaf}' for g, i in sorted(srcs) for leaf in SRC_LEAVES]
+
+    def patch(self, kind, n, grp, idx):
+        """Re-patch a channel/aux input. grp first, then in -- then read everything back."""
+        base = f'/{kind}/{n}/in/conn'
+        self.wing.set(base + '/grp', grp); time.sleep(0.03)
+        self.wing.set(base + '/in', idx); time.sleep(0.05)
+        got = self.wing.query_many([base + '/grp', base + '/in']
+                                   + [f'/io/in/{grp}/{idx}/{leaf}' for leaf in SRC_LEAVES], timeout=1.0)
+        for a, v in got.items():
+            if v is not None:
+                self.hub.publish({'t': 'upd', 'a': a, 'v': v})
+        follow = (self.cfg.get('ambient') or {}).get('follow_channel')
+        if kind == 'ch' and n == follow:
+            threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
+        print(f'[mixer] patched {kind} {n} -> {grp} {idx}', flush=True)
+        return got.get(base + '/grp') == grp and got.get(base + '/in') == idx
+
+    def source_names(self, grp):
+        n = SRC_COUNT[grp]
+        got = self.wing.query_many([f'/io/in/{grp}/{i}/{leaf}' for i in range(1, n + 1) for leaf in ('name', 'mode')],
+                                   timeout=1.5)
+        return [{'n': i, 'name': got.get(f'/io/in/{grp}/{i}/name') or '', 'mode': got.get(f'/io/in/{grp}/{i}/mode') or ''}
+                for i in range(1, n + 1)]
 
     def _meter_pump(self):
         """~10 Hz meter push to page clients. c/a = [[in, out], ...] per ch/aux; b/m = out."""
@@ -160,6 +209,7 @@ class Mixer:
         self.hub.publish({'t': 'conn', 'ok': ok})
 
     def _on_loaded(self):
+        self.wing.query_many(self._source_addrs(), timeout=1.5)     # physical-input settings
         self.hub.publish({'t': 'snap', **self.snapshot()})
         self.ensure_patch(force=True)
 
@@ -255,6 +305,7 @@ class Mixer:
             'patch':  self.patch_note,
             'nbus':   N_BUS,
             'meters': self.meters.levels is not None,
+            'srcgroups': SRC_GROUPS,
         }
 
 
@@ -324,6 +375,28 @@ def api_set():
 def api_feed():
     d = request.get_json(silent=True) or {}
     return jsonify(ok=_mixer.select_feed(str(d.get('id', ''))))
+
+
+@bp.route('/api/patch', methods=['POST'])
+def api_patch():
+    d = request.get_json(silent=True) or {}
+    kind, grp = str(d.get('kind', '')), str(d.get('grp', ''))
+    try:
+        n, idx = int(d.get('n')), int(d.get('in'))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, err='bad number'), 400
+    lim = {'ch': N_CH, 'aux': N_AUX}.get(kind)
+    if not lim or not 1 <= n <= lim or grp not in SRC_COUNT or not 1 <= idx <= SRC_COUNT[grp]:
+        return jsonify(ok=False, err='bad patch target'), 400
+    return jsonify(ok=_mixer.patch(kind, n, grp, idx))
+
+
+@bp.route('/api/srcnames')
+def api_srcnames():
+    grp = request.args.get('g', '')
+    if grp not in SRC_COUNT:
+        return jsonify(ok=False, err='bad group'), 400
+    return jsonify(ok=True, g=grp, inputs=_mixer.source_names(grp))
 
 
 @bp.route('/api/repatch', methods=['POST'])
