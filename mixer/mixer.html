@@ -450,12 +450,14 @@
   }
   const groupActive = r => !r.master && groupsOf(r).some(g => S[`/mgrp/${g}/mute`]);
   // console MUTE-button state: $mute 0 off, 1 own mute, 2 muted by a group
+  let OVR = new Set();                 // strips the Pi has pulled out of an engaged group
   function muteState(r) {
     if (r.master) return null;
     const b = `/${r.kind}/${r.n}`, m = S[b + '/$mute'], own = !!S[b + '/mute'];
     const grp = typeof m === 'number' ? m === 2 : (groupActive(r) && !own);
-    return { own: typeof m === 'number' ? m === 1 || own : own, grp,
-             ovr: groupActive(r) && !own && m === 0 };          // group engaged but overridden here
+    const piOvr = OVR.has(b);
+    return { own: typeof m === 'number' ? m === 1 || own : own, grp: grp && !piOvr, piOvr,
+             ovr: piOvr || (groupActive(r) && !own && m === 0) };   // overridden (here or at the console)
   }
   const groupMuted = r => { const st = muteState(r); return !!(st && st.grp); };
 
@@ -501,11 +503,16 @@
       if (A.on) { const v = S[A.on] ? 0 : 1; S[A.on] = v; postSet(A.on, v); }
       else if (!r.master) {                       // channel/aux: console semantics incl. group override
         const b = `/${r.kind}/${r.n}`, st = muteState(r);
-        if (st.grp) S[b + '/$mute'] = 0;
-        else if (st.ovr) S[b + '/$mute'] = 2;
-        else { S[b + '/mute'] = st.own ? 0 : 1; S[b + '/$mute'] = st.own ? (groupActive(r) ? 2 : 0) : 1; }
+        if (st.piOvr) { OVR.delete(b); S[b + '/$mute'] = 2; }
+        else if (st.grp) { OVR.add(b); S[b + '/$mute'] = 0; }
+        else { S[b + '/mute'] = st.own ? 0 : 1; S[b + '/$mute'] = st.own ? 0 : 1; }
         localSetAt[b + '/$mute'] = localSetAt[b + '/mute'] = Date.now();
-        postJSON('/mixer/api/mute', { kind: r.kind, n: r.n });
+        fetch('/mixer/api/mute', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: r.kind, n: r.n }) })
+          .then(x => x.json()).then(res => {
+            if (res.action === 'override-failed') { OVR.delete(b); paintRow(r);
+              alert('The WING did not unmute this channel - the group mute is unchanged.'); }
+          }).catch(() => {});
       }
       else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); }
       paintRow(r);
@@ -530,7 +537,7 @@
     const lead = chMuted ? (gm ? 'MG · ' : 'M · ') : (st && st.ovr ? 'OVR · ' : '');
     r.ni.textContent = lead + info;
     r.ni.title = info + (groupsOf(r).length ? ' · mute groups ' + groupsOf(r).join(',') : '')
-      + (st && st.ovr ? ' · group mute overridden' : '');
+      + (st && st.ovr ? (st.piOvr ? ' · pulled out of its mute group by this page (MUTE again or releasing the group puts it back)' : ' · group mute overridden at the console') : '');
     r.ni.className = chMuted ? 'cm' : (st && st.ovr ? 'ovr' : '');
     r.el.style.borderLeftColor = colorOf(r.master === 'main2' ? '/main/2'
       : r.master ? (mix === 'lr' ? '/main/1' : `/bus/${mix}`) : `/${r.kind}/${r.n}`);
@@ -1172,6 +1179,7 @@
         paintSheet();
         setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
         soloCount = countSolos(); $('solo-clear').classList.toggle('show', soloCount > 0);
+        OVR = new Set(m.ovr || []); rows.forEach(paintRow);
         $('patch-note').textContent = m.patch || '';
       } else if (m.t === 'upd') onUpd(m.a, m.v);
       else if (m.t === 'conn') setStatus(m.ok, false);
@@ -1179,6 +1187,7 @@
       else if (m.t === 'feeds') { feeds = m.feeds; paintFeeds(); }
       else if (m.t === 'feed') { feedId = m.id; $('feed-sel').value = feedId; }
       else if (m.t === 'patch') $('patch-note').textContent = m.note;
+      else if (m.t === 'ovr') { OVR = new Set(m.v || []); rows.forEach(paintRow); }
     };
     es.onerror = () => setStatus(false, false);
   }

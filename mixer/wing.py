@@ -12,7 +12,8 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
   * Mute groups: /mgrp/1-8/name|mute; a strip's membership is in its 'tags' ("#M1,#M2").
     /ch/N/$mute = the console's MUTE button state: 0 off, 1 own mute, 2 muted by a group.
     Pressing MUTE on a group-muted strip sets $mute 0 (override) while 'mute' stays 0.
-    No push is sent for $mute changes -- poll it.
+    No push is sent for $mute changes -- poll it. OSC writes to $mute are IGNORED, so the page
+    emulates the override by temporarily removing the group's '#Mn' tag (verified to unmute).
   * Input stage: /ch/N/in/set/trim (+-18 dB), in/set/inv (polarity), flt/lc|lcf|hc|hcf.
     Physical input /io/in/<grp>/<n>: g (preamp dB), vph (48V), pol, name, mode (M/ST).
     Re-patching pushes NOTHING -- routing must be polled.
@@ -250,8 +251,8 @@ class Wing:
             lo, hi = FLOAT_RANGES[leaf]
             v = round(max(lo, min(hi, float(value))), 2)
             self._send(addr, float(v))
-        elif leaf == '$mute':
-            v = max(0, min(2, int(value)))
+        elif leaf == 'tags':
+            v = str(value).encode()[:80].decode(errors='ignore')
             self._send(addr, v)
         elif leaf in ('mute', 'on', '$solo', 'inv', 'vph', 'pol', 'lc', 'hc'):
             v = 1 if int(value) else 0

@@ -24,6 +24,7 @@ from .meters import Meters
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(os.path.dirname(HERE), 'mixer_config.json')
+STATE_PATH = os.path.join(os.path.dirname(HERE), 'mixer_state.json')
 
 DEFAULTS = {
     'mixer_ip':        '192.168.0.91',
@@ -130,6 +131,8 @@ class Mixer:
         self.feed_id = 'main1'
         self.ambient_label = 'Ambient mic'
         self.node_cache = {}
+        self._ovr_lock = threading.RLock()
+        self._load_state()
         self.patch_note = ''
         self._last_patch = 0.0
         self._patch_lock = threading.Lock()
@@ -157,7 +160,13 @@ class Mixer:
             if not self.wing.loaded:
                 continue
             self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips() for leaf in ('grp', 'in')]
-                           + self._mute_addrs())
+                           + self._mute_addrs() + [f'/mgrp/{g}/mute' for g in range(1, 9)]
+                           + [b + '/tags' for b in self.overrides])
+            time.sleep(0.2)
+            try:
+                self.check_overrides()
+            except Exception as e:
+                print(f'[mixer] override check: {e}', flush=True)
             time.sleep(0.2)
             self.wing.poke(self._source_addrs())
 
@@ -170,30 +179,107 @@ class Mixer:
             self.wing.poke(self._mute_addrs())
         threading.Thread(target=go, daemon=True).start()
 
+    # ── mute-group override ──
+    # The WING ignores OSC writes to $mute, so "unmute this channel while its group stays engaged"
+    # is emulated by removing the engaged groups' '#Mn' tags from the channel and putting them back
+    # when MUTE is pressed again or the group is released (from anywhere). Pending removals are kept
+    # in mixer_state.json so a Pi restart can't strand a channel outside its group.
+    @staticmethod
+    def _tag_list(tags):
+        return [t.strip() for t in str(tags or '').split(',') if t.strip()]
+
+    def _load_state(self):
+        try:
+            with open(STATE_PATH) as f:
+                self.overrides = {k: list(v) for k, v in json.load(f).get('overrides', {}).items()}
+        except FileNotFoundError:
+            self.overrides = {}
+        except Exception as e:
+            print(f'[mixer] bad {STATE_PATH}: {e}', flush=True); self.overrides = {}
+
+    def _save_state(self):
+        try:
+            tmp = STATE_PATH + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump({'overrides': self.overrides}, f)
+            os.replace(tmp, STATE_PATH)
+        except OSError as e:
+            print(f'[mixer] could not save {STATE_PATH}: {e}', flush=True)
+        self.hub.publish({'t': 'ovr', 'v': sorted(self.overrides)})
+
+    def _restore_tags(self, b, groups=None):
+        """Put removed '#Mn' tags back on strip b (all, or just `groups`). Keeps any other tag edits."""
+        with self._ovr_lock:
+            removed = self.overrides.get(b, [])
+            back = [g for g in removed if groups is None or g in groups]
+            if not back:
+                return
+            cur = self._tag_list(self.wing.query(b + '/tags'))
+            missing = [g for g in back if g not in cur]
+            if missing:
+                self.wing.set(b + '/tags', ','.join(cur + missing))
+            left = [g for g in removed if g not in back]
+            if left:
+                self.overrides[b] = left
+            else:
+                self.overrides.pop(b, None)
+            self._save_state()
+        print(f'[mixer] override end {b}: restored {back}', flush=True)
+        got = self.wing.query_many([b + '/tags', b + '/$mute'], timeout=0.6)
+        for a, v in got.items():
+            if v is not None:
+                self.hub.publish({'t': 'upd', 'a': a, 'v': v})
+
+    def check_overrides(self):
+        """Restore tags for groups that are no longer engaged (released at the console, another app,
+        or the page). A tag already back (scene recall) just clears the record."""
+        for b, removed in list(self.overrides.items()):
+            tags = self._tag_list(self.wing.get(b + '/tags'))
+            for g in list(removed):
+                if g in tags:                                   # already restored (e.g. scene recall)
+                    with self._ovr_lock:
+                        rest = [x for x in self.overrides.get(b, []) if x != g]
+                        if rest: self.overrides[b] = rest
+                        else: self.overrides.pop(b, None)
+                        self._save_state()
+            released = [g for g in self.overrides.get(b, []) if not self.wing.get(f'/mgrp/{g[2:]}/mute')]
+            if released:
+                self._restore_tags(b, released)
+
     def toggle_mute(self, kind, n):
-        """Console MUTE-button semantics (verified on a WING Rack, fw 3.1):
-        $mute 2 (group-muted) -> write $mute 0 = override, the group stays engaged
-        $mute 0 while a member group is engaged (overridden) -> $mute 2 = back to group-muted
-        otherwise toggle the strip's own 'mute'."""
+        """Console MUTE-button semantics:
+        overridden here          -> put the group tags back (group-muted again)
+        $mute 2 (group-muted)    -> remove the engaged groups' tags (override), verify it unmuted
+        otherwise                -> toggle the strip's own 'mute'."""
         b = f'/{kind}/{n}'
+        if b in self.overrides:
+            self._restore_tags(b)
+            return True, 'regroup', self.wing.get(b + '/$mute')
         got = self.wing.query_many([b + '/$mute', b + '/mute', b + '/tags']
                                    + [f'/mgrp/{g}/mute' for g in range(1, 9)], timeout=0.6)
         cur, own = got.get(b + '/$mute'), got.get(b + '/mute')
-        tags = got.get(b + '/tags') or ''
-        grp_on = any(got.get(f'/mgrp/{g}/mute') for g in range(1, 9) if f'#M{g}' in str(tags))
-        if cur == 2:
-            self.wing.set(b + '/$mute', 0); action = 'override'
-        elif grp_on and not own:
-            self.wing.set(b + '/$mute', 2); action = 'regroup'
+        tags = self._tag_list(got.get(b + '/tags'))
+        engaged = [t for t in tags if re.fullmatch(r'#M[1-8]', t) and got.get(f'/mgrp/{t[2:]}/mute')]
+        if cur == 2 and not own and engaged:
+            with self._ovr_lock:
+                self.wing.set(b + '/tags', ','.join(t for t in tags if t not in engaged))
+                time.sleep(0.25)
+                after = self.wing.query(b + '/$mute')
+                if after != 0:                                  # didn't unmute: undo, report
+                    self.wing.set(b + '/tags', ','.join(tags))
+                    ok, action = False, 'override-failed'
+                else:
+                    self.overrides[b] = engaged; self._save_state()
+                    ok, action = True, 'override'
+            print(f'[mixer] override {b}: removed {engaged} -> {action}', flush=True)
         else:
-            self.wing.set(b + '/mute', 0 if own else 1); action = 'own'
+            self.wing.set(b + '/mute', 0 if own else 1)
+            ok, action = True, 'own'
         time.sleep(0.08)
-        after = self.wing.query_many([b + '/$mute', b + '/mute'], timeout=0.6)
+        after = self.wing.query_many([b + '/$mute', b + '/mute', b + '/tags'], timeout=0.6)
         for a, v in after.items():
             if v is not None:
                 self.hub.publish({'t': 'upd', 'a': a, 'v': v})
-        want = {'override': 0, 'regroup': 2}.get(action)
-        ok = want is None or after.get(b + '/$mute') == want
         return ok, action, after.get(b + '/$mute')
 
     def _source_addrs(self, extra=()):
@@ -285,6 +371,10 @@ class Mixer:
 
     def _on_loaded(self):
         self.wing.query_many(self._source_addrs(), timeout=1.5)     # physical-input settings
+        if self.overrides:                                          # after a restart / reconnect
+            self.wing.query_many([b + '/tags' for b in self.overrides]
+                                 + [f'/mgrp/{g}/mute' for g in range(1, 9)], timeout=1.0)
+            self.check_overrides()
         self.hub.publish({'t': 'snap', **self.snapshot()})
         self.ensure_patch(force=True)
 
@@ -381,6 +471,7 @@ class Mixer:
             'nbus':   N_BUS,
             'meters': self.meters.levels is not None,
             'srcgroups': SRC_GROUPS,
+            'ovr':    sorted(self.overrides),
         }
 
 
@@ -445,6 +536,8 @@ def api_set():
     _mixer.hub.publish({'t': 'upd', 'a': addr, 'v': v})
     if addr.startswith('/mgrp/'):
         _mixer.refresh_mutes()            # members' $mute changes silently
+        if not v:                         # group released -> put back any overridden members now
+            threading.Thread(target=lambda: (time.sleep(0.3), _mixer.check_overrides()), daemon=True).start()
     return jsonify(ok=True, v=v)
 
 
