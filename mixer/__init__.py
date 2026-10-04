@@ -35,6 +35,10 @@ DEFAULTS = {
         'grp': 'B', 'in': 4,     # fallback when it doesn't
     },
     'bitrate':         '128k',
+    # listen-back latency (v1.10)
+    'cushion_s':       0.5,      # audio handed to a new listener up front (was 1.5)
+    'max_queue_s':     1.0,      # a listener further behind than this on the Pi is skipped to live
+    'listen_target_s': 0.8,      # how much audio the page keeps buffered; it trims anything beyond
 }
 
 
@@ -139,6 +143,7 @@ class Mixer:
         self.wing = Wing(cfg['mixer_ip'], on_update=self._on_update,
                          on_conn=self._on_conn, on_loaded=self._on_loaded)
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
+                                 cushion_s=cfg.get('cushion_s', 0.5), max_queue_s=cfg.get('max_queue_s', 1.0),
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
 
         self.meters = Meters(cfg['mixer_ip'], wanted=lambda: bool(self.hub.subs))
@@ -496,6 +501,7 @@ class Mixer:
             'srcgroups': SRC_GROUPS,
             'ovr':    sorted(self.overrides),
             'order':  self.order,
+            'listen_target': self.cfg.get('listen_target_s', 0.8),
         }
 
 
@@ -660,7 +666,7 @@ def api_repatch():
 @bp.route('/stream.mp3')
 def stream():
     threading.Thread(target=_mixer.ensure_patch, daemon=True).start()
-    q = _mixer.listener.add_client()
+    q = _mixer.listener.add_client(request.args.get('id', ''))
 
     def gen():
         try:
@@ -679,6 +685,12 @@ def stream():
                     headers={'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no'})
 
 
+@bp.route('/api/listenpos')
+def api_listenpos():
+    # Polled ~1/s by a playing page to measure how far behind live it is.
+    return jsonify(_mixer.listener.position(request.args.get('id', '')))
+
+
 def init_mixer(app):
     global _mixer
     _mixer = Mixer(load_config())
@@ -689,7 +701,8 @@ def init_mixer(app):
           f"{'ENABLED' if _mixer.cfg.get('remote_enabled') else 'disabled'}", flush=True)
     # A fader drag is ~20 POSTs/s: keep the successful ones (and the meter/event plumbing) out of
     # the journal. Anything that was NOT 2xx still gets logged, so rejected control is visible.
-    noisy = ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed', '/mixer/api/node', '/mixer/api/mute')
+    noisy = ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed', '/mixer/api/node', '/mixer/api/mute',
+             '/mixer/api/listenpos')
     ansi, status = re.compile(r'\x1b\[[0-9;]*m'), re.compile(r'HTTP/[\d.]+" (\d{3}) ')
 
     def _quiet(r):

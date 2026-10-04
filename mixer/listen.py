@@ -8,8 +8,12 @@ this process only handles the ~16 KB/s MP3 output.
 
 Capture runs only while at least one listener is connected (10 s grace after the last
 one leaves). Switching feeds rewrites a small control file the picker watches, so the
-MP3 stream never restarts. New listeners get the last ~1.5 s of MP3 up front: that
-cushion absorbs the drift between the WING's clock and the phone's playback clock.
+MP3 stream never restarts. New listeners get a short cushion of recent MP3 up front.
+
+Latency (v1.10): the cushion is cushion_s (default 0.5 s, was 1.5 s); each listener's queue
+is capped at max_queue_s -- a listener that falls behind is flushed back to live instead of
+hearing everything late. Every listener has an id and a start offset in the encoded stream,
+so position(id) lets the page measure exactly how far behind live it is playing.
 """
 import collections
 import os
@@ -22,7 +26,51 @@ import time
 
 CHANNELS = 48
 HERE = os.path.dirname(os.path.abspath(__file__))
-BACKLOG_BYTES = 24 * 1024            # ~1.5 s at 128 kb/s
+
+
+def _bytes_per_sec(bitrate):
+    try:
+        return int(str(bitrate).lower().rstrip('k')) * 1000 // 8
+    except ValueError:
+        return 16000
+
+
+class _Client:
+    """One HTTP listener: its MP3 queue plus where its stream started (for lag measurement)."""
+    def __init__(self, cid, start):
+        self.cid, self.start = cid, start     # start = encoded byte offset of its first byte
+        self.dropped = 0                      # bytes skipped by flushes (it never received them)
+        self.drops = 0
+        self.qbytes = 0
+        self.q = queue.Queue()
+        self.lock = threading.Lock()
+
+    def put(self, b):
+        with self.lock:
+            if b is not None:
+                self.qbytes += len(b)
+            self.q.put_nowait(b)
+
+    def get(self, timeout):
+        b = self.q.get(timeout=timeout)
+        if b:
+            with self.lock:
+                self.qbytes = max(0, self.qbytes - len(b))
+        return b
+
+    def flush(self):
+        with self.lock:
+            while True:
+                try:
+                    b = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                if b is None:                 # keep a shutdown signal
+                    self.q.put_nowait(None)
+                    break
+                self.dropped += len(b)
+            self.qbytes = 0
+            self.drops += 1
 
 
 def _from_frame_start(buf):
@@ -47,12 +95,16 @@ _RATES = [44100, 48000, 32000]
 
 
 class Listener:
-    def __init__(self, capture_cmd=None, bitrate='128k', on_status=None):
+    def __init__(self, capture_cmd=None, bitrate='128k', on_status=None, cushion_s=0.5, max_queue_s=1.0):
         self.capture_cmd = capture_cmd or [
             'arecord', '-D', 'hw:WING', '-c', str(CHANNELS),
             '-f', 'S24_3LE', '-r', '48000', '-t', 'raw', '--buffer-time=500000',
         ]
         self.bitrate = bitrate
+        self.bps = _bytes_per_sec(bitrate)
+        self.cushion_bytes = int(self.bps * max(0.0, float(cushion_s)))
+        self.max_queue_bytes = int(self.bps * max(0.25, float(max_queue_s)))
+        self._pos = 0                        # bytes encoded since the pipeline started
         self.on_status = on_status or (lambda st: None)
         self.pair = (0, 1)
         shm = '/dev/shm' if os.path.isdir('/dev/shm') else tempfile.gettempdir()
@@ -82,19 +134,31 @@ class Listener:
         self._write_ctl()
 
     # ── listener management ──
-    def add_client(self):
-        q = queue.Queue(maxsize=400)
+    def add_client(self, cid=''):
         with self.lock:
             cushion = _from_frame_start(b''.join(self._backlog))
+            c = _Client(str(cid)[:40], self._pos - len(cushion))
             if cushion:                      # prefill the cushion, starting on an MP3 frame
-                q.put_nowait(cushion)
-            self.clients.add(q)
+                c.put(cushion)
+            self.clients.add(c)
             self._idle_since = None
             need_start = not self.running
         if need_start:
             self._start()
         self._status()
-        return q
+        return c
+
+    def position(self, cid):
+        """Seconds: live encoder position, where this listener's stream began, what it skipped,
+        and what is still queued for it on the Pi. live - start - dropped - player.currentTime = lag."""
+        with self.lock:
+            c = next((x for x in self.clients if x.cid and x.cid == cid), None)
+            pos = self._pos
+        if not c:
+            return {'ok': False}
+        b = float(self.bps)
+        return {'ok': True, 'pos': pos / b, 'start': c.start / b, 'dropped': c.dropped / b,
+                'queued': c.qbytes / b, 'drops': c.drops}
 
     def remove_client(self, q):
         with self.lock:
@@ -128,6 +192,7 @@ class Listener:
             self.error = ''
             self.overruns = 0
             self._backlog.clear(); self._backlog_len = 0
+            self._pos = 0
             self._gen += 1
             gen = self._gen
         try:
@@ -163,11 +228,8 @@ class Listener:
             except Exception:
                 pass
         self.peak = (-120.0, -120.0)
-        for q in clients:                       # unblock HTTP generators
-            try:
-                q.put_nowait(None)
-            except queue.Full:
-                pass
+        for c in clients:                       # unblock HTTP generators
+            c.put(None)
 
     def _status_loop(self, gen, pick):
         for raw in iter(pick.stderr.readline, b''):
@@ -198,15 +260,22 @@ class Listener:
                     self._teardown(); self._status()
                 return
             with self.lock:
+                self._pos += len(chunk)
                 self._backlog.append(chunk); self._backlog_len += len(chunk)
-                while self._backlog_len > BACKLOG_BYTES:
+                while self._backlog and self._backlog_len - len(self._backlog[0]) >= self.cushion_bytes:
                     self._backlog_len -= len(self._backlog.popleft())
                 clients = list(self.clients)
-            for q in clients:
-                try:
-                    q.put_nowait(chunk)
-                except queue.Full:              # slow client: drop; mp3 decoders resync
-                    pass
+            for c in clients:
+                if c.qbytes + len(chunk) > self.max_queue_bytes:
+                    # Fallen behind (slow link): skip to live rather than play everything late.
+                    c.flush()
+                    head = _from_frame_start(chunk)
+                    with c.lock:
+                        c.dropped += len(chunk) - len(head)
+                    if head:
+                        c.put(head)
+                else:
+                    c.put(chunk)
 
     def _watchdog(self, gen):
         while gen == self._gen:
