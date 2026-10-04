@@ -1,0 +1,232 @@
+"""
+Behringer WING OSC bridge (UDP 2223).
+
+Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
+  * Query = address with an empty type tag. Reply args: [display_str, norm_0_1, native].
+    String params (names, USB grp) reply with a single string arg.
+  * '/*S' subscribes this socket to change pushes (1 arg, native value). Renewed every 5 s.
+    Pushes also arrive on '$'-prefixed shadow paths (/ch/1/$fdr) -- ignored.
+  * Writes: fader / send levels take a FLOAT in dB (an int is ignored).
+    Mutes and send on/off take an INT 0/1.
+  * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
+    /io/out/USB/N/in is 1-based on write (int or str); readback display string is 1-based.
+"""
+import socket
+import struct
+import threading
+import time
+
+PORT = 2223
+NEG_INF = -144.0
+
+
+# ── OSC encode / decode ─────────────────────────────────────────────────────────
+
+def _pad(b):
+    return b + b'\0' * (4 - len(b) % 4)
+
+
+def osc_msg(addr, *args):
+    tags, data = ',', b''
+    for a in args:
+        if isinstance(a, str):
+            tags += 's'; data += _pad(a.encode())
+        elif isinstance(a, bool) or isinstance(a, int):
+            tags += 'i'; data += struct.pack('>i', int(a))
+        else:
+            tags += 'f'; data += struct.pack('>f', float(a))
+    return _pad(addr.encode()) + _pad(tags.encode()) + data
+
+
+def _rd_str(b, i):
+    j = b.index(b'\0', i)
+    return b[i:j].decode(errors='replace'), (j // 4 + 1) * 4
+
+
+def osc_parse(b):
+    addr, i = _rd_str(b, 0)
+    if i >= len(b):
+        return addr, []
+    tags, i = _rd_str(b, i)
+    out = []
+    for t in tags[1:]:
+        if t == 's':
+            v, i = _rd_str(b, i)
+        elif t == 'i':
+            v = struct.unpack('>i', b[i:i + 4])[0]; i += 4
+        elif t == 'f':
+            v = struct.unpack('>f', b[i:i + 4])[0]; i += 4
+        else:
+            break
+        out.append(v)
+    return addr, out
+
+
+# ── Address model ───────────────────────────────────────────────────────────────
+
+N_CH, N_AUX, N_BUS, N_MTX = 40, 8, 16, 8
+
+def strip_addrs():
+    """Every control address the mixer page reads (names, levels, mutes, sends)."""
+    a = []
+    for kind, n in (('ch', N_CH), ('aux', N_AUX)):
+        for i in range(1, n + 1):
+            a += [f'/{kind}/{i}/name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute']
+    for i in range(1, N_BUS + 1):
+        a += [f'/bus/{i}/name', f'/bus/{i}/fdr', f'/bus/{i}/mute']
+    a += ['/main/1/name', '/main/1/fdr', '/main/1/mute']
+    for i in range(1, N_MTX + 1):
+        a += [f'/mtx/{i}/name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute']
+    # Sends last: the page is usable (LR mode) before these finish loading.
+    for kind, n in (('ch', N_CH), ('aux', N_AUX)):
+        for i in range(1, n + 1):
+            for b in range(1, N_BUS + 1):
+                a += [f'/{kind}/{i}/send/{b}/lvl', f'/{kind}/{i}/send/{b}/on']
+    return a
+
+
+def value_from_reply(addr, args):
+    """Query reply [str, norm, native] -> native; single-arg push/string -> that arg.
+    Routing '/in' params are kept 1-based (the display form) to match how they are written."""
+    if not args:
+        return None
+    if addr.endswith('/in'):
+        if len(args) >= 3 and str(args[0]).isdigit():
+            return int(args[0])
+        if isinstance(args[0], (int, float)):
+            return int(args[0]) + 1
+        return int(args[0]) if str(args[0]).isdigit() else args[0]
+    if len(args) >= 3:
+        v = args[2]
+    else:
+        v = args[0]
+    if isinstance(v, float):
+        v = round(v, 2)
+    return v
+
+
+class Wing:
+    """Owns one UDP socket: queries, writes, and the /*S push subscription."""
+
+    def __init__(self, ip, on_update=None, on_conn=None, on_loaded=None):
+        self.ip = ip
+        self.on_update = on_update or (lambda a, v: None)
+        self.on_conn = on_conn or (lambda ok: None)
+        self.on_loaded = on_loaded or (lambda: None)
+        self.state = {}
+        self.lock = threading.Lock()
+        self.connected = False
+        self.loaded = False
+        self.last_rx = 0.0
+        self._waiters = {}            # addr -> threading.Event, for blocking query()
+        self._stop = threading.Event()
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(('', 0))
+        self.sock.settimeout(0.5)
+
+    # ── lifecycle ──
+    def start(self):
+        threading.Thread(target=self._rx_loop, daemon=True, name='wing-rx').start()
+        threading.Thread(target=self._keepalive, daemon=True, name='wing-ka').start()
+
+    def stop(self):
+        self._stop.set()
+
+    # ── io ──
+    def _send(self, addr, *args):
+        try:
+            self.sock.sendto(osc_msg(addr, *args), (self.ip, PORT))
+        except OSError:
+            pass
+
+    def _rx_loop(self):
+        while not self._stop.is_set():
+            try:
+                data, _ = self.sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+            except OSError:
+                time.sleep(0.5); continue
+            try:
+                addr, args = osc_parse(data)
+            except Exception:
+                continue
+            self.last_rx = time.time()
+            if not self.connected:
+                self.connected = True
+                self.on_conn(True)
+                threading.Thread(target=self._load_all, daemon=True, name='wing-load').start()
+            if '$' in addr:
+                continue
+            v = value_from_reply(addr, args)
+            if v is None:
+                continue
+            with self.lock:
+                changed = self.state.get(addr) != v
+                self.state[addr] = v
+                ev = self._waiters.pop(addr, None)
+            if ev:
+                ev.set()
+            if changed:
+                self.on_update(addr, v)
+
+    def _keepalive(self):
+        while not self._stop.is_set():
+            self._send('/*S')
+            self._send('/main/1/name')       # liveness probe; pushes only flow on change
+            if self.connected and time.time() - self.last_rx > 15:
+                self.connected = False
+                self.loaded = False
+                self.on_conn(False)
+            self._stop.wait(5)
+
+    def _load_all(self):
+        for a in strip_addrs():
+            if not self.connected or self._stop.is_set():
+                return
+            self._send(a)
+            time.sleep(0.002)
+        time.sleep(0.5)
+        self.loaded = True
+        self.on_loaded()
+
+    # ── public api ──
+    def query(self, addr, timeout=0.5):
+        """Blocking read of one address (used for routing checks)."""
+        ev = threading.Event()
+        with self.lock:
+            self._waiters[addr] = ev
+        self._send(addr)
+        if ev.wait(timeout):
+            with self.lock:
+                return self.state.get(addr)
+        with self.lock:
+            self._waiters.pop(addr, None)
+        return None
+
+    def set(self, addr, value):
+        """Write a value with the type the WING expects; update cache optimistically."""
+        leaf = addr.rsplit('/', 1)[-1]
+        if leaf in ('fdr', 'lvl'):
+            v = round(max(NEG_INF, min(10.0, float(value))), 2)
+            self._send(addr, float(v))
+        elif leaf in ('mute', 'on'):
+            v = 1 if int(value) else 0
+            self._send(addr, v)
+        elif leaf in ('grp',):
+            v = str(value); self._send(addr, v)
+        elif leaf in ('in',):
+            v = int(value); self._send(addr, v)
+        else:
+            return None
+        with self.lock:
+            self.state[addr] = v
+        return v
+
+    def get(self, addr, default=None):
+        with self.lock:
+            return self.state.get(addr, default)
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.state)

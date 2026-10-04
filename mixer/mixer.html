@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Stage Messenger — Mixer</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --green:  #00ff88;
+      --bg:     #0d0d1a;
+      --card:   #14142a;
+      --border: #2a2a4a;
+      --text:   #e0e0f0;
+      --muted:  #55557a;
+      --red:    #ff4455;
+      --amber:  #ffb020;
+    }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      min-height: 100dvh; padding: 1rem 1rem 3rem; max-width: 520px; margin: 0 auto;
+      -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 1rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border);
+    }
+    header h1 { font-size: .95rem; font-weight: 900; letter-spacing: .15em; text-transform: uppercase; color: var(--green); }
+    #status { display: flex; align-items: center; gap: .4rem; font-size: .65rem; font-weight: 700;
+      letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+    #status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    #status-dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #status-dot.off { background: var(--red); }
+    #status-dot.load { background: var(--amber); }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: .8rem; margin-bottom: .8rem; }
+    .label { font-size: .6rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: .5rem; }
+
+    /* listen */
+    .listen-row { display: flex; gap: .5rem; align-items: center; }
+    #listen-btn { flex: 0 0 auto; min-width: 6.2rem; padding: .7rem .8rem; border-radius: 10px; border: 1px solid var(--green);
+      background: transparent; color: var(--green); font-weight: 900; font-size: .8rem; letter-spacing: .1em; text-transform: uppercase; }
+    #listen-btn.on { background: var(--green); color: #001a0d; }
+    #resync-btn { flex: 0 0 auto; padding: .7rem .6rem; border-radius: 10px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-size: .8rem; font-weight: 800; }
+    select { flex: 1 1 auto; min-width: 0; background: #0f0f22; color: var(--text); border: 1px solid var(--border);
+      border-radius: 10px; padding: .65rem .5rem; font-size: .85rem; }
+    .meter { margin-top: .6rem; display: grid; gap: 3px; }
+    .meter div { height: 6px; background: #0f0f22; border-radius: 3px; overflow: hidden; }
+    .meter span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--green) 70%, var(--amber) 88%, var(--red)); transition: width .12s linear; }
+    #listen-note { margin-top: .45rem; font-size: .68rem; color: var(--muted); min-height: 1em; }
+
+    /* mix chips */
+    #mix-chips { display: flex; gap: .4rem; overflow-x: auto; padding-bottom: .2rem; scrollbar-width: none; }
+    #mix-chips::-webkit-scrollbar { display: none; }
+    .chip { flex: 0 0 auto; padding: .5rem .7rem; border-radius: 999px; border: 1px solid var(--border); background: transparent;
+      color: var(--text); font-size: .72rem; font-weight: 700; white-space: nowrap; }
+    .chip small { color: var(--muted); font-weight: 700; margin-right: .25rem; }
+    .chip.sel { border-color: var(--green); background: rgba(0,255,136,.1); color: var(--green); }
+    .chip.sel small { color: var(--green); }
+
+    /* strips */
+    .strip { display: grid; grid-template-columns: 6.2rem 1fr 3.1rem 2.6rem; gap: .5rem; align-items: center;
+      padding: .45rem 0; border-top: 1px solid #1c1c38; }
+    .strip:first-child { border-top: 0; }
+    .strip.hidden { display: none; }
+    .nm { overflow: hidden; }
+    .nm b { display: block; font-size: .8rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nm i { font-style: normal; font-size: .6rem; color: var(--muted); font-weight: 700; letter-spacing: .06em; }
+    .nm i.cm { color: var(--red); }
+    .db { font-size: .72rem; font-variant-numeric: tabular-nums; text-align: right; color: var(--text); }
+    .mute { height: 2.1rem; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted);
+      font-size: .62rem; font-weight: 900; letter-spacing: .06em; }
+    .mute.on { background: var(--red); border-color: var(--red); color: #fff; }
+
+    .fader { position: relative; height: 2.1rem; margin: 0 .65rem; touch-action: pan-y; }
+    .fader .track { position: absolute; left: 0; right: 0; top: 50%; height: 6px; margin-top: -3px; background: #0f0f22; border-radius: 3px; }
+    .fader .fill  { position: absolute; left: 0; top: 50%; height: 6px; margin-top: -3px; background: #2d6b52; border-radius: 3px; }
+    .fader .zero  { position: absolute; top: 25%; bottom: 25%; width: 1px; background: var(--muted); left: 75%; }
+    .fader .thumb { position: absolute; top: 50%; width: 1.3rem; height: 1.9rem; margin: -.95rem 0 0 -.65rem; border-radius: 5px;
+      background: #c8c8e0; box-shadow: 0 1px 4px rgba(0,0,0,.6); }
+    .fader .thumb::after { content: ''; position: absolute; left: 15%; right: 15%; top: 50%; height: 2px; background: #333; }
+    .fader.drag .thumb { background: var(--green); }
+    .master .fill { background: var(--green); }
+    .master .nm b { color: var(--green); }
+
+    .tools { display: flex; justify-content: space-between; align-items: center; margin-bottom: .2rem; }
+    .toggle { font-size: .66rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+      background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: .35rem .7rem; }
+    .toggle.on { color: var(--green); border-color: var(--green); }
+    footer { margin-top: 1rem; font-size: .62rem; color: var(--muted); display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
+    footer button { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: .3rem .6rem; font-size: .6rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>WING Mixer</h1>
+    <div id="status"><span id="status-dot"></span><span id="status-text">Connecting</span></div>
+  </header>
+
+  <section class="card">
+    <div class="label">Listen</div>
+    <div class="listen-row">
+      <button id="listen-btn">&#9654; Listen</button>
+      <select id="feed-sel"></select>
+      <button id="resync-btn" title="Jump to live">&#8635;</button>
+    </div>
+    <div class="meter"><div><span id="pk-l"></span></div><div><span id="pk-r"></span></div></div>
+    <div id="listen-note"></div>
+    <audio id="player" preload="none"></audio>
+  </section>
+
+  <section class="card">
+    <div class="label">Mix</div>
+    <div id="mix-chips"></div>
+  </section>
+
+  <section class="card master" id="master-card"></section>
+
+  <section class="card">
+    <div class="tools">
+      <div class="label" id="strips-label" style="margin:0">Channels</div>
+      <button class="toggle" id="hide-btn">Hide &minus;&infin;</button>
+    </div>
+    <div id="strips"></div>
+  </section>
+
+  <footer>
+    <span id="patch-note"></span>
+    <button id="repatch-btn">Re-patch USB</button>
+  </footer>
+
+<script>
+(() => {
+  const NBUS = 16, NCH = 40, NAUX = 8;
+  const $ = id => document.getElementById(id);
+
+  let S = {};                 // addr -> value (mirror of the WING cache)
+  let mix = 'lr';             // 'lr' or bus number (1..16)
+  let hideInf = false;
+  let feeds = [], feedId = 'main1';
+  let wantPlay = false;
+  const localSetAt = {};      // addr -> ms; suppress echoes while dragging
+  const rows = [];            // strip descriptors
+
+  // ── WING fader law (matches the console's 0..1 normalised position) ──
+  function posToDb(p) {
+    if (p <= 0.002) return -144;
+    if (p >= 0.5)    return p * 40 - 30;
+    if (p >= 0.25)   return p * 80 - 50;
+    if (p >= 0.0625) return p * 160 - 70;
+    return p * 480 - 90;
+  }
+  function dbToPos(d) {
+    if (d == null || d <= -90) return 0;
+    let p;
+    if (d < -60) p = (d + 90) / 480;
+    else if (d < -30) p = (d + 70) / 160;
+    else if (d < -10) p = (d + 50) / 80;
+    else p = (d + 30) / 40;
+    return Math.max(0, Math.min(1, p));
+  }
+  const fmtDb = d => (d == null) ? '' : (d <= -89.9 ? '−∞' : (d > 0 ? '+' : '') + d.toFixed(1));
+
+  // ── network ──
+  const lastSent = {}, pendingVal = {}, timers = {};
+  function postSet(a, v) {
+    localSetAt[a] = Date.now();
+    fetch('/mixer/api/set', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a, v }) }).catch(() => {});
+  }
+  function sendThrottled(a, v, final) {      // <= 20 Hz per address, final value always sent
+    pendingVal[a] = v;
+    const now = Date.now();
+    if (final || !lastSent[a] || now - lastSent[a] > 50) {
+      clearTimeout(timers[a]); lastSent[a] = now; postSet(a, v);
+    } else if (!timers[a]) {
+      timers[a] = setTimeout(() => { timers[a] = null; lastSent[a] = Date.now(); postSet(a, pendingVal[a]); }, 55);
+    }
+  }
+
+  // ── fader widget: relative drag, engages only on a horizontal gesture ──
+  function makeFader(onChange) {
+    const el = document.createElement('div');
+    el.className = 'fader';
+    el.innerHTML = '<div class="track"></div><div class="fill"></div><div class="zero"></div><div class="thumb"></div>';
+    const fill = el.querySelector('.fill'), thumb = el.querySelector('.thumb');
+    let pos = 0, sx = 0, sy = 0, sp = 0, engaged = false, active = false, pid = null;
+    function draw() { fill.style.width = (pos * 100) + '%'; thumb.style.left = (pos * 100) + '%'; }
+    el.setPos = p => { if (!engaged) { pos = p; draw(); } };
+    el.isDragging = () => engaged;
+    el.addEventListener('pointerdown', e => {
+      active = true; engaged = false; pid = e.pointerId; sx = e.clientX; sy = e.clientY; sp = pos;
+    });
+    el.addEventListener('pointermove', e => {
+      if (!active || e.pointerId !== pid) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (!engaged) {
+        if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) {
+          engaged = true; el.classList.add('drag'); el.setPointerCapture(pid); sx = e.clientX; sp = pos;
+        } else if (Math.abs(dy) > 8) { active = false; }
+        return;
+      }
+      const w = el.getBoundingClientRect().width || 1;
+      pos = Math.max(0, Math.min(1, sp + (e.clientX - sx) / w));
+      draw(); onChange(pos, false);
+    });
+    const end = e => {
+      if (e.pointerId !== pid) return;
+      if (engaged) onChange(pos, true);
+      active = false; engaged = false; el.classList.remove('drag');
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    draw();
+    return el;
+  }
+
+  // ── strip rows ──
+  function addrs(r) {
+    if (r.master) return mix === 'lr'
+      ? { lvl: '/main/1/fdr', mute: '/main/1/mute', name: '/main/1/name' }
+      : { lvl: `/bus/${mix}/fdr`, mute: `/bus/${mix}/mute`, name: `/bus/${mix}/name` };
+    const b = `/${r.kind}/${r.n}`;
+    return mix === 'lr'
+      ? { lvl: b + '/fdr', mute: b + '/mute', name: b + '/name', chMute: null }
+      : { lvl: `${b}/send/${mix}/lvl`, on: `${b}/send/${mix}/on`, name: b + '/name', chMute: b + '/mute' };
+  }
+
+  function buildRow(r, parent) {
+    const el = document.createElement('div');
+    el.className = 'strip';
+    el.innerHTML = '<div class="nm"><b></b><i></i></div><div class="fw"></div><div class="db"></div><button class="mute">MUTE</button>';
+    r.el = el; r.nb = el.querySelector('.nm b'); r.ni = el.querySelector('.nm i');
+    r.db = el.querySelector('.db'); r.mb = el.querySelector('.mute');
+    r.fader = makeFader((p, final) => {
+      const A = addrs(r), d = Math.round(posToDb(p) * 10) / 10;
+      S[A.lvl] = d; r.db.textContent = fmtDb(d);
+      sendThrottled(A.lvl, d, final);
+    });
+    el.querySelector('.fw').appendChild(r.fader);
+    r.mb.addEventListener('click', () => {
+      const A = addrs(r);
+      if (A.on) { const v = S[A.on] ? 0 : 1; S[A.on] = v; postSet(A.on, v); }
+      else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); }
+      paintRow(r);
+    });
+    parent.appendChild(el);
+  }
+
+  function nameOf(addr, fallback) {
+    const n = S[addr];
+    return (typeof n === 'string' && n.trim()) ? n : fallback;
+  }
+
+  function paintRow(r) {
+    const A = addrs(r);
+    const tag = r.master ? (mix === 'lr' ? 'MAIN' : 'BUS ' + mix) : (r.kind === 'ch' ? 'CH ' : 'AUX ') + r.n;
+    r.nb.textContent = nameOf(A.name, r.master ? (mix === 'lr' ? 'LR' : 'Bus ' + mix) : tag);
+    const chMuted = A.chMute && S[A.chMute];
+    r.ni.textContent = chMuted ? tag + ' · CH MUTED' : tag;
+    r.ni.className = chMuted ? 'cm' : '';
+    const d = S[A.lvl];
+    if (!r.fader.isDragging()) r.fader.setPos(dbToPos(d));
+    r.db.textContent = fmtDb(typeof d === 'number' ? d : null);
+    if (A.on) { const off = S[A.on] === 0; r.mb.textContent = off ? 'OFF' : 'ON'; r.mb.classList.toggle('on', off); }
+    else { const m = !!S[A.mute]; r.mb.textContent = 'MUTE'; r.mb.classList.toggle('on', m); }
+    if (!r.master) {
+      const inf = typeof d !== 'number' || d <= -89.9;
+      r.el.classList.toggle('hidden', hideInf && inf && !r.fader.isDragging());
+    }
+  }
+
+  function paintAll() { rows.forEach(paintRow); paintChips(); }
+
+  function buildStrips() {
+    const mc = $('master-card');
+    mc.innerHTML = '<div class="label" id="master-label">Master</div>';
+    const m = { master: true }; buildRow(m, mc); rows.push(m);
+    const box = $('strips');
+    for (let i = 1; i <= NCH; i++) { const r = { kind: 'ch', n: i }; buildRow(r, box); rows.push(r); }
+    for (let i = 1; i <= NAUX; i++) { const r = { kind: 'aux', n: i }; buildRow(r, box); rows.push(r); }
+  }
+
+  // ── mix chips ──
+  function buildChips() {
+    const box = $('mix-chips'); box.innerHTML = '';
+    const mk = (id, small, text) => {
+      const b = document.createElement('button'); b.className = 'chip'; b.dataset.mix = id;
+      b.innerHTML = `<small>${small}</small><span></span>`; b.querySelector('span').textContent = text;
+      b.addEventListener('click', () => { mix = id === 'lr' ? 'lr' : +id; paintAll(); });
+      box.appendChild(b);
+    };
+    mk('lr', 'MAIN', 'LR');
+    for (let b = 1; b <= NBUS; b++) mk(String(b), 'B' + b, '');
+  }
+  function paintChips() {
+    document.querySelectorAll('.chip').forEach(c => {
+      const id = c.dataset.mix;
+      c.classList.toggle('sel', String(mix) === id);
+      c.querySelector('span').textContent = id === 'lr' ? nameOf('/main/1/name', 'LR') : nameOf(`/bus/${id}/name`, '');
+    });
+    $('master-label').textContent = mix === 'lr' ? 'Main fader' : 'Bus master';
+    $('strips-label').textContent = mix === 'lr' ? 'Channels → LR' : 'Sends → ' + nameOf(`/bus/${mix}/name`, 'Bus ' + mix);
+  }
+
+  // ── listen ──
+  const player = $('player');
+  function paintFeeds() {
+    const sel = $('feed-sel'); sel.innerHTML = '';
+    feeds.forEach(f => { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label; sel.appendChild(o); });
+    sel.value = feedId;
+  }
+  $('feed-sel').addEventListener('change', e => {
+    feedId = e.target.value;
+    fetch('/mixer/api/feed', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: feedId }) }).catch(() => {});
+  });
+  function startPlay() {
+    wantPlay = true;
+    player.src = '/mixer/stream.mp3?t=' + Date.now();
+    player.play().catch(err => { $('listen-note').textContent = 'Playback blocked: ' + err.message; });
+    $('listen-btn').classList.add('on'); $('listen-btn').innerHTML = '&#9632; Stop';
+  }
+  function stopPlay() {
+    wantPlay = false;
+    player.pause(); player.removeAttribute('src'); player.load();
+    $('listen-btn').classList.remove('on'); $('listen-btn').innerHTML = '&#9654; Listen';
+  }
+  $('listen-btn').addEventListener('click', () => wantPlay ? stopPlay() : startPlay());
+  $('resync-btn').addEventListener('click', () => { if (wantPlay) startPlay(); });
+  player.addEventListener('error', () => { if (wantPlay) setTimeout(() => wantPlay && startPlay(), 2000); });
+  player.addEventListener('ended', () => { if (wantPlay) setTimeout(() => wantPlay && startPlay(), 1000); });
+  setInterval(() => {                          // keep near the live edge
+    if (!wantPlay || player.paused || !player.buffered.length) return;
+    const end = player.buffered.end(player.buffered.length - 1);
+    if (end - player.currentTime > 4) { try { player.currentTime = end - 0.6; } catch (e) {} }
+  }, 2000);
+
+  const pct = d => Math.max(0, Math.min(100, (d + 60) / 60 * 100)) + '%';
+  function paintListen(st) {
+    if (!st) return;
+    $('pk-l').style.width = st.running ? pct(st.peak[0]) : '0%';
+    $('pk-r').style.width = st.running ? pct(st.peak[1]) : '0%';
+    $('listen-note').textContent = st.error ? st.error
+      : st.running ? `Streaming · ${st.listeners} listener${st.listeners === 1 ? '' : 's'} · USB ${st.pair[0] + 1}/${st.pair[1] + 1}`
+      : (wantPlay ? 'Starting…' : '');
+  }
+
+  // ── status / events ──
+  function setStatus(conn, loaded) {
+    const d = $('status-dot'), t = $('status-text');
+    d.className = conn ? (loaded ? 'on' : 'load') : 'off';
+    t.textContent = conn ? (loaded ? 'WING' : 'Loading') : 'WING offline';
+  }
+  let rowIndex = {};
+  function reindex() {             // addr -> rows that display it (any mode)
+    rowIndex = {};
+    const add = (a, r) => { (rowIndex[a] = rowIndex[a] || []).push(r); };
+    rows.forEach(r => {
+      if (r.master) { add('/main/1/', r); add('/bus/', r); return; }
+      add(`/${r.kind}/${r.n}/`, r);
+    });
+  }
+  function onUpd(a, v) {
+    if (localSetAt[a] && Date.now() - localSetAt[a] < 500) return;
+    S[a] = v;
+    const m = a.match(/^\/(ch|aux)\/(\d+)\//);
+    if (m) { (rowIndex[`/${m[1]}/${m[2]}/`] || []).forEach(paintRow); return; }
+    if (a.startsWith('/main/1/') || a.startsWith('/bus/')) { paintRow(rows[0]); paintChips(); }
+  }
+
+  function connect() {
+    const es = new EventSource('/mixer/api/events');
+    es.onmessage = ev => {
+      const m = JSON.parse(ev.data);
+      if (m.t === 'snap') {
+        S = m.state || {}; feeds = m.feeds || []; feedId = m.feed || feedId;
+        setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
+        $('patch-note').textContent = m.patch || '';
+      } else if (m.t === 'upd') onUpd(m.a, m.v);
+      else if (m.t === 'conn') setStatus(m.ok, false);
+      else if (m.t === 'listen') paintListen(m.s);
+      else if (m.t === 'feeds') { feeds = m.feeds; paintFeeds(); }
+      else if (m.t === 'feed') { feedId = m.id; $('feed-sel').value = feedId; }
+      else if (m.t === 'patch') $('patch-note').textContent = m.note;
+    };
+    es.onerror = () => setStatus(false, false);
+  }
+
+  $('hide-btn').addEventListener('click', () => {
+    hideInf = !hideInf; $('hide-btn').classList.toggle('on', hideInf); paintAll();
+  });
+  $('repatch-btn').addEventListener('click', () => fetch('/mixer/api/repatch', { method: 'POST' }));
+
+  buildChips(); buildStrips(); reindex(); paintAll(); connect();
+})();
+</script>
+</body>
+</html>

@@ -10,6 +10,13 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'stage-messenger-secret'
 
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
+# ── WING remote mixer + listen-back (/mixer) — optional, never blocks messaging ──
+try:
+    from mixer import init_mixer
+    init_mixer(app)
+except Exception as _e:
+    print(f'[mixer] disabled: {_e}')
+
 # ── Device registry ────────────────────────────────────────────────────────────
 # { sid: { name, type, role, room, canSend } }
 connected_devices = {}
