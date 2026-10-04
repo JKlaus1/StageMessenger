@@ -8,6 +8,8 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
     Pushes also arrive on '$'-prefixed shadow paths (/ch/1/$fdr) -- ignored, except
     '$name' = the displayed name (plain 'name' can be stale when the name follows the source).
   * Solo: /ch/N/$solo is writable (int 0/1); it lands on the monitor buses (MON group).
+  * Color: col / $col (displayed) = palette 1..18 (display string; native is 0-based).
+  * Mute groups: /mgrp/1-8/name|mute; a strip's membership is in its 'tags' ("#M1,#M2").
   * Input routing: /ch/N/in/conn/grp ('A', 'LCL', 'B', ...) + /ch/N/in/conn/in (1-based).
   * Writes: fader / send levels take a FLOAT in dB (an int is ignored).
     Mutes and send on/off take an INT 0/1.
@@ -67,8 +69,8 @@ def osc_parse(b):
 
 # ── Address model ───────────────────────────────────────────────────────────────
 
-N_CH, N_AUX, N_BUS, N_MTX, N_MAIN = 40, 8, 16, 8, 2
-KEEP_SHADOW = ('/$name', '/$solo')     # '$' paths we do track (see _rx_loop)
+N_CH, N_AUX, N_BUS, N_MTX, N_MAIN, N_MGRP = 40, 8, 16, 8, 2, 8
+KEEP_SHADOW = ('/$name', '/$solo', '/$col')     # '$' paths we do track (see _rx_loop)
 
 def strip_addrs():
     """Every control address the mixer page reads (names, levels, mutes, sends)."""
@@ -76,11 +78,16 @@ def strip_addrs():
     for kind, n in (('ch', N_CH), ('aux', N_AUX)):
         for i in range(1, n + 1):
             a += [f'/{kind}/{i}/name', f'/{kind}/{i}/$name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute',
-                  f'/{kind}/{i}/$solo', f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in']
+                  f'/{kind}/{i}/$solo', f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in',
+                  f'/{kind}/{i}/col', f'/{kind}/{i}/$col', f'/{kind}/{i}/tags']
     for i in range(1, N_BUS + 1):
-        a += [f'/bus/{i}/name', f'/bus/{i}/$name', f'/bus/{i}/fdr', f'/bus/{i}/mute']
+        a += [f'/bus/{i}/name', f'/bus/{i}/$name', f'/bus/{i}/fdr', f'/bus/{i}/mute',
+              f'/bus/{i}/col', f'/bus/{i}/$col']
     for i in range(1, N_MAIN + 1):
-        a += [f'/main/{i}/name', f'/main/{i}/$name', f'/main/{i}/fdr', f'/main/{i}/mute']
+        a += [f'/main/{i}/name', f'/main/{i}/$name', f'/main/{i}/fdr', f'/main/{i}/mute',
+              f'/main/{i}/col', f'/main/{i}/$col']
+    for i in range(1, N_MGRP + 1):
+        a += [f'/mgrp/{i}/name', f'/mgrp/{i}/mute']
     for i in range(1, N_MTX + 1):
         a += [f'/mtx/{i}/name', f'/mtx/{i}/$name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute']
     # Sends last: the page is usable (LR mode) before these finish loading.
@@ -96,7 +103,7 @@ def value_from_reply(addr, args):
     Routing '/in' params are kept 1-based (the display form) to match how they are written."""
     if not args:
         return None
-    if addr.endswith('/in'):
+    if addr.endswith(('/in', '/col', '/$col')):     # 1-based palette / input index
         if len(args) >= 3 and str(args[0]).isdigit():
             return int(args[0])
         if isinstance(args[0], (int, float)):

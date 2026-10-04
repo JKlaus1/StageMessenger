@@ -70,7 +70,17 @@
       text-align: left; min-height: 2.6rem; }
     .mixbtn small { display: block; color: var(--muted); font-size: .58rem; font-weight: 800; letter-spacing: .08em; }
     .mixbtn span { display: block; font-size: .74rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mixbtn { border-left-width: 4px; }
     .mixbtn.sel { border-color: var(--green); background: rgba(0,255,136,.1); }
+    /* mute groups */
+    #mg-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .4rem; }
+    @media (min-width: 640px) { #mg-grid { grid-template-columns: repeat(8, 1fr); } }
+    .mgbtn { padding: .45rem .3rem; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: var(--muted);
+      min-height: 2.6rem; text-align: center; }
+    .mgbtn small { display: block; font-size: .56rem; font-weight: 900; letter-spacing: .08em; }
+    .mgbtn span { display: block; font-size: .7rem; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mgbtn.on { background: var(--red); border-color: var(--red); color: #fff; }
+    .mgbtn.on span { color: #fff; }
     .mixbtn.sel span, .mixbtn.sel small { color: var(--green); }
 
     /* strips: two lines on phones, one line when there is room */
@@ -79,6 +89,7 @@
       grid-template-areas: "nm db so mu" "fw fw fw fw"; }
     .strip:first-of-type { border-top: 0; }
     .strip.hidden { display: none; }
+    .strip { border-left: 4px solid transparent; padding-left: .55rem; margin-left: -.2rem; }
     @media (min-width: 640px) {
       .strip { grid-template-columns: 9.5rem 1fr 3.3rem 2.4rem 2.9rem; grid-template-areas: "nm fw db so mu"; }
     }
@@ -94,6 +105,7 @@
     .mute, .solo { height: 2.1rem; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted);
       font-size: .62rem; font-weight: 900; letter-spacing: .06em; }
     .mute.on { background: var(--red); border-color: var(--red); color: #fff; }
+    .mute.mg { border-color: var(--red); color: var(--red); }
     .solo.on { background: var(--solo); border-color: var(--solo); color: #1a1400; }
     .solo.none { visibility: hidden; }
 
@@ -149,6 +161,11 @@
       <span id="mix-caret">&#9662;</span>
     </button>
     <div id="mix-grid"></div>
+  </section>
+
+  <section class="card">
+    <div class="label">Mute groups</div>
+    <div id="mg-grid"></div>
   </section>
 
   <section class="card master" id="master-card">
@@ -274,6 +291,20 @@
     return (SRC[g] || g) + (i != null ? ' ' + i : '');
   }
 
+  // WING palette, col 1..18 (hex from a real console session; see wing-mcp-server notes)
+  const PALETTE = ['#3e63cc', '#0180ff', '#5a33ff', '#00ced1', '#00b23e', '#96cc00', '#f2dd00', '#c06a1f', '#e02040',
+                   '#ff7a7a', '#ff33f6', '#a533ff', '#ffb81a', '#25c3ff', '#ff5a30', '#33e6a5', '#707070', '#e0e0e0'];
+  function colorOf(base) {            // base like '/ch/3' -- '$col' is what the console shows
+    const c = S[base + '/$col'] || S[base + '/col'];
+    return (typeof c === 'number' && c >= 1 && c <= 18) ? PALETTE[c - 1] : 'transparent';
+  }
+  const NMG = 8;
+  function groupsOf(r) {              // mute groups from tags "#M1,#M2"
+    const t = S[`/${r.kind}/${r.n}/tags`];
+    return typeof t === 'string' ? (t.match(/#M(\d)/g) || []).map(x => +x.slice(2)) : [];
+  }
+  const groupMuted = r => !r.master && groupsOf(r).some(g => S[`/mgrp/${g}/mute`]);
+
   // ── strip rows ──
   // r.master: 'mix' (LR or the selected bus) | 'main2' (subs).  Others: {kind:'ch'|'aux', n}
   function addrs(r) {
@@ -329,17 +360,24 @@
     const A = addrs(r);
     const tag = rowTag(r);
     r.nb.textContent = nameOf(A.name, r.master === 'main2' ? 'Main 2' : r.master ? (mix === 'lr' ? 'LR' : 'Bus ' + mix) : tag);
-    const chMuted = A.chMute && S[A.chMute];
+    const gm = groupMuted(r);
+    const chMuted = (A.chMute && S[A.chMute]) || gm;
     const src = r.master ? '' : srcOf(r);
     const info = src ? tag + ' · ' + src : tag;
-    r.ni.textContent = chMuted ? 'M · ' + info : info;   // red = channel muted at its own fader
-    r.ni.title = info;
+    r.ni.textContent = chMuted ? (gm ? 'MG · ' : 'M · ') + info : info;   // red = muted at the channel / by a group
+    r.ni.title = info + (groupsOf(r).length ? ' · mute groups ' + groupsOf(r).join(',') : '');
     r.ni.className = chMuted ? 'cm' : '';
+    r.el.style.borderLeftColor = colorOf(r.master === 'main2' ? '/main/2'
+      : r.master ? (mix === 'lr' ? '/main/1' : `/bus/${mix}`) : `/${r.kind}/${r.n}`);
     const d = S[A.lvl];
     if (!r.fader.isDragging()) r.fader.setPos(dbToPos(d));
     r.db.textContent = fmtDb(typeof d === 'number' ? d : null);
     if (A.on) { const off = S[A.on] === 0; r.mb.textContent = off ? 'OFF' : 'ON'; r.mb.classList.toggle('on', off); }
-    else { const m = !!S[A.mute]; r.mb.textContent = 'MUTE'; r.mb.classList.toggle('on', m); }
+    else {
+      const m = !!S[A.mute];
+      r.mb.textContent = (!m && gm) ? 'MG' : 'MUTE';
+      r.mb.classList.toggle('on', m); r.mb.classList.toggle('mg', !m && gm);
+    }
     if (A.solo) r.sb.classList.toggle('on', !!S[A.solo]);
     if (r.master === 'main2') r.el.classList.toggle('hidden', mix !== 'lr');
     else if (!r.master) {
@@ -348,7 +386,7 @@
     }
   }
 
-  function paintAll() { rows.forEach(paintRow); paintMix(); }
+  function paintAll() { rows.forEach(paintRow); paintMix(); paintMuteGroups(); }
 
   function buildStrips() {
     const mc = $('master-card');
@@ -400,11 +438,34 @@
       const id = c.dataset.mix;
       c.classList.toggle('sel', String(mix) === id);
       c.querySelector('span').textContent = mixName(id);
+      const col = colorOf(id === 'lr' ? '/main/1' : `/bus/${id}`);
+      c.style.borderLeftColor = col === 'transparent' ? '' : col;
     });
     $('mix-current').innerHTML = `<small>${mix === 'lr' ? 'MAIN' : 'BUS ' + mix}</small>`;
     $('mix-current').append(document.createTextNode(mixName(String(mix))));
     $('master-label').textContent = mix === 'lr' ? 'Main faders' : 'Bus master';
     $('strips-label').textContent = mix === 'lr' ? 'Channels → LR' : 'Sends → ' + mixName(String(mix));
+  }
+
+  // ── mute groups ──
+  function buildMuteGroups() {
+    const box = $('mg-grid'); box.innerHTML = '';
+    for (let g = 1; g <= NMG; g++) {
+      const b = document.createElement('button'); b.className = 'mgbtn'; b.dataset.g = g;
+      b.innerHTML = `<small>MG ${g}</small><span></span>`;
+      b.addEventListener('click', () => {
+        const a = `/mgrp/${g}/mute`, v = S[a] ? 0 : 1;
+        S[a] = v; postSet(a, v); paintMuteGroups(); rows.forEach(paintRow);
+      });
+      box.appendChild(b);
+    }
+  }
+  function paintMuteGroups() {
+    document.querySelectorAll('.mgbtn').forEach(b => {
+      const g = b.dataset.g, n = S[`/mgrp/${g}/name`];
+      b.querySelector('span').textContent = (typeof n === 'string' && n.trim()) ? n : '\u00a0';
+      b.classList.toggle('on', !!S[`/mgrp/${g}/mute`]);
+    });
   }
 
   // ── solo ──
@@ -499,6 +560,7 @@
       return;
     }
     if (a.startsWith('/main/') || a.startsWith('/bus/')) { paintRow(rows[0]); paintRow(rows[1]); paintMix(); }
+    else if (a.startsWith('/mgrp/')) { paintMuteGroups(); rows.forEach(paintRow); }
   }
 
   function connect() {
@@ -526,7 +588,7 @@
   });
   $('repatch-btn').addEventListener('click', () => postJSON('/mixer/api/repatch', {}));
 
-  buildMixGrid(); buildStrips(); reindex(); paintAll(); connect();
+  buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll(); connect();
 })();
 </script>
 </body>

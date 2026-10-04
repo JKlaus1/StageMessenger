@@ -109,7 +109,8 @@ class Hub:
 
 SETTABLE = re.compile(
     r'^/(?:(?:ch|aux)/\d{1,2}/(?:fdr|mute|\$solo|send/\d{1,2}/(?:lvl|on))'
-    r'|(?:bus|main|mtx)/\d{1,2}/(?:fdr|mute))$')
+    r'|(?:bus|main|mtx)/\d{1,2}/(?:fdr|mute)'
+    r'|mgrp/[1-8]/mute)$')
 
 
 class Mixer:
