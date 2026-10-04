@@ -7,6 +7,7 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
   * '/*S' subscribes this socket to change pushes (1 arg, native value). Renewed every 5 s.
     Pushes also arrive on '$'-prefixed shadow paths (/ch/1/$fdr) -- ignored, except
     '$name' = the displayed name (plain 'name' can be stale when the name follows the source).
+  * Solo: /ch/N/$solo is writable (int 0/1); it lands on the monitor buses (MON group).
   * Input routing: /ch/N/in/conn/grp ('A', 'LCL', 'B', ...) + /ch/N/in/conn/in (1-based).
   * Writes: fader / send levels take a FLOAT in dB (an int is ignored).
     Mutes and send on/off take an INT 0/1.
@@ -66,7 +67,8 @@ def osc_parse(b):
 
 # ── Address model ───────────────────────────────────────────────────────────────
 
-N_CH, N_AUX, N_BUS, N_MTX = 40, 8, 16, 8
+N_CH, N_AUX, N_BUS, N_MTX, N_MAIN = 40, 8, 16, 8, 2
+KEEP_SHADOW = ('/$name', '/$solo')     # '$' paths we do track (see _rx_loop)
 
 def strip_addrs():
     """Every control address the mixer page reads (names, levels, mutes, sends)."""
@@ -74,10 +76,11 @@ def strip_addrs():
     for kind, n in (('ch', N_CH), ('aux', N_AUX)):
         for i in range(1, n + 1):
             a += [f'/{kind}/{i}/name', f'/{kind}/{i}/$name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute',
-                  f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in']
+                  f'/{kind}/{i}/$solo', f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in']
     for i in range(1, N_BUS + 1):
         a += [f'/bus/{i}/name', f'/bus/{i}/$name', f'/bus/{i}/fdr', f'/bus/{i}/mute']
-    a += ['/main/1/name', '/main/1/$name', '/main/1/fdr', '/main/1/mute']
+    for i in range(1, N_MAIN + 1):
+        a += [f'/main/{i}/name', f'/main/{i}/$name', f'/main/{i}/fdr', f'/main/{i}/mute']
     for i in range(1, N_MTX + 1):
         a += [f'/mtx/{i}/name', f'/mtx/{i}/$name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute']
     # Sends last: the page is usable (LR mode) before these finish loading.
@@ -162,7 +165,7 @@ class Wing:
             # '$' paths are read-only shadows (e.g. /ch/1/$fdr duplicates every fader push).
             # Keep '$name': it is the name the console actually displays (it can follow the
             # input source), while plain 'name' may hold a stale stored value.
-            if '$' in addr and not addr.endswith('/$name'):
+            if '$' in addr and not addr.endswith(KEEP_SHADOW):
                 continue
             v = value_from_reply(addr, args)
             if v is None:
@@ -216,7 +219,7 @@ class Wing:
         if leaf in ('fdr', 'lvl'):
             v = round(max(NEG_INF, min(10.0, float(value))), 2)
             self._send(addr, float(v))
-        elif leaf in ('mute', 'on'):
+        elif leaf in ('mute', 'on', '$solo'):
             v = 1 if int(value) else 0
             self._send(addr, v)
         elif leaf in ('grp',):

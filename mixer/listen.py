@@ -25,6 +25,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BACKLOG_BYTES = 24 * 1024            # ~1.5 s at 128 kb/s
 
 
+def _from_frame_start(buf):
+    """Trim to the first MPEG-1 Layer III frame header so a new player doesn't start mid-frame
+    (v1.1: 'go live' hiccupped while the decoder hunted for sync)."""
+    def hdr_len(i):
+        if i + 3 > len(buf) or buf[i] != 0xFF or (buf[i + 1] & 0xFE) != 0xFA:
+            return 0
+        br, sr = buf[i + 2] >> 4, (buf[i + 2] >> 2) & 3
+        if br in (0, 15) or sr == 3:
+            return 0
+        return 144000 * _BITRATES[br] // _RATES[sr] + ((buf[i + 2] >> 1) & 1)
+    for i in range(min(len(buf) - 3, 4096)):
+        n = hdr_len(i)
+        if n and (i + n >= len(buf) or hdr_len(i + n)):     # confirm the next header lines up
+            return buf[i:]
+    return b''
+
+
+_BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+_RATES = [44100, 48000, 32000]
+
+
 class Listener:
     def __init__(self, capture_cmd=None, bitrate='128k', on_status=None):
         self.capture_cmd = capture_cmd or [
@@ -64,8 +85,9 @@ class Listener:
     def add_client(self):
         q = queue.Queue(maxsize=400)
         with self.lock:
-            for chunk in self._backlog:      # prefill the cushion
-                q.put_nowait(chunk)
+            cushion = _from_frame_start(b''.join(self._backlog))
+            if cushion:                      # prefill the cushion, starting on an MP3 frame
+                q.put_nowait(cushion)
             self.clients.add(q)
             self._idle_since = None
             need_start = not self.running

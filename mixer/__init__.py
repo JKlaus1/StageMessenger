@@ -20,6 +20,7 @@ from flask import Blueprint, Response, jsonify, request, send_from_directory, ab
 
 from .wing import Wing, N_BUS, N_MTX
 from .listen import Listener
+from .meters import Meters
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(os.path.dirname(HERE), 'mixer_config.json')
@@ -27,7 +28,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(HERE), 'mixer_config.json')
 DEFAULTS = {
     'mixer_ip':        '192.168.0.91',
     'remote_enabled':  False,
-    'usb_patch':       True,     # the Pi owns WING USB outs 1-43
+    'usb_patch':       True,     # the Pi owns WING USB outs 1-43 and 47-48
     'ambient': {                 # USB 43: room/stage ambient mic
         'follow_channel': 10,    # use this channel's input source if the WING reports it
         'grp': 'B', 'in': 4,     # fallback when it doesn't
@@ -59,7 +60,7 @@ def load_config():
 
 def feed_table():
     """[(feed_id, usb_left_1based, usb_right_1based, grp, in_left, in_right)]"""
-    t = [('main1', 1, 2, 'MAIN', 1, 2)]
+    t = [('main1', 1, 2, 'MAIN', 1, 2), ('mon1', 47, 48, 'MON', 1, 2)]
     for b in range(1, N_BUS + 1):
         u = 3 + 2 * (b - 1)
         t.append((f'bus{b}', u, u + 1, 'BUS', 2 * b - 1, 2 * b))
@@ -107,7 +108,7 @@ class Hub:
 # ── Controller ──────────────────────────────────────────────────────────────────
 
 SETTABLE = re.compile(
-    r'^/(?:(?:ch|aux)/\d{1,2}/(?:fdr|mute|send/\d{1,2}/(?:lvl|on))'
+    r'^/(?:(?:ch|aux)/\d{1,2}/(?:fdr|mute|\$solo|send/\d{1,2}/(?:lvl|on))'
     r'|(?:bus|main|mtx)/\d{1,2}/(?:fdr|mute))$')
 
 
@@ -125,8 +126,23 @@ class Mixer:
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
 
+        self.meters = Meters(cfg['mixer_ip'], wanted=lambda: bool(self.hub.subs))
+
     def start(self):
         self.wing.start()
+        self.meters.start()
+        threading.Thread(target=self._meter_pump, daemon=True, name='meter-pump').start()
+
+    def _meter_pump(self):
+        """~10 Hz meter push to page clients. c/a = [[in, out], ...] per ch/aux; b/m = out."""
+        while True:
+            time.sleep(0.1)
+            lv = self.meters.levels
+            if not lv or not self.hub.subs:
+                continue
+            self.hub.publish({'t': 'm',
+                              'c': lv['ch'], 'a': lv['aux'],
+                              'b': [o for _, o in lv['bus']], 'm': [o for _, o in lv['main']]})
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
@@ -160,6 +176,8 @@ class Mixer:
         for fid, ul, ur, grp, il, ir in feed_table():
             if fid == 'main1':
                 label = f"Main {self._name('/main/1/name', 'LR')}"
+            elif fid == 'mon1':
+                label = 'Monitor 1 (phones / solo)'
             elif fid.startswith('bus'):
                 b = fid[3:]; label = f"Bus {b} – {self._name(f'/bus/{b}/name', '')}".rstrip(' –')
             else:
@@ -235,6 +253,7 @@ class Mixer:
             'listen': self.listener.status(),
             'patch':  self.patch_note,
             'nbus':   N_BUS,
+            'meters': self.meters.levels is not None,
         }
 
 
