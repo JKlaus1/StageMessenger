@@ -10,6 +10,8 @@
 # 3. From the laptop:  ssh -t pi@lights.local "bash ~/stage-messenger/mixer/set_spotify_search.sh"
 # The credentials are tested with a real search BEFORE they are saved, and are stored only in
 # ~/stage-messenger/mixer_config.json (gitignored). Remove: run with --remove.
+# Renewing (the dashboard shows the secret lasting 180 days): /mixer Library -> Search has a guided form
+# (ROTATE on the app page, paste, Test & save) -- or re-run this script with the new secret.
 set -u
 CFG=$HOME/stage-messenger/mixer_config.json
 cd "$HOME/stage-messenger" || exit 1
@@ -21,7 +23,7 @@ p = sys.argv[1]
 try: c = json.load(open(p))
 except FileNotFoundError: c = {}
 sp = c.get('spotify') or {}
-for k in ('search_client_id', 'search_client_secret'): sp.pop(k, None)
+for k in ('search_client_id', 'search_client_secret', 'search_saved_at'): sp.pop(k, None)
 c['spotify'] = sp
 json.dump(c, open(p, 'w'), indent=2); print('search credentials removed')
 PY
@@ -60,7 +62,9 @@ except Exception as e:
     print(f'  FAIL token OK but the search request failed: {e!r} -- nothing saved'); sys.exit(1)
 try: c = json.load(open(p))
 except FileNotFoundError: c = {}
-c.setdefault('spotify', {}).update(search_client_id=cid, search_client_secret=sec)
+import datetime
+c.setdefault('spotify', {}).update(search_client_id=cid, search_client_secret=sec,
+                                  search_saved_at=datetime.date.today().isoformat())   # 180-day renewal countdown
 json.dump(c, open(p, 'w'), indent=2)
 print(f'  OK   saved to {p} (client id {cid[:6]}...)')
 PY

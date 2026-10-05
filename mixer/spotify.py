@@ -1,5 +1,5 @@
 """
-Pi playback (v2.4): go-librespot ("Stage Rig", Spotify Connect) -> WING USB 1/2 -> AUX 1.
+Spotify card (v2.4; "Pi playback" until v2.5.1): go-librespot ("Stage Rig", Spotify Connect) -> WING USB 1/2 -> AUX 1.
 
 go-librespot runs as its own service (mixer/go-librespot.service) with a local control API on
 127.0.0.1:3678 (mixer/go-librespot.yml). This module polls it and relays state to /mixer pages over
@@ -33,9 +33,17 @@ token: every call answered 429 on 2026-10-05, so it is not used for anything):
   status.context_uri, status.next_track (metadata.enabled)
 Search uses the Spotify Web API with the user's OWN developer app (client-credentials, app-only: it
 never touches the account) -- spotify.search_client_id/secret in mixer_config.json
-(mixer/set_spotify_search.sh). No credentials -> search is off and the page says how to enable it.
+(mixer/set_spotify_search.sh, or the form in /mixer Library -> Search). No credentials -> search is off
+and the page says how to enable it.
+Search key lifecycle (v2.5.1): the Spotify dashboard shows the client secret lasting 180 days
+(search_secret_days). search_saved_at records when it was saved (stamped on first start if missing);
+the page warns 21 days ahead, and ALSO flags the key the moment Spotify refuses it. Renewal: ROTATE the
+secret on the app's dashboard page, paste it into the /mixer form -> set_search_creds() runs a real search
+with it and saves only if that works (atomic write to mixer_config.json; no restart). The secret is never
+sent to pages or written to the log.
 """
 import base64
+import datetime
 import re
 import json
 import os
@@ -63,7 +71,8 @@ def _slim_track(t):
 
 
 class Spotify:
-    def __init__(self, cfg, publish, wanted):
+    def __init__(self, cfg, publish, wanted, cfg_path=None):
+        self.cfg_path = cfg_path          # mixer_config.json -- written only by set_search_creds / stamping
         self.api = cfg.get('api', 'http://127.0.0.1:3678').rstrip('/')
         self.config_dir = cfg.get('config_dir', '/home/pi/.config/go-librespot')
         self.aux = int(cfg.get('aux', 1))
@@ -74,11 +83,15 @@ class Spotify:
         self.accounts_url = cfg.get('accounts_url', 'https://accounts.spotify.com').rstrip('/')
         self.webapi_url = cfg.get('webapi_url', 'https://api.spotify.com').rstrip('/')
         self._stoken, self._stoken_exp, self._slock = None, 0.0, threading.Lock()
+        self.saved_at = (cfg.get('search_saved_at') or '').strip()
+        self.secret_days = int(cfg.get('search_secret_days') or 180)
+        self.search_bad = ''              # set when Spotify refuses the key; cleared by a working one
+        self._credlock = threading.Lock()
         self._pl_cache, self._pl_at = None, 0.0
         self.publish = publish            # fn(dict) -> SSE to every /mixer page
         self.wanted = wanted              # fn() -> True while a page is open
         self.state = {'api': False, 'svc': '?', 'status': None, 'auth': None, 'at': 0, 'aux': self.aux,
-                      'note': '', 'search': bool(self.search_id and self.search_secret)}
+                      'note': '', 'search': bool(self.search_id and self.search_secret), 'skey': None}
         self._key = None
         self._lock = threading.Lock()
         self._busy = False                # a kill/re-pair is running
@@ -86,7 +99,86 @@ class Spotify:
         self._wake = threading.Event()
 
     def start(self):
+        self._stamp_if_missing()
         threading.Thread(target=self._loop, daemon=True, name='spotify-poll').start()
+
+    # ── search key lifecycle (v2.5.1) ──
+    def _persist(self, updates):
+        """Merge `updates` into mixer_config.json's "spotify" section (atomic replace; other keys kept)."""
+        if not self.cfg_path:
+            return
+        try:
+            with open(self.cfg_path) as f:
+                c = json.load(f)
+        except FileNotFoundError:
+            c = {}
+        c.setdefault('spotify', {}).update(updates)
+        tmp = self.cfg_path + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(c, f, indent=2)
+        os.replace(tmp, self.cfg_path)
+
+    def _stamp_if_missing(self):
+        if self.search_id and self.search_secret and not self.saved_at:
+            self.saved_at = datetime.date.today().isoformat()
+            try:
+                self._persist({'search_saved_at': self.saved_at})
+                print(f'[mixer] spotify: search key had no save date -- counting {self.secret_days} days from {self.saved_at}', flush=True)
+            except Exception as e:
+                print(f'[mixer] spotify: could not record the search key date: {e}', flush=True)
+
+    def key_info(self):
+        """What the page needs about the search key -- never the secret."""
+        if not (self.search_id and self.search_secret):
+            return {'on': False}
+        info = {'on': True, 'id_hint': self.search_id[:4] + '…' + self.search_id[-4:], 'bad': self.search_bad,
+                'saved': self.saved_at, 'days': self.secret_days, 'exp': '', 'left': None}
+        try:
+            exp = datetime.date.fromisoformat(self.saved_at) + datetime.timedelta(days=self.secret_days)
+            info['exp'] = exp.isoformat()
+            info['left'] = (exp - datetime.date.today()).days
+        except ValueError:
+            pass
+        return info
+
+    def set_search_creds(self, cid, secret):
+        """Test (real token + search) and save. -> (ok, message). Nothing changes unless the test passes."""
+        cid = (cid or self.search_id or '').strip()
+        secret = (secret or '').strip()
+        if not re.fullmatch(r'[A-Za-z0-9]{16,64}', cid or ''):
+            return False, 'the Client ID looks wrong (letters and digits, from the app settings page)'
+        if not re.fullmatch(r'[A-Za-z0-9]{16,64}', secret):
+            return False, 'the Client secret looks wrong (letters and digits, from the app settings page)'
+        if not self._credlock.acquire(blocking=False):
+            return False, 'already testing a key'
+        try:
+            try:
+                tok, _ = self._fetch_token(cid, secret)
+            except RuntimeError as e:
+                return False, str(e) + ' -- nothing saved'
+            url = self.webapi_url + '/v1/search?' + urllib.parse.urlencode(
+                {'q': 'test', 'type': 'track', 'limit': 1, 'market': self.market})
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers={'Authorization': 'Bearer ' + tok}), timeout=8) as r:
+                    json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return False, f'the key works but search answered {e.code} -- nothing saved'
+            except Exception as e:
+                return False, f'search test failed ({e}) -- nothing saved'
+            today = datetime.date.today().isoformat()
+            try:
+                self._persist({'search_client_id': cid, 'search_client_secret': secret, 'search_saved_at': today})
+            except Exception as e:
+                return False, f'the key works but saving failed: {e}'
+            with self._slock:
+                self.search_id, self.search_secret, self.saved_at = cid, secret, today
+                self._stoken, self._stoken_exp = tok, time.time() + 3000
+            self.search_bad = ''
+            self._key = None
+            self.kick()
+            return True, f'saved -- search works; next renewal due {self.key_info().get("exp")}'
+        finally:
+            self._credlock.release()
 
     # ── go-librespot HTTP ──
     def _req(self, path, body=None, timeout=2.0):
@@ -128,7 +220,7 @@ class Spotify:
     def poll(self, force_svc=False):
         code, _ = self._req('/', timeout=1.5)
         st = {'api': code == 200, 'status': None, 'auth': None, 'aux': self.aux,
-              'search': bool(self.search_id and self.search_secret)}
+              'search': bool(self.search_id and self.search_secret), 'skey': self.key_info()}
         if code == 200:
             c, s = self._req('/status')
             if c == 200 and isinstance(s, dict):
@@ -175,7 +267,7 @@ class Spotify:
             t = s['track'] or {}
             core = (s['user'], s['stopped'], s['paused'], s['buffering'], s['shuffle'], s['rep_ctx'],
                     s['rep_trk'], s['context'], s['ctx_uri'], (s['next'] or {}).get('uri'), t.get('uri'), t.get('dur'), t.get('pos', 0) // 3000 if s['paused'] or s['stopped'] else None)
-        return json.dumps([st['api'], st['svc'], core, st['auth'], st['note'], st['search']], sort_keys=True)
+        return json.dumps([st['api'], st['svc'], core, st['auth'], st['note'], st['search'], st['skey']], sort_keys=True)
 
     def snapshot(self):
         with self._lock:
@@ -302,29 +394,45 @@ class Spotify:
                       'cached': int(j.get('cached') or 0), 'tracks': out}
 
     # ── search (v2.5): Spotify Web API with the user's own app, client-credentials ──
+    def _fetch_token(self, cid, secret):
+        """client-credentials token -> (token, expires_in). RuntimeError('...refused...') on a bad key."""
+        basic = base64.b64encode(f'{cid}:{secret}'.encode()).decode()
+        req = urllib.request.Request(self.accounts_url + '/api/token', method='POST',
+                                     data=urllib.parse.urlencode({'grant_type': 'client_credentials'}).encode(),
+                                     headers={'Authorization': 'Basic ' + basic,
+                                              'Content-Type': 'application/x-www-form-urlencoded'})
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                j = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError('Spotify refused the search app credentials' if e.code in (400, 401)
+                               else f'Spotify accounts answered {e.code}')
+        except Exception as e:
+            raise RuntimeError(f'could not reach Spotify ({e})')
+        return j['access_token'], int(j.get('expires_in') or 3600)
+
     def _search_token(self):
         with self._slock:
             if self._stoken and time.time() < self._stoken_exp - 60:
                 return self._stoken
-            basic = base64.b64encode(f'{self.search_id}:{self.search_secret}'.encode()).decode()
-            req = urllib.request.Request(self.accounts_url + '/api/token', method='POST',
-                                         data=urllib.parse.urlencode({'grant_type': 'client_credentials'}).encode(),
-                                         headers={'Authorization': 'Basic ' + basic,
-                                                  'Content-Type': 'application/x-www-form-urlencoded'})
             try:
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    j = json.loads(r.read())
-            except urllib.error.HTTPError as e:
-                raise RuntimeError('Spotify refused the search app credentials' if e.code in (400, 401)
-                                   else f'Spotify accounts answered {e.code}')
-            self._stoken = j['access_token']
-            self._stoken_exp = time.time() + int(j.get('expires_in') or 3600)
+                tok, ttl = self._fetch_token(self.search_id, self.search_secret)
+            except RuntimeError as e:
+                if 'refused' in str(e) and not self.search_bad:
+                    self.search_bad = 'refused'            # expired / rotated -> the page shows the renewal guide
+                    self._key = None
+                    print('[mixer] spotify: search key REFUSED by Spotify -- renew it (Library -> Search)', flush=True)
+                    self.kick()
+                raise
+            if self.search_bad:
+                self.search_bad = ''; self._key = None; self.kick()
+            self._stoken, self._stoken_exp = tok, time.time() + ttl
             return self._stoken
 
     def search(self, q):
         q = (q or '').strip()[:100]
         if not (self.search_id and self.search_secret):
-            return False, 'search is not set up (run mixer/set_spotify_search.sh on the Pi)'
+            return False, 'search is not set up (Library -> Search on /mixer, or mixer/set_spotify_search.sh)'
         if not q:
             return True, {'tracks': [], 'albums': [], 'playlists': []}
         try:

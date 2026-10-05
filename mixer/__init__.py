@@ -52,7 +52,7 @@ DEFAULTS = {
         'turn_api_token': '',        # never in git
         'turn_ttl':       86400,
     },
-    # Pi playback (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 (see mixer/spotify.py)
+    # Spotify card (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 (see mixer/spotify.py)
     'spotify': {
         'enabled':    True,
         'api':        'http://127.0.0.1:3678',
@@ -62,6 +62,8 @@ DEFAULTS = {
         # account). Set with mixer/set_spotify_search.sh -- secrets live only in mixer_config.json.
         'search_client_id':     '',
         'search_client_secret': '',
+        'search_saved_at':      '',        # ISO date the secret was saved (stamped on first start if missing)
+        'search_secret_days':   180,       # Spotify dashboard: client secret lifetime -> renewal warning
         'market':               'US',
     },
 }
@@ -183,13 +185,14 @@ class Mixer:
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
 
         self.meters = Meters(cfg['mixer_ip'], wanted=lambda: bool(self.hub.subs))
-        self.spotify = None                           # Pi playback is optional: never blocks the mixer
+        self.spotify = None                           # the Spotify card is optional: never blocks the mixer
         if (cfg.get('spotify') or {}).get('enabled'):
             try:
                 from .spotify import Spotify
-                self.spotify = Spotify(cfg['spotify'], self.hub.publish, lambda: bool(self.hub.subs))
+                self.spotify = Spotify(cfg['spotify'], self.hub.publish, lambda: bool(self.hub.subs),
+                                       cfg_path=CONFIG_PATH)
             except Exception as e:
-                print(f'[mixer] Pi playback disabled: {e}', flush=True)
+                print(f'[mixer] Spotify disabled: {e}', flush=True)
 
     def start(self):
         self.wing.start()
@@ -200,7 +203,7 @@ class Mixer:
             try:
                 self.spotify.start()
             except Exception as e:
-                print(f'[mixer] Pi playback disabled: {e}', flush=True)
+                print(f'[mixer] Spotify disabled: {e}', flush=True)
                 self.spotify = None
 
     def _strips(self):
@@ -1025,14 +1028,14 @@ def api_play():
     return jsonify(ok=True, card=card)
 
 
-# ── Pi playback (v2.4): go-librespot "Stage Rig" -- see mixer/spotify.py ──
+# ── Spotify card (v2.4; renamed from "Pi playback" in v2.5.1): go-librespot "Stage Rig" -- see mixer/spotify.py ──
 @bp.route('/api/sp/cmd', methods=['POST'])
 def api_sp_cmd():
     """{cmd: playpause|next|prev|seek|shuffle|repeat|disconnect|play|queue, v}. Forwarded to go-librespot.
     play v = {uri: playlist/album/Liked, skip?: track uri, shuffle?: bool}; queue v = track uri."""
     sp = _mixer.spotify
     if not sp:
-        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+        return jsonify(ok=False, err='Spotify is not enabled'), 503
     d = request.get_json(silent=True) or {}
     cmd, v = str(d.get('cmd', '')), d.get('v')
     if cmd not in sp.CMDS:
@@ -1049,7 +1052,7 @@ def api_sp_playlists():
     """Your playlists (go-librespot internal API), Liked Songs first. ?fresh=1 skips the 20 s cache."""
     sp = _mixer.spotify
     if not sp:
-        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+        return jsonify(ok=False, err='Spotify is not enabled'), 503
     ok, data = sp.playlists(fresh=request.args.get('fresh') == '1')
     return (jsonify(ok=True, **data), 200) if ok else (jsonify(ok=False, err=data), 409)
 
@@ -1059,7 +1062,7 @@ def api_sp_tracks():
     """Songs of a playlist / album / Liked Songs. Poll while ready is false or cached < length."""
     sp = _mixer.spotify
     if not sp:
-        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+        return jsonify(ok=False, err='Spotify is not enabled'), 503
     ok, data = sp.tracks(request.args.get('uri', ''))
     if ok:
         return jsonify(ok=True, **data)
@@ -1071,9 +1074,24 @@ def api_sp_search():
     """Spotify search (tracks, albums, playlists) via the user's own developer app."""
     sp = _mixer.spotify
     if not sp:
-        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+        return jsonify(ok=False, err='Spotify is not enabled'), 503
     ok, data = sp.search(request.args.get('q', ''))
     return (jsonify(ok=True, **data), 200) if ok else (jsonify(ok=False, err=data), 409)
+
+
+@bp.route('/api/sp/search_creds', methods=['POST'])
+def api_sp_search_creds():
+    """Renew / set the search key: {id?: client id (blank = keep), secret}. Tested with a real search and
+    saved only if it works. The secret is never echoed back or logged."""
+    sp = _mixer.spotify
+    if not sp:
+        return jsonify(ok=False, err='Spotify is not enabled'), 503
+    d = request.get_json(silent=True) or {}
+    ok, msg = sp.set_search_creds(str(d.get('id') or ''), str(d.get('secret') or ''))
+    hint = sp.key_info().get('id_hint', '') if ok else ''
+    print(f'[mixer] spotify: SEARCH KEY {"saved (client id " + hint + ")" if ok else "NOT saved -- " + msg} '
+          f'from {_who()}', flush=True)
+    return (jsonify(ok=True, msg=msg, key=sp.key_info()), 200) if ok else (jsonify(ok=False, err=msg), 409)
 
 
 @bp.route('/api/sp/service', methods=['POST'])
@@ -1082,7 +1100,7 @@ def api_sp_service():
     login) and restart -> a new pairing code shows on the page."""
     sp = _mixer.spotify
     if not sp:
-        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+        return jsonify(ok=False, err='Spotify is not enabled'), 503
     action = str((request.get_json(silent=True) or {}).get('action', ''))
     if action not in ('restart', 'repair'):
         return jsonify(ok=False, err='bad action'), 400

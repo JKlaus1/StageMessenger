@@ -268,7 +268,7 @@
     #rec-marker:disabled { border-color: var(--border); color: var(--muted); }
     #rec-marker.flash { background: var(--amber); color: #1a1000; }
     #rec-note { min-height: 1em; }
-    /* Pi playback (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 */
+    /* Spotify card (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 */
     #sp-card.none { display: none; }
     #sp-toggle { width: 100%; display: flex; align-items: center; gap: .5rem; background: transparent; border: 0; padding: 0; color: inherit; }
     #sp-toggle .label { margin: 0; }
@@ -368,6 +368,27 @@
       font-size: .7rem; font-weight: 900; padding: 0 .65rem; }
     #lib-act button.x { border-color: var(--border); color: var(--muted); }
     #lib-note { min-height: 1em; margin-top: .4rem; }
+    /* search key lifecycle (v2.5.1) */
+    #sp-keychip { display: none; font-size: .52rem; font-weight: 900; letter-spacing: .06em; padding: .16rem .4rem; border-radius: 5px; cursor: pointer; }
+    #sp-keychip.warn { display: inline-block; background: var(--amber); color: #1a1000; }
+    #sp-keychip.bad { display: inline-block; background: var(--red); color: #fff; }
+    #lib-key .kbox { border: 1px solid var(--amber); border-radius: 12px; padding: .65rem; margin-bottom: .6rem; }
+    #lib-key .kbox.bad { border-color: var(--red); }
+    #lib-key .kbox b { display: block; font-size: .82rem; font-weight: 900; margin-bottom: .3rem; }
+    #lib-key .kbox.warn b { color: var(--amber); }
+    #lib-key .kbox.bad b { color: var(--red); }
+    #lib-key ol { margin: .35rem 0 .5rem 1.1rem; padding: 0; font-size: .72rem; color: var(--muted); font-weight: 700; line-height: 1.5; }
+    #lib-key ol a { color: var(--green); }
+    #lib-key input { width: 100%; margin-top: .35rem; padding: .6rem .65rem; font-size: .86rem; border-radius: 9px; border: 1px solid var(--border);
+      background: var(--bg, #0a0a18); color: var(--text); font-family: ui-monospace, monospace; }
+    #lib-key .kgo { width: 100%; height: 2.6rem; margin-top: .5rem; border-radius: 10px; border: 1px solid var(--green); background: var(--green);
+      color: #001a0d; font-size: .76rem; font-weight: 900; letter-spacing: .06em; }
+    #lib-key .kgo:disabled { opacity: .5; }
+    #lib-key .kmsg { min-height: 1em; margin-top: .4rem; font-size: .72rem; font-weight: 800; }
+    #lib-key .kmsg.err { color: var(--red); }
+    #lib-key .kmsg.ok { color: var(--green); }
+    #lib-keyfoot { margin-top: .8rem; font-size: .62rem; color: var(--muted); font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+    #lib-keyfoot button { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 8px; padding: .3rem .55rem; font-size: .62rem; font-weight: 800; }
     /* playback (v2.3): one panel per card row */
     .rec-row { grid-template-areas: "id tm bt" "id in bt" "mk mk mk" "pb pb pb"; }
     .pb { grid-area: pb; }
@@ -512,7 +533,8 @@
 
   <section class="card none" id="sp-card">
     <button id="sp-toggle">
-      <span class="label">Pi playback</span>
+      <span class="label">Spotify</span>
+      <span id="sp-keychip"></span>
       <span id="sp-sum"></span>
       <span id="sp-caret">&#9662;</span>
     </button>
@@ -587,7 +609,7 @@
       <div class="lib-pane sel" id="lib-pl"></div>
       <div class="lib-pane" id="lib-ctx"></div>
       <div class="lib-pane" id="lib-up"></div>
-      <div class="lib-pane" id="lib-se"><input id="lib-q" type="search" placeholder="Search songs, albums, playlists" autocomplete="off" enterkeyhint="search"><div id="lib-res"></div></div>
+      <div class="lib-pane" id="lib-se"><div id="lib-key"></div><input id="lib-q" type="search" placeholder="Search songs, albums, playlists" autocomplete="off" enterkeyhint="search"><div id="lib-res"></div><div id="lib-keyfoot"></div></div>
       <div class="note" id="lib-note"></div>
     </div>
   </div>
@@ -844,7 +866,7 @@
       : { lvl: `/bus/${mix}/fdr`, mute: `/bus/${mix}/mute`, name: `/bus/${mix}/name` };
     const b = `/${r.kind}/${r.n}`;
     const base = { name: b + '/name', solo: b + '/$solo' };
-    if (r.pi) return { ...base, lvl: b + '/fdr', mute: b + '/mute', chMute: null };   // Pi playback card: always the aux's own fader
+    if (r.pi) return { ...base, lvl: b + '/fdr', mute: b + '/mute', chMute: null };   // Spotify card: always the aux's own fader
     return mix === 'lr'
       ? { ...base, lvl: b + '/fdr', mute: b + '/mute', chMute: null }
       : { ...base, lvl: `${b}/send/${mix}/lvl`, on: `${b}/send/${mix}/on`, chMute: b + '/mute' };
@@ -1316,7 +1338,7 @@
     });
   }
 
-  // ── Pi playback (v2.4): go-librespot "Stage Rig" (Spotify Connect) -> WING USB 1/2 -> AUX 1 ──
+  // ── Spotify card (v2.4): go-librespot "Stage Rig" (Spotify Connect) -> WING USB 1/2 -> AUX 1 ──
   // State is polled on the Pi (mixer/spotify.py) and pushed as {t:'sp'}; the clock runs locally between pushes.
   let SP = null, spGot = 0, spDrag = null, spHold = null;
   let spRow = null;                            // pinned AUX strip (not in rows: order / solo / sheet ignore it)
@@ -1422,6 +1444,11 @@
     $('sp-rep').classList.toggle('on', rep !== 'off');
     $('sp-disc').disabled = !s || !piLink;
     $('sp-lib').disabled = !s || !piLink;
+    const KL = keyLevel(SP.skey), chip = $('sp-keychip');
+    chip.className = KL.lvl === 'warn' || KL.lvl === 'bad' ? KL.lvl : '';
+    chip.textContent = KL.chip || '';
+    chip.title = KL.head ? KL.head + ' — tap to renew' : '';
+    if (LIB.classList.contains('open') && libTab === 'se') paintKeyPanel();
     $('sp-repair').disabled = !SP.api || !piLink; $('sp-restart').disabled = !piLink;
     if (SP.note) $('sp-note').textContent = SP.note;
   }
@@ -1653,21 +1680,87 @@
     box.append(el('div', 'lib-msg', 'Songs added with “Add to queue” from a phone are not shown here.'));
   }
 
-  // Search (needs the user's own Spotify app -- mixer/set_spotify_search.sh)
-  function paintSearchSetup() {
-    const on = !!(SP && SP.search);
-    $('lib-q').style.display = on ? '' : 'none';
-    if (on) { if (!$('lib-res').childElementCount) $('lib-res').append(el('div', 'lib-msg', 'Type to search Spotify.')); return; }
-    const box = $('lib-res'); box.innerHTML = '';
-    const m = el('div', 'lib-msg');
-    m.append(el('div', '', 'Search needs a free Spotify developer app of your own (about 5 minutes, once). It only searches the public catalogue and never touches your account.'));
-    const ol = el('ol');
-    ['On developer.spotify.com → Dashboard → Create app (any name; Redirect URI http://127.0.0.1:8080; tick Web API).',
-     'Open the app → Settings → copy the Client ID and Client secret.',
-     'From the laptop run:  ssh -t pi@lights.local "bash ~/stage-messenger/mixer/set_spotify_search.sh"  and paste them.',
-     'Hard-refresh this page.'].forEach(t => ol.append(el('li', '', t)));
-    m.append(ol); box.append(m);
+  // Search (needs the user's own Spotify app). Key lifecycle (v2.5.1): warn 21 days before the
+  // dashboard's 180-day secret lifetime ends, flag a key Spotify refuses, and renew it from here.
+  let keyFormOpen = false, keySig = '';
+  const fmtDate = iso => { const d = new Date(iso + 'T12:00:00'); return isNaN(d) ? iso : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); };
+  function keyLevel(k) {
+    if (!k || !k.on) return { lvl: 'off' };
+    if (k.bad) return { lvl: 'bad', chip: 'SEARCH KEY REFUSED', head: 'Spotify refused the search key', why: 'It has probably expired or been rotated. Search is off until a new secret is saved.' };
+    if (k.left != null && k.left <= 0) return { lvl: 'bad', chip: 'SEARCH KEY EXPIRED', head: 'The search key has expired', why: `Its ${k.days}-day lifetime ended ${fmtDate(k.exp)}. Renew it to keep search working.` };
+    if (k.left != null && k.left <= 21) return { lvl: 'warn', chip: `SEARCH KEY ${k.left} D`, head: `Search key expires in ${k.left} day${k.left === 1 ? '' : 's'}`, why: `Renew it before ${fmtDate(k.exp)} so search keeps working.` };
+    return { lvl: 'ok' };
   }
+  async function libPost(url, body) {
+    try {
+      const r = await fetch(url, { method: 'POST', redirect: 'manual', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (r.type === 'opaqueredirect' || r.status === 401) return { ok: false, err: 'Your sign-in has expired — reload the page.' };
+      return await r.json().catch(() => ({ ok: false, err: 'HTTP ' + r.status }));
+    } catch (e) { return { ok: false, err: "Can't reach the Pi." }; }
+  }
+  function keyForm(k, first) {
+    const f = el('div');
+    const ol = el('ol');
+    const li1 = el('li'); const a = el('a', '', 'developer.spotify.com/dashboard');
+    a.href = 'https://developer.spotify.com/dashboard'; a.target = '_blank'; a.rel = 'noopener';
+    li1.append('Open ', a, first ? ' → Create app (any name; Redirect URI http://127.0.0.1:8080; tick Web API).' : ' and open your search app.');
+    ol.append(li1);
+    ol.append(el('li', '', first ? 'Open the app → Settings → copy the Client ID and the Client secret.'
+      : 'Press ROTATE next to the Client secret and copy the new one (the old secret stops working right away).'));
+    ol.append(el('li', '', 'Paste below and tap Test & save — the Pi tries a real search first and only saves a key that works.'));
+    f.append(ol);
+    const id = el('input'); id.placeholder = first ? 'Client ID' : `Client ID — leave blank to keep ${k.id_hint || 'the current one'}`;
+    id.autocomplete = 'off'; id.spellcheck = false; id.autocapitalize = 'off';
+    const sec = el('input'); sec.type = 'password'; sec.placeholder = first ? 'Client secret' : 'New client secret'; sec.autocomplete = 'new-password';
+    const go = el('button', 'kgo', 'TEST & SAVE'), msg = el('div', 'kmsg');
+    go.addEventListener('click', async () => {
+      if (!sec.value.trim() || (first && !id.value.trim())) { msg.className = 'kmsg err'; msg.textContent = first ? 'Paste both the Client ID and the Client secret.' : 'Paste the new client secret.'; return; }
+      go.disabled = true; msg.className = 'kmsg'; msg.textContent = 'Testing with Spotify…';
+      const r = await libPost('/mixer/api/sp/search_creds', { id: id.value.trim(), secret: sec.value.trim() });
+      go.disabled = false;
+      if (r && r.ok) {
+        sec.value = ''; id.value = ''; keyFormOpen = false; document.activeElement && document.activeElement.blur();
+        if (SP) { SP.skey = r.key; SP.search = true; }
+        paintKeyPanel(true); paintSp();
+        libNote('Search key saved — ' + (r.key && r.key.exp ? 'next renewal due ' + fmtDate(r.key.exp) : 'search works'));
+        $('lib-q').focus();
+      } else { msg.className = 'kmsg err'; msg.textContent = (r && r.err) || 'Not saved.'; }
+    });
+    f.append(id, sec, go, msg);
+    return f;
+  }
+  function paintKeyPanel(force) {
+    const k = (SP && SP.skey) || { on: false }, L = keyLevel(k), box = $('lib-key'), foot = $('lib-keyfoot');
+    const sig = JSON.stringify([k, keyFormOpen, !!(SP && SP.search)]);
+    if (!force && sig === keySig) return;                // redraw only when the key state changes
+    const active = document.activeElement && box.contains(document.activeElement);
+    if (!force && active) return;                        // never wipe a form someone is typing into
+    keySig = sig;
+    box.innerHTML = ''; foot.innerHTML = '';
+    const on = !!(SP && SP.search) && L.lvl !== 'bad';
+    $('lib-q').style.display = on ? '' : 'none';
+    if (!k.on) {
+      const kb = el('div', 'kbox'); kb.append(el('b', '', 'Set up search'));
+      kb.append(el('div', 'lib-msg', 'Search needs a free Spotify developer app of your own (about 5 minutes, once). It only searches the public catalogue and never touches your account.'));
+      kb.append(keyForm(k, true)); box.append(kb);
+      $('lib-res').innerHTML = '';
+      return;
+    }
+    if (L.lvl === 'warn' || L.lvl === 'bad' || keyFormOpen) {
+      const kb = el('div', 'kbox' + (L.lvl === 'bad' ? ' bad' : L.lvl === 'warn' ? ' warn' : ''));
+      kb.append(el('b', '', L.head || 'Renew the search key'));
+      if (L.why) kb.append(el('div', 'lib-msg', L.why));
+      kb.append(keyForm(k, false)); box.append(kb);
+    }
+    if (L.lvl === 'bad') $('lib-res').innerHTML = '';
+    else if (!$('lib-res').childElementCount) $('lib-res').append(el('div', 'lib-msg', 'Type to search Spotify.'));
+    const t = el('span', '', `Search key ${k.id_hint}` + (k.exp ? ` · renew by ${fmtDate(k.exp)}` : ''));
+    const b = el('button', '', keyFormOpen ? 'Cancel' : 'Renew key');
+    b.addEventListener('click', () => { keyFormOpen = !keyFormOpen; paintKeyPanel(true); });
+    foot.append(t); if (L.lvl === 'ok' || keyFormOpen) foot.append(b);
+  }
+  function paintSearchSetup() { paintKeyPanel(true); }
+  $('sp-keychip').addEventListener('click', e => { e.stopPropagation(); openLib(); libShow('se'); });
   $('lib-q').addEventListener('input', () => {
     clearTimeout(libQTimer);
     const q = $('lib-q').value.trim();
