@@ -1,0 +1,20 @@
+# Stage Messenger v2.4 -- go-librespot: Spotify Connect speaker "Stage Rig" -> WING USB 1/2 (AUX 1).
+# Installed by mixer/setup_spotify.sh:
+#   sudo install -m 644 mixer/go-librespot.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now go-librespot
+# Binary: ~/go-librespot/go-librespot (symlink to the pinned release, see ~/go-librespot/VERSION).
+# Config: ~/.config/go-librespot/config.yml -> ~/stage-messenger/mixer/go-librespot.yml
+# API:    http://127.0.0.1:3678 (localhost only; proxied by Stage Messenger under /mixer)
+[Unit]
+Description=go-librespot (Spotify Connect "Stage Rig" -> WING AUX 1)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/go-librespot
+ExecStart=/home/pi/go-librespot/go-librespot --config_dir /home/pi/.config/go-librespot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
