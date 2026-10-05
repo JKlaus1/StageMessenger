@@ -34,6 +34,11 @@ zeroconf_enabled: false
 # Venue networks: try Spotify on ports 443/80 before 4070.
 prefer_firewall_friendly_ports: true
 
+# Library browsing on /mixer (v2.5): track metadata cache behind GET /context/tracks (playlist / album /
+# Liked Songs listings) and status.next_track. Fetched via Spotify's internal API, not the public Web API.
+metadata:
+  enabled: true
+
 # Local control API -- localhost only. Stage Messenger proxies it under /mixer (Cloudflare Access).
 server:
   enabled: true

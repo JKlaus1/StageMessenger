@@ -322,6 +322,52 @@
     #sp-menu button { flex: 1; height: 2.4rem; border-radius: 10px; border: 1px solid var(--text); background: transparent; color: var(--text); font-size: .7rem; font-weight: 800; }
     #sp-menu #sp-repair { border-color: var(--red); color: var(--red); }
     #sp-note { min-height: 1em; }
+    #sp-lib { width: 100%; height: 2.7rem; margin-top: .55rem; border-radius: 11px; border: 1px solid var(--green); background: transparent;
+      color: var(--green); font-size: .76rem; font-weight: 900; letter-spacing: .08em; }
+    #sp-lib:disabled { border-color: var(--border); color: var(--muted); }
+    /* Library sheet (v2.5) */
+    #lib { position: fixed; inset: 0; background: rgba(4,4,12,.72); display: none; z-index: 21; padding: 2dvh .6rem; overflow-y: auto; }
+    #lib.open { display: block; }
+    #lib .sheet-body { padding-bottom: 4.5rem; }
+    #lib-close, #lib-back { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 9px; padding: .45rem .7rem; font-weight: 900; }
+    #lib-back { margin-bottom: .5rem; }
+    .lib-pane { display: none; }
+    .lib-pane.sel { display: block; }
+    .lib-row { display: grid; grid-template-columns: 2.6rem 1fr auto; gap: .55rem; align-items: center; width: 100%; padding: .38rem .2rem;
+      border: 0; border-top: 1px solid #1c1c38; background: transparent; color: var(--text); text-align: left;
+      -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    .lib-row:first-child { border-top: 0; }
+    .lib-row img, .lib-row .ph { width: 2.6rem; height: 2.6rem; border-radius: 6px; object-fit: cover; background: var(--border); display: block; }
+    .lib-row .ph { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 1rem; }
+    .lib-row .tx { min-width: 0; }
+    .lib-row .tx b { display: block; font-size: .84rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lib-row .tx span { display: block; font-size: .66rem; color: var(--muted); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lib-row .rt { font-size: .66rem; color: var(--muted); font-weight: 800; font-variant-numeric: tabular-nums; }
+    .lib-row.cur .tx b { color: var(--green); }
+    .lib-row.sel { background: rgba(255,255,255,.06); }
+    .lib-row.pending .tx b { color: var(--muted); font-weight: 700; }
+    .lib-h { display: grid; grid-template-columns: 4.2rem 1fr; gap: .7rem; align-items: center; margin-bottom: .55rem; }
+    .lib-h img, .lib-h .ph { width: 4.2rem; height: 4.2rem; border-radius: 8px; object-fit: cover; background: var(--border); }
+    .lib-h .ph { display: flex; align-items: center; justify-content: center; font-size: 1.6rem; color: var(--muted); }
+    .lib-h b { display: block; font-size: 1rem; font-weight: 900; }
+    .lib-h span { display: block; font-size: .68rem; color: var(--muted); font-weight: 700; margin-top: .15rem; }
+    .lib-btns { display: flex; gap: .4rem; margin-bottom: .5rem; }
+    .lib-btns button { flex: 1; height: 2.6rem; border-radius: 10px; border: 1px solid var(--green); background: transparent; color: var(--green);
+      font-size: .74rem; font-weight: 900; letter-spacing: .06em; }
+    .lib-btns button:first-child { background: var(--green); color: #001a0d; }
+    .lib-sec { font-size: .6rem; font-weight: 900; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; margin: .7rem 0 .2rem; }
+    .lib-msg { font-size: .74rem; color: var(--muted); font-weight: 700; padding: .5rem .1rem; line-height: 1.45; }
+    .lib-msg ol { margin: .4rem 0 0 1.1rem; padding: 0; }
+    .lib-msg code { font-size: .68rem; color: var(--text); }
+    #lib-q { width: 100%; padding: .65rem .7rem; font-size: .95rem; border-radius: 10px; border: 1px solid var(--border); background: var(--bg, #0a0a18); color: var(--text); }
+    #lib-act { position: fixed; left: 50%; transform: translateX(-50%); bottom: 2dvh; width: min(560px, calc(100% - 1.2rem)); display: none; z-index: 22;
+      background: var(--card); border: 1px solid var(--text); border-radius: 12px; padding: .55rem; gap: .4rem; align-items: center; }
+    #lib-act.show { display: flex; }
+    #lib-act .nm { flex: 1; min-width: 0; font-size: .74rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #lib-act button { height: 2.4rem; border-radius: 9px; border: 1px solid var(--green); background: transparent; color: var(--green);
+      font-size: .7rem; font-weight: 900; padding: 0 .65rem; }
+    #lib-act button.x { border-color: var(--border); color: var(--muted); }
+    #lib-note { min-height: 1em; margin-top: .4rem; }
     /* playback (v2.3): one panel per card row */
     .rec-row { grid-template-areas: "id tm bt" "id in bt" "mk mk mk" "pb pb pb"; }
     .pb { grid-area: pb; }
@@ -482,6 +528,7 @@
         <button id="sp-pp" title="Play / pause">&#9654;&#xFE0E;</button><button id="sp-next" title="Next">&#9197;&#xFE0E;</button>
         <button id="sp-rep" title="Repeat">&#8635;<small>OFF</small></button></div>
       <div id="sp-sub"></div>
+      <button id="sp-lib">&#9835; LIBRARY &mdash; PLAYLISTS &middot; UP NEXT &middot; SEARCH</button>
       <div id="sp-strip"></div>
       <div id="sp-kill"><button id="sp-disc"><i></i><span>&#9167; HOLD TO DISCONNECT</span></button><button id="sp-more" title="More">&#8943;</button></div>
       <div id="sp-menu"><button id="sp-restart">Restart Stage Rig</button><button id="sp-repair">Sign out &amp; re-pair</button></div>
@@ -525,6 +572,26 @@
     <span id="patch-note"></span>
     <button id="repatch-btn" title="Re-check and rewrite the Pi-owned WING USB outputs">Re-patch USB</button>
   </footer>
+
+  <div id="lib">
+    <div class="sheet-body">
+      <div class="sh-head">
+        <div><b>Library</b><i id="lib-sub">STAGE RIG &middot; SPOTIFY</i></div>
+        <button id="lib-close">&#10005;</button>
+      </div>
+      <div class="tabs" id="lib-tabs">
+        <button class="tab sel" data-t="pl">Playlists</button>
+        <button class="tab" data-t="up">Up next</button>
+        <button class="tab" data-t="se">Search</button>
+      </div>
+      <div class="lib-pane sel" id="lib-pl"></div>
+      <div class="lib-pane" id="lib-ctx"></div>
+      <div class="lib-pane" id="lib-up"></div>
+      <div class="lib-pane" id="lib-se"><input id="lib-q" type="search" placeholder="Search songs, albums, playlists" autocomplete="off" enterkeyhint="search"><div id="lib-res"></div></div>
+      <div class="note" id="lib-note"></div>
+    </div>
+  </div>
+  <div id="lib-act"><span class="nm"></span><button data-a="queue">+ QUEUE</button><button data-a="play">&#9654; PLAY</button><button class="x" data-a="x">&#10005;</button></div>
 
   <div id="sheet">
     <div class="sheet-body" id="sh-body">
@@ -1289,7 +1356,11 @@
   function applySp(v) {
     const prevUri = spTr() && spTr().uri;
     SP = v; spGot = Date.now();
-    if (spTr() && spTr().uri !== prevUri) spHold = null;
+    const nowUri = spTr() && spTr().uri;
+    if (nowUri !== prevUri) {
+      spHold = null;
+      if (typeof libTrackChanged === 'function') libTrackChanged(nowUri);
+    }
     spBuildStrip(); paintSp();
   }
   function paintSp() {
@@ -1350,6 +1421,7 @@
     $('sp-rep').innerHTML = `&#8635;<small>${rep === 'track' ? 'TRACK' : rep === 'context' ? 'ALL' : 'OFF'}</small>`;
     $('sp-rep').classList.toggle('on', rep !== 'off');
     $('sp-disc').disabled = !s || !piLink;
+    $('sp-lib').disabled = !s || !piLink;
     $('sp-repair').disabled = !SP.api || !piLink; $('sp-restart').disabled = !piLink;
     if (SP.note) $('sp-note').textContent = SP.note;
   }
@@ -1411,6 +1483,223 @@
     if (confirm(`Sign Stage Rig out of Spotify${u ? ' (' + u + ')' : ''}?\nYou will need to approve a new pairing code to use it again.`)) spService('repair', 'Signing out…');
   });
   setInterval(() => { if (SP && (spPlaying() || SP.auth || spHold)) paintSp(); }, 250);
+
+  // ── Library (v2.5): playlists / up next / search -> play on Stage Rig ──
+  // Lists come from go-librespot's internal API through /mixer/api/sp/*; search from the user's own
+  // Spotify app (client credentials). Names are user data: always set as text, never as HTML.
+  const LIB = $('lib');
+  let libTab = 'pl', libCtx = null, libPoll = null, libSel = null, libSeq = 0, libQTimer = null, libLastQ = null;
+  const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const libImg = (src, ph) => {
+    if (src && /^https:\/\//.test(src)) { const i = el('img'); i.loading = 'lazy'; i.alt = ''; i.src = src; return i; }
+    return el('div', 'ph', ph || '♪');
+  };
+  async function libGet(url) {
+    try {
+      const r = await fetch(url, { redirect: 'manual', cache: 'no-store' });
+      if (r.type === 'opaqueredirect' || r.status === 401) return { ok: false, err: 'Your sign-in has expired — reload the page.' };
+      return await r.json();
+    } catch (e) { return { ok: false, err: "Can't reach the Pi." }; }
+  }
+  function libNote(t) { $('lib-note').textContent = t || ''; }
+  function libShow(t) {
+    libTab = t; clearTimeout(libPoll); libSel = null; paintLibAct();
+    document.querySelectorAll('#lib-tabs .tab').forEach(b => b.classList.toggle('sel', b.dataset.t === (t === 'ctx' ? libCtx && libCtx.from : t)));
+    ['pl', 'ctx', 'up', 'se'].forEach(k => $('lib-' + k).classList.toggle('sel', k === t));
+    if (t === 'pl') loadPlaylists();
+    if (t === 'up') loadUpNext();
+    if (t === 'se') { paintSearchSetup(); setTimeout(() => $('lib-q').focus(), 50); }
+  }
+  function openLib() { LIB.classList.add('open'); libNote(''); libShow(libTab === 'ctx' ? 'ctx' : libTab); }
+  function closeLib() { LIB.classList.remove('open'); clearTimeout(libPoll); libSel = null; paintLibAct(); }
+  $('sp-lib').addEventListener('click', openLib);
+  $('lib-close').addEventListener('click', closeLib);
+  LIB.addEventListener('click', e => { if (e.target === LIB) closeLib(); });
+  document.querySelectorAll('#lib-tabs .tab').forEach(b => b.addEventListener('click', () => libShow(b.dataset.t)));
+
+  // a row: tap = action, long-press 0.6 s = select (queue / play bar)
+  function libRow({ img, ph, title, sub, right, onTap, item }) {
+    const r = el('button', 'lib-row');
+    r.append(libImg(img, ph));
+    const tx = el('div', 'tx'); tx.append(el('b', '', title)); if (sub) tx.append(el('span', '', sub)); r.append(tx);
+    r.append(el('span', 'rt', right || ''));
+    let t = null, long = false;
+    const clear = () => { clearTimeout(t); t = null; };
+    if (item && item.uri) r.dataset.uri = item.uri;
+    if (item) {
+      r.addEventListener('pointerdown', () => { long = false; clear(); t = setTimeout(() => { long = true; libSel = { ...item, row: r }; paintLibAct(); }, 600); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => r.addEventListener(ev, clear));
+      r.addEventListener('contextmenu', e => e.preventDefault());
+    }
+    r.addEventListener('click', () => { if (long) { long = false; return; } onTap && onTap(); });
+    return r;
+  }
+  function paintLibAct() {
+    document.querySelectorAll('.lib-row.sel').forEach(x => x.classList.remove('sel'));
+    $('lib-act').classList.toggle('show', !!libSel && LIB.classList.contains('open'));
+    if (!libSel) return;
+    libSel.row && libSel.row.classList.add('sel');
+    $('lib-act').querySelector('.nm').textContent = libSel.name + (libSel.artists ? ' — ' + libSel.artists : '');
+  }
+  $('lib-act').addEventListener('click', e => {
+    const a = e.target.closest('button'); if (!a || !libSel) return;
+    const s = libSel; libSel = null; paintLibAct();
+    if (a.dataset.a === 'queue') libQueue(s); else if (a.dataset.a === 'play') libPlay(s.ctx, s.uri, s.name);
+  });
+  async function libPlay(ctx, skip, label, shuffle) {
+    if (!ctx) { libNote('This song has no album to play it from.'); return; }
+    if (spPlaying() && !confirm(`Play “${label}” now?\nThis replaces what's playing.`)) return;
+    const v = { uri: ctx }; if (skip) v.skip = skip; if (shuffle === true || shuffle === false) v.shuffle = shuffle;
+    libNote(`Starting “${label}”…`);
+    const r = await spCmd('play', v);
+    if (r && r.ok) libNote(`▶ ${label}${shuffle ? ' (shuffled)' : ''}`);
+  }
+  async function libQueue(s) {
+    const r = await spCmd('queue', s.uri);
+    if (r && r.ok) libNote(`Queued: ${s.name} — plays after the current song`);
+  }
+
+  // the playing song changed: move the highlight in an open list, refresh an open Up next
+  function libTrackChanged(uri) {
+    if (!LIB.classList.contains('open')) return;
+    document.querySelectorAll('#lib-ctx .lib-row, #lib-up .lib-row').forEach(r => r.classList.toggle('cur', !!uri && r.dataset.uri === uri));
+    if (libTab === 'up') { clearTimeout(libPoll); loadUpNext(); }
+  }
+
+  // Playlists
+  async function loadPlaylists() {
+    const box = $('lib-pl');
+    if (!box.childElementCount) box.append(el('div', 'lib-msg', 'Loading your playlists…'));
+    const seq = ++libSeq, j = await libGet('/mixer/api/sp/playlists');
+    if (seq !== libSeq || libTab !== 'pl') return;
+    box.innerHTML = '';
+    if (!j || !j.ok) { box.append(el('div', 'lib-msg', (j && j.err) || 'Could not load playlists.')); return; }
+    let folder = null;
+    for (const p of j.items) {
+      if (p.folder && p.folder !== folder) { folder = p.folder; box.append(el('div', 'lib-sec', '📁 ' + p.folder)); }
+      box.append(libRow({ img: p.img, ph: p.liked ? '♥' : '♫', title: p.name,
+        sub: p.liked ? 'Your saved songs' : (p.owner ? 'by ' + p.owner : ''), right: p.len != null ? p.len + ' songs' : '',
+        onTap: () => openCtx({ uri: p.uri, name: p.name, img: p.img, ph: p.liked ? '♥' : '♫', from: 'pl' }) }));
+    }
+  }
+
+  // A playlist / album: songs load progressively (go-librespot enumerates + fetches metadata in the background)
+  function openCtx(c) { libCtx = { ...c, data: null }; libShow('ctx'); renderCtx(); pollCtx(); }
+  async function pollCtx() {
+    if (!libCtx || libTab !== 'ctx' || !LIB.classList.contains('open')) return;
+    const c = libCtx, j = await libGet('/mixer/api/sp/tracks?uri=' + encodeURIComponent(c.uri));
+    if (c !== libCtx) return;
+    if (!j || !j.ok) { c.err = (j && j.err) || 'Could not load the songs.'; renderCtx(); return; }
+    const changed = !c.data || c.data.cached !== j.cached || c.data.ready !== j.ready || c.data.length !== j.length;
+    c.data = j; c.err = null;
+    if (changed) renderCtx();
+    if (!j.ready || j.cached < j.length) libPoll = setTimeout(pollCtx, 800);
+  }
+  function renderCtx() {
+    const c = libCtx, box = $('lib-ctx'); if (!c) return;
+    box.innerHTML = '';
+    const back = el('button', '', '‹ Back'); back.id = 'lib-back';
+    back.addEventListener('click', () => libShow(c.from || 'pl')); box.append(back);
+    const h = el('div', 'lib-h'); h.append(libImg(c.img, c.ph || '♫'));
+    const ht = el('div'); ht.append(el('b', '', c.name));
+    const d = c.data;
+    ht.append(el('span', '', !d ? 'Loading…' : !d.ready ? 'Listing songs…' : d.cached < d.length ? `${d.length} songs · loading details ${d.cached}/${d.length}` : `${d.length} songs`));
+    h.append(ht); box.append(h);
+    const btns = el('div', 'lib-btns');
+    const bp = el('button', '', '▶ PLAY'), bs = el('button', '', '⤮ SHUFFLE');
+    bp.addEventListener('click', () => libPlay(c.uri, null, c.name, false));
+    bs.addEventListener('click', () => libPlay(c.uri, null, c.name, true));
+    btns.append(bp, bs); box.append(btns);
+    if (c.err) { box.append(el('div', 'lib-msg', c.err)); return; }
+    if (!d || !d.ready) { box.append(el('div', 'lib-msg', 'Getting the song list from Spotify…')); return; }
+    if (!d.length) { box.append(el('div', 'lib-msg', 'This one is empty.')); return; }
+    box.append(el('div', 'lib-msg', 'Tap a song to start from it · hold a song to queue it'));
+    const curUri = spTr() && spTr().uri, list = el('div');
+    d.tracks.forEach((e, i) => {
+      const t = e.t, name = t ? t.name : 'Loading…', artists = t ? t.artists.join(', ') : '';
+      const row = libRow({ img: t && t.cover, title: name, sub: artists, right: t ? clk(t.dur) : '',
+        onTap: () => libPlay(c.uri, e.uri, t ? t.name : `song ${i + 1}`),
+        item: { uri: e.uri, ctx: c.uri, name, artists } });
+      if (!t) row.classList.add('pending');
+      if (e.uri === curUri) row.classList.add('cur');
+      list.append(row);
+    });
+    box.append(list);
+  }
+
+  // Up next: the rest of the playing playlist / album (songs queued from a phone are not visible)
+  async function loadUpNext() {
+    const box = $('lib-up'), s = spSt();
+    box.innerHTML = '';
+    if (!s || !s.track) { box.append(el('div', 'lib-msg', 'Nothing playing.')); return; }
+    if (s.next) box.append(el('div', 'lib-sec', 'Next'), libRow({ title: s.next.name, sub: s.next.artists.join(', '), ph: '⏭' }));
+    const ctx = s.ctx_uri;
+    if (!/^spotify:(playlist|album|artist|show):|^spotify:collection:tracks$/.test(ctx || '')) {
+      box.append(el('div', 'lib-msg', 'The current song is not playing from a playlist or album, so there is no list to show.')); return;
+    }
+    const seq = ++libSeq, j = await libGet('/mixer/api/sp/tracks?uri=' + encodeURIComponent(ctx));
+    if (seq !== libSeq || libTab !== 'up') return;
+    if (!j || !j.ok) { box.append(el('div', 'lib-msg', (j && j.err) || 'Could not load the list.')); return; }
+    if (!j.ready || j.cached < j.length) { libPoll = setTimeout(() => { if (libTab === 'up') loadUpNext(); }, 900); }
+    const idx = j.tracks.findIndex(e => e.uri === s.track.uri);
+    const rest = idx >= 0 ? j.tracks.slice(idx + 1) : j.tracks;
+    box.append(el('div', 'lib-sec', (s.context ? 'From ' + s.context : 'From this list') + (s.shuffle ? ' · shuffle is on, order may differ' : '')));
+    if (!rest.length) { box.append(el('div', 'lib-msg', 'This is the last song in the list.' + (' Autoplay is off, so playback stops after it.'))); return; }
+    rest.slice(0, 100).forEach(e => {
+      const t = e.t;
+      box.append(libRow({ img: t && t.cover, title: t ? t.name : 'Loading…', sub: t ? t.artists.join(', ') : '', right: t ? clk(t.dur) : '',
+        onTap: () => libPlay(ctx, e.uri, t ? t.name : 'that song'), item: { uri: e.uri, ctx, name: t ? t.name : 'song', artists: t ? t.artists.join(', ') : '' } }));
+    });
+    box.append(el('div', 'lib-msg', 'Songs added with “Add to queue” from a phone are not shown here.'));
+  }
+
+  // Search (needs the user's own Spotify app -- mixer/set_spotify_search.sh)
+  function paintSearchSetup() {
+    const on = !!(SP && SP.search);
+    $('lib-q').style.display = on ? '' : 'none';
+    if (on) { if (!$('lib-res').childElementCount) $('lib-res').append(el('div', 'lib-msg', 'Type to search Spotify.')); return; }
+    const box = $('lib-res'); box.innerHTML = '';
+    const m = el('div', 'lib-msg');
+    m.append(el('div', '', 'Search needs a free Spotify developer app of your own (about 5 minutes, once). It only searches the public catalogue and never touches your account.'));
+    const ol = el('ol');
+    ['On developer.spotify.com → Dashboard → Create app (any name; Redirect URI http://127.0.0.1:8080; tick Web API).',
+     'Open the app → Settings → copy the Client ID and Client secret.',
+     'From the laptop run:  ssh -t pi@lights.local "bash ~/stage-messenger/mixer/set_spotify_search.sh"  and paste them.',
+     'Hard-refresh this page.'].forEach(t => ol.append(el('li', '', t)));
+    m.append(ol); box.append(m);
+  }
+  $('lib-q').addEventListener('input', () => {
+    clearTimeout(libQTimer);
+    const q = $('lib-q').value.trim();
+    libQTimer = setTimeout(() => runSearch(q), q.length < 2 ? 0 : 400);
+  });
+  $('lib-q').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(libQTimer); runSearch($('lib-q').value.trim()); $('lib-q').blur(); } });
+  async function runSearch(q) {
+    const box = $('lib-res');
+    if (q.length < 2) { box.innerHTML = ''; box.append(el('div', 'lib-msg', 'Type to search Spotify.')); libLastQ = null; return; }
+    if (q === libLastQ) return;
+    libLastQ = q;
+    const seq = ++libSeq, j = await libGet('/mixer/api/sp/search?q=' + encodeURIComponent(q));
+    if (seq !== libSeq) return;
+    box.innerHTML = '';
+    if (!j || !j.ok) { box.append(el('div', 'lib-msg', (j && j.err) || 'Search failed.')); libLastQ = null; return; }
+    if (!j.tracks.length && !j.albums.length && !j.playlists.length) { box.append(el('div', 'lib-msg', 'No results.')); return; }
+    if (j.tracks.length) {
+      box.append(el('div', 'lib-sec', 'Songs · tap = play now (its album continues) · hold = queue'));
+      j.tracks.forEach(t => box.append(libRow({ img: t.cover, title: t.name, sub: t.artists.join(', ') + (t.album ? ' · ' + t.album : ''), right: clk(t.dur),
+        onTap: () => libPlay(t.album_uri, t.uri, t.name), item: { uri: t.uri, ctx: t.album_uri, name: t.name, artists: t.artists.join(', ') } })));
+    }
+    if (j.albums.length) {
+      box.append(el('div', 'lib-sec', 'Albums'));
+      j.albums.forEach(a => box.append(libRow({ img: a.img, ph: '◎', title: a.name, sub: a.artists.join(', ') + (a.year ? ' · ' + a.year : ''),
+        onTap: () => openCtx({ uri: a.uri, name: a.name, img: a.img, ph: '◎', from: 'se' }) })));
+    }
+    if (j.playlists.length) {
+      box.append(el('div', 'lib-sec', 'Playlists'));
+      j.playlists.forEach(p => box.append(libRow({ img: p.img, ph: '♫', title: p.name, sub: p.owner ? 'by ' + p.owner : '', right: p.len != null ? p.len + ' songs' : '',
+        onTap: () => openCtx({ uri: p.uri, name: p.name, img: p.img, ph: '♫', from: 'se' }) })));
+    }
+  }
 
   function paintBusSum() {
     const n = busRows.filter(r => S[`/bus/${r.bus}/mute`]).length;

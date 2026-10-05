@@ -19,17 +19,47 @@ go-librespot v0.10.3 API facts used here (from its api-spec.yml / daemon source)
   POST /player/shuffle_context {shuffle_context: bool}
   POST /player/repeat_context {repeat_context: bool} / repeat_track {repeat_track: bool}
 album_cover_url is a public https://i.scdn.co/... URL -- the browser loads it directly.
+
+Library (v2.5) -- go-librespot's INTERNAL-API endpoints (the public Web API rate-limits the session
+token: every call answered 429 on 2026-10-05, so it is not used for anything):
+  GET  /library/playlists?limit=500  {total, items[{uri, name, description, owner_username, length,
+                                      image_url|null, collaborative, can_edit, folder}]}
+  GET  /context/tracks?uri=<ctx>     {uri, ready, length, cached, tracks[{uri, track|null}]} -- needs
+                                      metadata.enabled; first call starts a background enumeration
+                                      (ready=false), poll until ready and cached == length. 404 = cache off.
+                                      Liked Songs = spotify:collection:tracks
+  POST /player/play {uri, skip_to_uri?}  (shuffle_context BEFORE play = start shuffled)
+  POST /player/add_to_queue {uri}
+  status.context_uri, status.next_track (metadata.enabled)
+Search uses the Spotify Web API with the user's OWN developer app (client-credentials, app-only: it
+never touches the account) -- spotify.search_client_id/secret in mixer_config.json
+(mixer/set_spotify_search.sh). No credentials -> search is off and the page says how to enable it.
 """
+import base64
+import re
 import json
 import os
 import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 UNIT = 'go-librespot.service'
 SYSTEMCTL = '/usr/bin/systemctl'      # must match mixer/stage-messenger-spotify.sudoers
+ID = r'[A-Za-z0-9]{10,40}'
+CONTEXT_URI = re.compile(rf'^(spotify:(playlist|album|artist|show):{ID}|spotify:collection:tracks)$')
+ITEM_URI = re.compile(rf'^spotify:(track|episode):{ID}$')
+LIKED = 'spotify:collection:tracks'
+
+
+def _slim_track(t):
+    if not isinstance(t, dict):
+        return None
+    return {'uri': t.get('uri'), 'name': t.get('name') or '', 'artists': t.get('artist_names') or [],
+            'album': t.get('album_name') or '', 'album_uri': t.get('album_uri') or '',
+            'cover': t.get('album_cover_url'), 'pos': int(t.get('position') or 0), 'dur': int(t.get('duration') or 0)}
 
 
 class Spotify:
@@ -37,10 +67,18 @@ class Spotify:
         self.api = cfg.get('api', 'http://127.0.0.1:3678').rstrip('/')
         self.config_dir = cfg.get('config_dir', '/home/pi/.config/go-librespot')
         self.aux = int(cfg.get('aux', 1))
+        # search: the user's own Spotify developer app (client credentials) -- optional
+        self.search_id = (cfg.get('search_client_id') or '').strip()
+        self.search_secret = (cfg.get('search_client_secret') or '').strip()
+        self.market = (cfg.get('market') or 'US').strip()
+        self.accounts_url = cfg.get('accounts_url', 'https://accounts.spotify.com').rstrip('/')
+        self.webapi_url = cfg.get('webapi_url', 'https://api.spotify.com').rstrip('/')
+        self._stoken, self._stoken_exp, self._slock = None, 0.0, threading.Lock()
+        self._pl_cache, self._pl_at = None, 0.0
         self.publish = publish            # fn(dict) -> SSE to every /mixer page
         self.wanted = wanted              # fn() -> True while a page is open
         self.state = {'api': False, 'svc': '?', 'status': None, 'auth': None, 'at': 0, 'aux': self.aux,
-                      'note': ''}
+                      'note': '', 'search': bool(self.search_id and self.search_secret)}
         self._key = None
         self._lock = threading.Lock()
         self._busy = False                # a kill/re-pair is running
@@ -89,7 +127,8 @@ class Spotify:
 
     def poll(self, force_svc=False):
         code, _ = self._req('/', timeout=1.5)
-        st = {'api': code == 200, 'status': None, 'auth': None, 'aux': self.aux}
+        st = {'api': code == 200, 'status': None, 'auth': None, 'aux': self.aux,
+              'search': bool(self.search_id and self.search_secret)}
         if code == 200:
             c, s = self._req('/status')
             if c == 200 and isinstance(s, dict):
@@ -117,13 +156,11 @@ class Spotify:
 
     @staticmethod
     def _slim(s):
-        t = s.get('track') or None
-        tr = None
-        if isinstance(t, dict):
-            tr = {'uri': t.get('uri'), 'name': t.get('name') or '', 'artists': t.get('artist_names') or [],
-                  'album': t.get('album_name') or '', 'cover': t.get('album_cover_url'),
-                  'pos': int(t.get('position') or 0), 'dur': int(t.get('duration') or 0)}
-        return {'user': s.get('username') or '', 'device': s.get('device_name') or '',
+        tr = _slim_track(s.get('track'))
+        nx = _slim_track(s.get('next_track'))
+        return {'ctx_uri': s.get('context_uri') or '',
+                'next': {'uri': nx['uri'], 'name': nx['name'], 'artists': nx['artists']} if nx else None,
+                'user': s.get('username') or '', 'device': s.get('device_name') or '',
                 'stopped': bool(s.get('stopped', True)), 'paused': bool(s.get('paused', False)),
                 'buffering': bool(s.get('buffering', False)), 'shuffle': bool(s.get('shuffle_context')),
                 'rep_ctx': bool(s.get('repeat_context')), 'rep_trk': bool(s.get('repeat_track')),
@@ -137,8 +174,8 @@ class Spotify:
         if s:
             t = s['track'] or {}
             core = (s['user'], s['stopped'], s['paused'], s['buffering'], s['shuffle'], s['rep_ctx'],
-                    s['rep_trk'], s['context'], t.get('uri'), t.get('dur'), t.get('pos', 0) // 3000 if s['paused'] or s['stopped'] else None)
-        return json.dumps([st['api'], st['svc'], core, st['auth'], st['note']], sort_keys=True)
+                    s['rep_trk'], s['context'], s['ctx_uri'], (s['next'] or {}).get('uri'), t.get('uri'), t.get('dur'), t.get('pos', 0) // 3000 if s['paused'] or s['stopped'] else None)
+        return json.dumps([st['api'], st['svc'], core, st['auth'], st['note'], st['search']], sort_keys=True)
 
     def snapshot(self):
         with self._lock:
@@ -163,7 +200,7 @@ class Spotify:
         self.kick()
 
     # ── commands ──
-    CMDS = ('playpause', 'next', 'prev', 'seek', 'shuffle', 'repeat', 'disconnect')
+    CMDS = ('playpause', 'next', 'prev', 'seek', 'shuffle', 'repeat', 'disconnect', 'play', 'queue')
 
     def command(self, cmd, val=None):
         """-> (ok, err). Whitelisted; values clamped."""
@@ -196,12 +233,130 @@ class Spotify:
             code = c1 if c1 != 200 else c2
         elif cmd == 'disconnect':
             code, _ = self._req('/player/stop', {})
+        elif cmd == 'play':                         # val: {uri: context, skip?: track, shuffle?: True|False}
+            v = val if isinstance(val, dict) else {}
+            uri, skip, shuf = str(v.get('uri') or ''), str(v.get('skip') or ''), v.get('shuffle')
+            if not CONTEXT_URI.match(uri):
+                return False, 'not a playlist/album URI'
+            if skip and not ITEM_URI.match(skip):
+                return False, 'not a track URI'
+            if shuf in (True, False):               # must be set BEFORE play to start shuffled / in order
+                c0, _ = self._req('/player/shuffle_context', {'shuffle_context': bool(shuf)})
+                if c0 != 200:
+                    return False, f'go-librespot answered {c0 or "nothing"} (shuffle)'
+            code, _ = self._req('/player/play', {'uri': uri, **({'skip_to_uri': skip} if skip else {})}, timeout=8)
+        elif cmd == 'queue':
+            uri = str(val or '')
+            if not ITEM_URI.match(uri):
+                return False, 'not a track URI'
+            code, _ = self._req('/player/add_to_queue', {'uri': uri})
         else:
             code, _ = self._req('/player/' + cmd, {})
         self.kick()
         if code == 200:
             return True, ''
         return False, f'go-librespot answered {code or "nothing"}'
+
+    # ── library (v2.5): go-librespot internal-API endpoints ──
+    def playlists(self, fresh=False):
+        """-> (ok, data|err). Your playlists in your order, Liked Songs first. Cached 20 s."""
+        if not fresh and self._pl_cache and time.time() - self._pl_at < 20:
+            return True, self._pl_cache
+        if not self.state.get('status'):
+            return False, 'Stage Rig is not signed in to Spotify'
+        code, j = self._req('/library/playlists?limit=500', timeout=12)
+        if code != 200 or not isinstance(j, dict):
+            return False, f'go-librespot answered {code or "nothing"}'
+        items = [{'uri': LIKED, 'name': 'Liked Songs', 'len': None, 'img': None, 'owner': '', 'folder': '', 'liked': True}]
+        for it in j.get('items') or []:
+            if not CONTEXT_URI.match(str(it.get('uri') or '')):
+                continue
+            img = it.get('image_url')
+            items.append({'uri': it['uri'], 'name': it.get('name') or '(untitled)', 'len': it.get('length'),
+                          'img': img if isinstance(img, str) and img.startswith('https://') else None,
+                          'owner': it.get('owner_username') or '', 'folder': ' / '.join(it.get('folder') or [])
+                          if isinstance(it.get('folder'), list) else (it.get('folder') or '')})
+        data = {'total': j.get('total'), 'items': items}
+        self._pl_cache, self._pl_at = data, time.time()
+        return True, data
+
+    def tracks(self, uri):
+        """-> (ok, data|err) for a context. Poll while not ready or cached < length."""
+        if not CONTEXT_URI.match(uri or ''):
+            return False, 'not a playlist/album URI'
+        if not self.state.get('status'):
+            return False, 'Stage Rig is not signed in to Spotify'
+        code, j = self._req('/context/tracks?uri=' + urllib.parse.quote(uri, safe=''), timeout=8)
+        if code == 404:
+            return False, ('go-librespot\'s metadata cache is off -- metadata.enabled must be true in '
+                           'mixer/go-librespot.yml (then sudo systemctl restart go-librespot)')
+        if code != 200 or not isinstance(j, dict):
+            return False, f'go-librespot answered {code or "nothing"}'
+        out = []
+        for e in j.get('tracks') or []:
+            t = _slim_track(e.get('track'))
+            if t:
+                t.pop('pos', None)
+            out.append({'uri': e.get('uri'), 't': t})
+        return True, {'uri': uri, 'ready': bool(j.get('ready')), 'length': int(j.get('length') or 0),
+                      'cached': int(j.get('cached') or 0), 'tracks': out}
+
+    # ── search (v2.5): Spotify Web API with the user's own app, client-credentials ──
+    def _search_token(self):
+        with self._slock:
+            if self._stoken and time.time() < self._stoken_exp - 60:
+                return self._stoken
+            basic = base64.b64encode(f'{self.search_id}:{self.search_secret}'.encode()).decode()
+            req = urllib.request.Request(self.accounts_url + '/api/token', method='POST',
+                                         data=urllib.parse.urlencode({'grant_type': 'client_credentials'}).encode(),
+                                         headers={'Authorization': 'Basic ' + basic,
+                                                  'Content-Type': 'application/x-www-form-urlencoded'})
+            try:
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    j = json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                raise RuntimeError('Spotify refused the search app credentials' if e.code in (400, 401)
+                                   else f'Spotify accounts answered {e.code}')
+            self._stoken = j['access_token']
+            self._stoken_exp = time.time() + int(j.get('expires_in') or 3600)
+            return self._stoken
+
+    def search(self, q):
+        q = (q or '').strip()[:100]
+        if not (self.search_id and self.search_secret):
+            return False, 'search is not set up (run mixer/set_spotify_search.sh on the Pi)'
+        if not q:
+            return True, {'tracks': [], 'albums': [], 'playlists': []}
+        try:
+            tok = self._search_token()
+        except Exception as e:
+            return False, str(e)
+        url = self.webapi_url + '/v1/search?' + urllib.parse.urlencode(
+            {'q': q, 'type': 'track,album,playlist', 'limit': 10, 'market': self.market})
+        req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + tok})
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                j = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                self._stoken = None
+            ra = e.headers.get('Retry-After')
+            return False, f'Spotify search answered {e.code}' + (f' (retry in {ra} s)' if ra else '')
+        except Exception as e:
+            return False, f'Spotify search failed: {e}'
+        img = lambda imgs: next((i.get('url') for i in (imgs or []) if isinstance(i, dict)
+                                 and str(i.get('url', '')).startswith('https://')), None)
+        tracks = [{'uri': t['uri'], 'name': t.get('name') or '', 'artists': [a.get('name') for a in t.get('artists') or []],
+                   'album': (t.get('album') or {}).get('name') or '', 'album_uri': (t.get('album') or {}).get('uri') or '',
+                   'cover': img((t.get('album') or {}).get('images')), 'dur': int(t.get('duration_ms') or 0)}
+                  for t in ((j.get('tracks') or {}).get('items') or []) if t and ITEM_URI.match(str(t.get('uri') or ''))]
+        albums = [{'uri': a['uri'], 'name': a.get('name') or '', 'artists': [x.get('name') for x in a.get('artists') or []],
+                   'img': img(a.get('images')), 'year': (a.get('release_date') or '')[:4]}
+                  for a in ((j.get('albums') or {}).get('items') or []) if a and CONTEXT_URI.match(str(a.get('uri') or ''))]
+        playlists = [{'uri': p['uri'], 'name': p.get('name') or '', 'owner': (p.get('owner') or {}).get('display_name') or '',
+                      'img': img(p.get('images')), 'len': ((p.get('tracks') or p.get('items') or {}) or {}).get('total')}
+                     for p in ((j.get('playlists') or {}).get('items') or []) if p and CONTEXT_URI.match(str(p.get('uri') or ''))]
+        return True, {'tracks': tracks, 'albums': albums, 'playlists': playlists}
 
     # ── kill switch (service level) -- needs mixer/stage-messenger-spotify.sudoers ──
     def _systemctl(self, verb):

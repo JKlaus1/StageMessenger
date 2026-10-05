@@ -58,6 +58,11 @@ DEFAULTS = {
         'api':        'http://127.0.0.1:3678',
         'aux':        1,                              # the WING aux strip USB 1/2 feeds
         'config_dir': '/home/pi/.config/go-librespot',
+        # search (v2.5): your own Spotify developer app, client-credentials (app-only, never your
+        # account). Set with mixer/set_spotify_search.sh -- secrets live only in mixer_config.json.
+        'search_client_id':     '',
+        'search_client_secret': '',
+        'market':               'US',
     },
 }
 
@@ -1023,7 +1028,8 @@ def api_play():
 # ── Pi playback (v2.4): go-librespot "Stage Rig" -- see mixer/spotify.py ──
 @bp.route('/api/sp/cmd', methods=['POST'])
 def api_sp_cmd():
-    """{cmd: playpause|next|prev|seek|shuffle|repeat|disconnect, v}. Forwarded to go-librespot."""
+    """{cmd: playpause|next|prev|seek|shuffle|repeat|disconnect|play|queue, v}. Forwarded to go-librespot.
+    play v = {uri: playlist/album/Liked, skip?: track uri, shuffle?: bool}; queue v = track uri."""
     sp = _mixer.spotify
     if not sp:
         return jsonify(ok=False, err='Pi playback is not enabled'), 503
@@ -1032,10 +1038,42 @@ def api_sp_cmd():
     if cmd not in sp.CMDS:
         return jsonify(ok=False, err='bad command'), 400
     ok, err = sp.command(cmd, v)
-    if cmd in ('disconnect', 'shuffle', 'repeat', 'next', 'prev', 'playpause') or not ok:
+    if cmd in ('disconnect', 'shuffle', 'repeat', 'next', 'prev', 'playpause', 'play', 'queue') or not ok:
         print(f'[mixer] spotify: {cmd.upper()}{"" if v is None else " " + str(v)} from {_who()}'
               f'{"" if ok else " -- REFUSED: " + err}', flush=True)
     return (jsonify(ok=True), 200) if ok else (jsonify(ok=False, err=err), 409)
+
+
+@bp.route('/api/sp/playlists')
+def api_sp_playlists():
+    """Your playlists (go-librespot internal API), Liked Songs first. ?fresh=1 skips the 20 s cache."""
+    sp = _mixer.spotify
+    if not sp:
+        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+    ok, data = sp.playlists(fresh=request.args.get('fresh') == '1')
+    return (jsonify(ok=True, **data), 200) if ok else (jsonify(ok=False, err=data), 409)
+
+
+@bp.route('/api/sp/tracks')
+def api_sp_tracks():
+    """Songs of a playlist / album / Liked Songs. Poll while ready is false or cached < length."""
+    sp = _mixer.spotify
+    if not sp:
+        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+    ok, data = sp.tracks(request.args.get('uri', ''))
+    if ok:
+        return jsonify(ok=True, **data)
+    return jsonify(ok=False, err=data), (400 if data.startswith('not a') else 409)
+
+
+@bp.route('/api/sp/search')
+def api_sp_search():
+    """Spotify search (tracks, albums, playlists) via the user's own developer app."""
+    sp = _mixer.spotify
+    if not sp:
+        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+    ok, data = sp.search(request.args.get('q', ''))
+    return (jsonify(ok=True, **data), 200) if ok else (jsonify(ok=False, err=data), 409)
 
 
 @bp.route('/api/sp/service', methods=['POST'])
@@ -1126,7 +1164,7 @@ def init_mixer(app):
     # A fader drag is ~20 POSTs/s: keep the successful ones (and the meter/event plumbing) out of
     # the journal. Anything that was NOT 2xx still gets logged, so rejected control is visible.
     noisy = ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed', '/mixer/api/node', '/mixer/api/mute',
-             '/mixer/api/listenpos')
+             '/mixer/api/listenpos', '/mixer/api/sp/tracks', '/mixer/api/sp/playlists', '/mixer/api/sp/search')
     ansi, status = re.compile(r'\x1b\[[0-9;]*m'), re.compile(r'HTTP/[\d.]+" (\d{3}) ')
 
     def _quiet(r):
