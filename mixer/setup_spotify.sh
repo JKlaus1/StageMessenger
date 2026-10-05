@@ -1,7 +1,7 @@
 #!/bin/bash
 # Stage Messenger v2.4 step B -- go-librespot running, signed in, playing to WING AUX 1. Idempotent.
 #   1. ~/.config/go-librespot/config.yml -> mixer/go-librespot.yml
-#   2. systemd unit go-librespot (enabled, started)
+#   2. systemd unit go-librespot (enabled, started) + sudoers rule for the /mixer kill switch
 #   3. sign-in: shows the spotify.com pairing link + code and waits for you to approve (first run only)
 #   4. playback check: pick "Stage Rig" in the Spotify app and press play -> track + WING USB state
 # Needs step A (mixer/setup_pi_playback.sh) first. Run from the laptop with a TTY:
@@ -41,6 +41,21 @@ if cmp -s "$REPO/go-librespot.service" /etc/systemd/system/go-librespot.service;
 else sudo install -m 644 "$REPO/go-librespot.service" /etc/systemd/system/ && sudo systemctl daemon-reload && ok "unit installed"; fi
 sudo systemctl enable -q go-librespot && ok "enabled at boot"
 sudo systemctl restart go-librespot && ok "(re)started"
+say "2b. kill-switch permission (/mixer Restart / Sign out & re-pair)"
+SUD=/etc/sudoers.d/stage-messenger-spotify
+SMU=$(systemctl show -p User --value stage-messenger 2>/dev/null)
+[ "${SMU:-root}" = "pi" ] && ok "stage-messenger runs as pi" || echo "  NOTE stage-messenger runs as '${SMU:-root}', not pi -- the rule below is for pi"
+if [ -f "$REPO/stage-messenger-spotify.sudoers" ]; then
+  if sudo cmp -s "$REPO/stage-messenger-spotify.sudoers" "$SUD"; then ok "sudoers rule up to date"
+  elif sudo visudo -cf "$REPO/stage-messenger-spotify.sudoers" >/dev/null; then
+    sudo install -m 0440 -o root -g root "$REPO/stage-messenger-spotify.sudoers" "$SUD" && sudo visudo -c >/dev/null \
+      && ok "sudoers rule installed ($SUD)" || bad "sudoers install/validation failed"
+  else bad "stage-messenger-spotify.sudoers did not validate -- NOT installed"; fi
+  sudo -k                                   # drop the cached password: the next check must pass on the rule alone
+  sudo -n -l /usr/bin/systemctl restart go-librespot.service >/dev/null 2>&1 \
+    && ok "pi may restart/stop/start go-librespot without a password" || bad "passwordless go-librespot control NOT allowed"
+else bad "missing $REPO/stage-messenger-spotify.sudoers -- git pull first"; fi
+
 UP=""
 for i in $(seq 1 30); do [ "$(code_of /)" = "200" ] && { UP=1; break; }; sleep 1; done
 if [ -n "$UP" ]; then ok "control API answering on $API"

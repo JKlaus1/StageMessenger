@@ -268,6 +268,60 @@
     #rec-marker:disabled { border-color: var(--border); color: var(--muted); }
     #rec-marker.flash { background: var(--amber); color: #1a1000; }
     #rec-note { min-height: 1em; }
+    /* Pi playback (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 */
+    #sp-card.none { display: none; }
+    #sp-toggle { width: 100%; display: flex; align-items: center; gap: .5rem; background: transparent; border: 0; padding: 0; color: inherit; }
+    #sp-toggle .label { margin: 0; }
+    #sp-sum { flex: 1; text-align: right; font-size: .66rem; font-weight: 800; color: var(--green); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sp-sum.warn { color: var(--amber); }
+    #sp-caret { color: var(--muted); font-size: .8rem; transition: transform .15s; }
+    #sp-card.open #sp-caret { transform: rotate(180deg); }
+    #sp-body { display: none; margin-top: .55rem; }
+    #sp-card.open #sp-body { display: block; }
+    #sp-now { display: grid; grid-template-columns: 4.6rem 1fr auto; gap: .65rem; align-items: center; }
+    #sp-art { width: 4.6rem; height: 4.6rem; border-radius: 8px; background: var(--border); object-fit: cover; display: block; }
+    #sp-art.blank { visibility: hidden; }
+    #sp-now .meta { min-width: 0; display: flex; flex-direction: column; gap: .12rem; }
+    #sp-title { font-size: .98rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sp-artist { font-size: .78rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sp-album, #sp-sub { font-size: .64rem; color: var(--muted); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sp-sub { margin-top: .35rem; }
+    #sp-badge { align-self: start; font-size: .52rem; font-weight: 900; letter-spacing: .08em; padding: .18rem .4rem; border-radius: 5px;
+      background: var(--border); color: var(--muted); }
+    #sp-badge.play { background: var(--green); color: #001a0d; }
+    #sp-badge.warn { background: var(--amber); color: #1a1000; }
+    #sp-badge.bad { background: var(--red); color: #fff; }
+    #sp-times { display: flex; justify-content: space-between; font-size: .7rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--muted); }
+    #sp-ctl { display: grid; grid-template-columns: 1fr 1.2fr 1.5fr 1.2fr 1fr; gap: .4rem; margin-top: .45rem; }
+    #sp-ctl button { height: 3rem; border-radius: 11px; border: 1px solid var(--border); background: transparent; color: var(--text);
+      font-size: 1.1rem; font-weight: 900; }
+    #sp-ctl button.on { border-color: var(--green); color: var(--green); }
+    #sp-ctl #sp-pp { border-color: var(--green); color: var(--green); font-size: 1.2rem; }
+    #sp-ctl #sp-pp.playing { background: var(--green); color: #001a0d; }
+    #sp-ctl button:disabled { color: var(--muted); border-color: var(--border); background: transparent; }
+    #sp-ctl small { display: block; font-size: .5rem; letter-spacing: .06em; font-weight: 800; }
+    #sp-strip { margin-top: .55rem; }
+    #sp-strip .strip { border-top: 0; }
+    #sp-idle { font-size: .74rem; color: var(--muted); font-weight: 700; padding: .3rem 0 .1rem; }
+    #sp-pair { display: none; margin-top: .3rem; padding: .65rem; border: 1px solid var(--amber); border-radius: 12px; text-align: center; }
+    #sp-pair.show { display: block; }
+    #sp-pair .code { font-size: 1.9rem; font-weight: 900; letter-spacing: .14em; font-variant-numeric: tabular-nums; margin: .25rem 0; }
+    #sp-pair a { display: inline-block; margin-top: .25rem; padding: .55rem .9rem; border-radius: 10px; background: var(--amber); color: #1a1000;
+      font-weight: 900; font-size: .78rem; text-decoration: none; }
+    #sp-pair small { display: block; margin-top: .35rem; font-size: .62rem; color: var(--muted); font-weight: 700; }
+    #sp-kill { display: flex; gap: .4rem; margin-top: .55rem; }
+    #sp-disc { flex: 1; position: relative; overflow: hidden; height: 2.6rem; border-radius: 10px; border: 1px solid var(--red); background: transparent;
+      color: var(--red); font-size: .7rem; font-weight: 900; letter-spacing: .06em; touch-action: none; }
+    #sp-disc i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255, 60, 80, .25); }
+    #sp-disc.hold i { width: 100%; transition: width 1s linear; }
+    #sp-disc span { position: relative; }
+    #sp-disc:disabled { border-color: var(--border); color: var(--muted); }
+    #sp-more { flex: 0 0 3rem; height: 2.6rem; border-radius: 10px; border: 1px solid var(--border); background: transparent; color: var(--text); font-weight: 900; }
+    #sp-menu { display: none; gap: .4rem; margin-top: .4rem; }
+    #sp-menu.show { display: flex; }
+    #sp-menu button { flex: 1; height: 2.4rem; border-radius: 10px; border: 1px solid var(--text); background: transparent; color: var(--text); font-size: .7rem; font-weight: 800; }
+    #sp-menu #sp-repair { border-color: var(--red); color: var(--red); }
+    #sp-note { min-height: 1em; }
     /* playback (v2.3): one panel per card row */
     .rec-row { grid-template-areas: "id tm bt" "id in bt" "mk mk mk" "pb pb pb"; }
     .pb { grid-area: pb; }
@@ -407,6 +461,32 @@
         <label>On stop<select data-k="auto_stop"></select></label>
       </div>
       <div class="note small">The console switches inputs itself on these card actions (Keep = leave as is).</div>
+    </div>
+  </section>
+
+  <section class="card none" id="sp-card">
+    <button id="sp-toggle">
+      <span class="label">Pi playback</span>
+      <span id="sp-sum"></span>
+      <span id="sp-caret">&#9662;</span>
+    </button>
+    <div id="sp-body">
+      <div id="sp-pair"><div class="note small">Sign Stage Rig in to Spotify &mdash; on a phone signed in to your Premium account:</div>
+        <div class="code" id="sp-code"></div><a id="sp-link" target="_blank" rel="noopener">Open spotify.com/pair</a><small id="sp-exp"></small></div>
+      <div id="sp-now"><img id="sp-art" class="blank" alt=""><div class="meta"><b id="sp-title"></b><span id="sp-artist"></span>
+        <span id="sp-album"></span></div><span id="sp-badge"></span></div>
+      <div id="sp-idle"></div>
+      <div class="pb-scrub" id="sp-scrub"><div class="pb-bar"><div class="f"></div><div class="k"></div><div class="pb-bub"></div></div></div>
+      <div id="sp-times"><span id="sp-pos">0:00</span><span id="sp-dur">0:00</span></div>
+      <div id="sp-ctl"><button id="sp-shuf" title="Shuffle">&#8644;<small>SHUFFLE</small></button><button id="sp-prev" title="Previous">&#9198;&#xFE0E;</button>
+        <button id="sp-pp" title="Play / pause">&#9654;&#xFE0E;</button><button id="sp-next" title="Next">&#9197;&#xFE0E;</button>
+        <button id="sp-rep" title="Repeat">&#8635;<small>OFF</small></button></div>
+      <div id="sp-sub"></div>
+      <div id="sp-strip"></div>
+      <div id="sp-kill"><button id="sp-disc"><i></i><span>&#9167; HOLD TO DISCONNECT</span></button><button id="sp-more" title="More">&#8943;</button></div>
+      <div id="sp-menu"><button id="sp-restart">Restart Stage Rig</button><button id="sp-repair">Sign out &amp; re-pair</button></div>
+      <div class="note" id="sp-note"></div>
+      <div class="note small">Browse and pick music in the Spotify app (device: Stage Rig). Volume is fixed &mdash; use the AUX fader above.</div>
     </div>
   </section>
 
@@ -697,6 +777,7 @@
       : { lvl: `/bus/${mix}/fdr`, mute: `/bus/${mix}/mute`, name: `/bus/${mix}/name` };
     const b = `/${r.kind}/${r.n}`;
     const base = { name: b + '/name', solo: b + '/$solo' };
+    if (r.pi) return { ...base, lvl: b + '/fdr', mute: b + '/mute', chMute: null };   // Pi playback card: always the aux's own fader
     return mix === 'lr'
       ? { ...base, lvl: b + '/fdr', mute: b + '/mute', chMute: null }
       : { ...base, lvl: `${b}/send/${mix}/lvl`, on: `${b}/send/${mix}/on`, chMute: b + '/mute' };
@@ -726,9 +807,10 @@
       sendThrottled(A.lvl, d, final);
     });
     el.querySelector('.fw').prepend(r.fader);
-    if (r.master) r.sb.classList.add('none');
+    if (r.master || r.pi) r.sb.classList.add('none');
+    if (r.pi) el.querySelector('.hd').classList.add('none');
     if (r.master === 'bus') el.querySelector('.nm').addEventListener('click', () => selectMix(r.bus, true));
-    else if (!r.master) {
+    else if (!r.master && !r.pi) {
       el.querySelector('.nm').addEventListener('click', () => { if (!ordering) openSheet(r); });
       el.querySelector('.hd').addEventListener('pointerdown', e => startDrag(r, e));
     }
@@ -793,13 +875,13 @@
     }
     if (A.solo) r.sb.classList.toggle('on', !!S[A.solo]);
     if (r.master === 'main2') r.el.classList.toggle('hidden', mix !== 'lr');
-    else if (!r.master) {
+    else if (!r.master && !r.pi) {
       const inf = typeof d !== 'number' || d <= -89.9;
       r.el.classList.toggle('hidden', hideInf && inf && !r.fader.isDragging());
     }
   }
 
-  function paintAll() { rows.forEach(paintRow); paintMix(); paintMuteGroups(); paintBusSum(); }
+  function paintAll() { eachRow(paintRow); paintMix(); paintMuteGroups(); paintBusSum(); }
 
   function buildStrips() {
     const mc = $('master-card');
@@ -819,10 +901,10 @@
     if (r.master === 'bus') return M.b ? M.b[r.bus - 1] : null;
     if (r.master) return mix === 'lr' ? M.m[0] : M.b[mix - 1];
     const v = (r.kind === 'ch' ? M.c : M.a)[r.n - 1];
-    return v ? v[mix === 'lr' ? 1 : 0] : null;
+    return v ? v[(r.pi || mix === 'lr') ? 1 : 0] : null;
   }
   function paintMeters() {
-    for (const r of rows) {
+    for (const r of (spRow ? rows.concat(spRow) : rows)) {
       const d = meterOf(r);
       if (d == null) { r.lvl.classList.add('off'); continue; }
       r.lvl.classList.remove('off');
@@ -1167,6 +1249,169 @@
     });
   }
 
+  // ── Pi playback (v2.4): go-librespot "Stage Rig" (Spotify Connect) -> WING USB 1/2 -> AUX 1 ──
+  // State is polled on the Pi (mixer/spotify.py) and pushed as {t:'sp'}; the clock runs locally between pushes.
+  let SP = null, spGot = 0, spDrag = null, spHold = null;
+  let spRow = null;                            // pinned AUX strip (not in rows: order / solo / sheet ignore it)
+  function eachRow(f) { rows.forEach(f); if (spRow) f(spRow); }
+  if (LS.get('mixer.spOpen') !== '0') $('sp-card').classList.add('open');
+  $('sp-toggle').addEventListener('click', () => LS.set('mixer.spOpen', $('sp-card').classList.toggle('open') ? '1' : '0'));
+  const spSt = () => (SP && SP.status) || null;
+  const spTr = () => (spSt() && spSt().track) || null;
+  const spPlaying = () => { const s = spSt(); return !!(s && s.track && !s.stopped && !s.paused); };
+  function spLivePos() {
+    const t = spTr(); if (!t) return 0;
+    let p = t.pos;
+    if (spPlaying()) { const age = Date.now() - (Math.abs(Date.now() - SP.at) < 15000 ? SP.at : spGot); p += Math.max(0, age); }
+    return Math.min(p, t.dur || p);
+  }
+  function spShownPos() {
+    if (spDrag !== null) return spDrag;
+    if (spHold) {
+      const live = spLivePos();
+      if (Date.now() - spHold.t0 < 2000 && Math.abs(live - spHold.ms) > 3000) return spHold.ms;
+      spHold = null;
+    }
+    return spLivePos();
+  }
+  async function spCmd(cmd, v) {
+    const x = await postJSON('/mixer/api/sp/cmd', v === undefined ? { cmd } : { cmd, v });
+    return x ? x.json().catch(() => null) : null;
+  }
+  function spBuildStrip() {
+    const aux = (SP && SP.aux) || 1;
+    if (spRow && spRow.n === aux) return;
+    $('sp-strip').innerHTML = '';
+    spRow = { kind: 'aux', n: aux, pi: true };
+    buildRow(spRow, $('sp-strip'));
+    paintRow(spRow);
+  }
+  function applySp(v) {
+    const prevUri = spTr() && spTr().uri;
+    SP = v; spGot = Date.now();
+    if (spTr() && spTr().uri !== prevUri) spHold = null;
+    spBuildStrip(); paintSp();
+  }
+  function paintSp() {
+    const card = $('sp-card');
+    card.classList.toggle('none', !SP);
+    if (!SP) return;
+    const s = spSt(), t = spTr(), playing = spPlaying();
+    // badge + header summary
+    let badge = 'IDLE', cls = '', sum = '';
+    if (!SP.api) { badge = SP.svc === 'activating' ? 'STARTING' : 'OFFLINE'; cls = 'bad'; sum = 'Stage Rig offline'; }
+    else if (SP.auth) { badge = 'SIGN IN'; cls = 'warn'; sum = 'Sign in needed'; }
+    else if (!s) { badge = 'NOT SIGNED IN'; cls = 'warn'; sum = 'Not signed in'; }
+    else if (s.buffering && !s.paused) { badge = 'BUFFERING'; cls = 'warn'; }
+    else if (playing) { badge = 'PLAYING'; cls = 'play'; }
+    else if (t && s.paused) badge = 'PAUSED';
+    else if (t) badge = 'STOPPED';
+    if (!sum && t) sum = (playing ? '▶ ' : '❚❚ ') + t.name + (t.artists.length ? ' — ' + t.artists[0] : '');
+    $('sp-badge').textContent = badge; $('sp-badge').className = cls;
+    $('sp-sum').textContent = sum; $('sp-sum').classList.toggle('warn', cls === 'bad' || cls === 'warn');
+    // pairing panel
+    const a = SP.auth;
+    $('sp-pair').classList.toggle('show', !!a);
+    if (a) {
+      $('sp-code').textContent = a.code || '';
+      $('sp-link').href = a.url || 'https://spotify.com/pair';
+      const left = Math.max(0, Math.round((Date.parse(a.expires_at) - Date.now()) / 1000));
+      $('sp-exp').textContent = isFinite(left) && left > 0 ? `Code expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} — a new one appears automatically` : 'Waiting for a new code…';
+    }
+    // now playing
+    $('sp-now').style.display = t ? '' : 'none';
+    if (t) {
+      $('sp-title').textContent = t.name; $('sp-artist').textContent = t.artists.join(', ');
+      $('sp-album').textContent = t.album;
+      const art = $('sp-art');
+      if (t.cover && /^https:\/\//.test(t.cover)) { if (art.getAttribute('src') !== t.cover) art.src = t.cover; art.classList.remove('blank'); }
+      else { art.removeAttribute('src'); art.classList.add('blank'); }
+    }
+    $('sp-idle').textContent = !SP.api ? (SP.svc === 'activating' ? 'Stage Rig is starting…' : `Stage Rig (go-librespot) is not running${SP.svc && SP.svc !== '?' ? ' — service ' + SP.svc : ''}. Try Restart below.`)
+      : a ? '' : !s ? 'Waiting for sign-in…'
+      : !t ? 'Nothing playing. In the Spotify app, pick the device “Stage Rig” and press play.' : '';
+    $('sp-idle').style.display = $('sp-idle').textContent ? '' : 'none';
+    $('sp-sub').textContent = s ? [s.device || 'Stage Rig', s.user, s.context].filter(Boolean).join(' · ') : '';
+    // position + scrub
+    const dur = t ? t.dur : 0, pos = spShownPos();
+    const pct = dur ? `${Math.min(100, pos / dur * 100)}%` : '0';
+    const sc = $('sp-scrub');
+    sc.querySelector('.f').style.width = pct; sc.querySelector('.k').style.left = pct;
+    const bub = sc.querySelector('.pb-bub'); bub.style.left = pct; bub.textContent = clk(pos);
+    sc.classList.toggle('off', !dur || !piLink);
+    $('sp-pos').textContent = clk(pos); $('sp-dur').textContent = dur ? clk(dur) : '0:00';
+    // transport
+    const can = !!s && piLink;
+    const pp = $('sp-pp');
+    pp.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;&#xFE0E;'; pp.classList.toggle('playing', playing);
+    ['sp-pp', 'sp-prev', 'sp-next', 'sp-shuf', 'sp-rep'].forEach(id => { $(id).disabled = !can; });
+    $('sp-shuf').classList.toggle('on', !!(s && s.shuffle));
+    const rep = !s ? 'off' : s.rep_trk ? 'track' : s.rep_ctx ? 'context' : 'off';
+    $('sp-rep').innerHTML = `&#8635;<small>${rep === 'track' ? 'TRACK' : rep === 'context' ? 'ALL' : 'OFF'}</small>`;
+    $('sp-rep').classList.toggle('on', rep !== 'off');
+    $('sp-disc').disabled = !s || !piLink;
+    $('sp-repair').disabled = !SP.api || !piLink; $('sp-restart').disabled = !piLink;
+    if (SP.note) $('sp-note').textContent = SP.note;
+  }
+  // transport
+  $('sp-pp').addEventListener('click', () => spCmd('playpause'));
+  $('sp-prev').addEventListener('click', () => spCmd('prev'));
+  $('sp-next').addEventListener('click', () => spCmd('next'));
+  $('sp-shuf').addEventListener('click', () => spCmd('shuffle', !(spSt() && spSt().shuffle)));
+  $('sp-rep').addEventListener('click', () => {
+    const s = spSt(); const cur = !s ? 'off' : s.rep_trk ? 'track' : s.rep_ctx ? 'context' : 'off';
+    spCmd('repeat', { off: 'context', context: 'track', track: 'off' }[cur]);
+  });
+  // scrub: drag shows the target, release seeks once; the target is held until the Pi confirms it
+  (() => {
+    const sc = $('sp-scrub'), bar = sc.querySelector('.pb-bar');
+    const at = e => { const b = bar.getBoundingClientRect(), d = (spTr() && spTr().dur) || 0;
+      return b.width ? Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)) * d : 0; };
+    sc.addEventListener('pointerdown', e => {
+      if (!spTr() || !spTr().dur) return;
+      e.preventDefault(); try { sc.setPointerCapture(e.pointerId); } catch (x) {}
+      spDrag = at(e); sc.classList.add('drag'); paintSp();
+    });
+    sc.addEventListener('pointermove', e => { if (spDrag === null) return; spDrag = at(e); paintSp(); });
+    sc.addEventListener('pointerup', e => {
+      if (spDrag === null) return;
+      const ms = Math.round(at(e)); spDrag = null; sc.classList.remove('drag');
+      spHold = { ms, t0: Date.now() }; paintSp(); spCmd('seek', ms);
+    });
+    sc.addEventListener('pointercancel', () => { spDrag = null; sc.classList.remove('drag'); paintSp(); });
+  })();
+  // kill switch: hold 1 s = disconnect (go-librespot stop); menu = restart service / sign out & re-pair
+  (() => {
+    const b = $('sp-disc'); let t = null, fired = false;
+    const cancel = () => { clearTimeout(t); t = null; b.classList.remove('hold'); };
+    b.addEventListener('pointerdown', e => {
+      if (b.disabled) return;
+      e.preventDefault(); fired = false; b.classList.add('hold');
+      t = setTimeout(async () => {
+        t = null; fired = true; b.classList.remove('hold');
+        $('sp-note').textContent = 'Disconnecting Stage Rig…';
+        const r = await spCmd('disconnect');
+        if (r && r.ok) $('sp-note').textContent = 'Disconnected — playback stopped and the app lost the speaker.';
+      }, 1000);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, cancel));
+    b.addEventListener('click', () => { if (fired) { fired = false; return; } $('sp-note').textContent = 'Hold DISCONNECT for a second.'; });
+  })();
+  $('sp-more').addEventListener('click', () => $('sp-menu').classList.toggle('show'));
+  async function spService(action, msg) {
+    $('sp-menu').classList.remove('show'); $('sp-note').textContent = msg;
+    const x = await postJSON('/mixer/api/sp/service', { action });
+    if (x) { const r = await x.json().catch(() => null); if (r && r.ok) $('sp-note').textContent = action === 'repair' ? 'Signed out — approve the new code above.' : 'Stage Rig restarted.'; }
+  }
+  $('sp-restart').addEventListener('click', () => {
+    if (confirm('Restart Stage Rig (go-librespot)?\nPlayback stops; the Spotify login is kept.')) spService('restart', 'Restarting Stage Rig…');
+  });
+  $('sp-repair').addEventListener('click', () => {
+    const u = spSt() && spSt().user;
+    if (confirm(`Sign Stage Rig out of Spotify${u ? ' (' + u + ')' : ''}?\nYou will need to approve a new pairing code to use it again.`)) spService('repair', 'Signing out…');
+  });
+  setInterval(() => { if (SP && (spPlaying() || SP.auth || spHold)) paintSp(); }, 250);
+
   function paintBusSum() {
     const n = busRows.filter(r => S[`/bus/${r.bus}/mute`]).length;
     $('bus-sum').textContent = n ? `${n} MUTED` : '';
@@ -1258,7 +1503,7 @@
       b.innerHTML = `<small>MG ${g}</small><span></span>`;
       b.addEventListener('click', () => {
         const a = `/mgrp/${g}/mute`, v = S[a] ? 0 : 1;
-        S[a] = v; postSet(a, v); paintMuteGroups(); rows.forEach(paintRow);
+        S[a] = v; postSet(a, v); paintMuteGroups(); eachRow(paintRow);
       });
       box.appendChild(b);
     }
@@ -1979,7 +2224,7 @@
   function onUpd(a, v) {
     if (localSetAt[a] && Date.now() - localSetAt[a] < 500) return;
     S[a] = v;
-    if (a === '/io/altsw') { paintAlt(); rows.forEach(paintRow); if (sheetRow) paintSheet(); return; }
+    if (a === '/io/altsw') { paintAlt(); eachRow(paintRow); if (sheetRow) paintSheet(); return; }
     if (a.startsWith('/cards/wlive/auto_')) { paintAlt(); return; }
     if (a.startsWith('/cards/')) {
       const m = a.match(/^\/cards\/wlive\/(\d)\/\$stat\/(etime|state)$/);
@@ -1991,6 +2236,7 @@
     if (m) {
       const r = rowIndex[`/${m[1]}/${m[2]}/`];
       if (r) paintRow(r);
+      if (spRow && m[1] === spRow.kind && +m[2] === spRow.n) paintRow(spRow);
       if (r && r === sheetRow) paintSheet();
       if (a.endsWith('/$solo')) soloChanged();
       return;
@@ -2000,7 +2246,7 @@
       const bm = a.match(/^\/bus\/(\d+)\//);
       if (bm && busRows[bm[1] - 1]) { paintRow(busRows[bm[1] - 1]); paintBusSum(); }
     }
-    else if (a.startsWith('/mgrp/')) { paintMuteGroups(); rows.forEach(paintRow); }
+    else if (a.startsWith('/mgrp/')) { paintMuteGroups(); eachRow(paintRow); }
   }
 
   function applySnap(m) {
@@ -2008,10 +2254,11 @@
     paintSheet();
     setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
     soloCount = countSolos(); $('solo-clear').classList.toggle('show', soloCount > 0);
-    OVR = new Set(m.ovr || []); rows.forEach(paintRow);
+    OVR = new Set(m.ovr || []); eachRow(paintRow);
     $('patch-note').textContent = m.patch || '';
     ORDER = m.order || []; applyOrder();
     recM = m.recm || {}; recS = m.recs || {}; paintAlt();
+    if ('sp' in m) applySp(m.sp);
     for (let n = 1; n <= 2; n++) recSeen[n] = [S[`/cards/wlive/${n}/$stat/etime`] || 0, Date.now()];
     paintRec();
     if (typeof m.listen_target === 'number' && m.listen_target > 0) listenTarget = m.listen_target;
@@ -2051,10 +2298,11 @@
       else if (m.t === 'feeds') { feeds = m.feeds; paintFeeds(); }
       else if (m.t === 'feed') { feedId = m.id; $('feed-sel').value = feedId; }
       else if (m.t === 'patch') $('patch-note').textContent = m.note;
-      else if (m.t === 'ovr') { OVR = new Set(m.v || []); rows.forEach(paintRow); }
+      else if (m.t === 'ovr') { OVR = new Set(m.v || []); eachRow(paintRow); }
       else if (m.t === 'order') { ORDER = m.v || []; applyOrder(); }
       else if (m.t === 'recm') { recM[m.c] = m.v || []; paintRec(); }
       else if (m.t === 'recs') { recS[m.c] = m.v || []; paintRec(); }
+      else if (m.t === 'sp') applySp(m.v);
     };
   }
   $('link-reload').addEventListener('click', () => location.reload());

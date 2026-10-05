@@ -52,6 +52,13 @@ DEFAULTS = {
         'turn_api_token': '',        # never in git
         'turn_ttl':       86400,
     },
+    # Pi playback (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 (see mixer/spotify.py)
+    'spotify': {
+        'enabled':    True,
+        'api':        'http://127.0.0.1:3678',
+        'aux':        1,                              # the WING aux strip USB 1/2 feeds
+        'config_dir': '/home/pi/.config/go-librespot',
+    },
 }
 
 
@@ -171,12 +178,25 @@ class Mixer:
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
 
         self.meters = Meters(cfg['mixer_ip'], wanted=lambda: bool(self.hub.subs))
+        self.spotify = None                           # Pi playback is optional: never blocks the mixer
+        if (cfg.get('spotify') or {}).get('enabled'):
+            try:
+                from .spotify import Spotify
+                self.spotify = Spotify(cfg['spotify'], self.hub.publish, lambda: bool(self.hub.subs))
+            except Exception as e:
+                print(f'[mixer] Pi playback disabled: {e}', flush=True)
 
     def start(self):
         self.wing.start()
         self.meters.start()
         threading.Thread(target=self._meter_pump, daemon=True, name='meter-pump').start()
         threading.Thread(target=self._routing_poll, daemon=True, name='routing-poll').start()
+        if self.spotify:
+            try:
+                self.spotify.start()
+            except Exception as e:
+                print(f'[mixer] Pi playback disabled: {e}', flush=True)
+                self.spotify = None
 
     def _strips(self):
         return [('ch', i) for i in range(1, N_CH + 1)] + [('aux', i) for i in range(1, N_AUX + 1)]
@@ -638,6 +658,7 @@ class Mixer:
             'listen_target': self.cfg.get('listen_target_s', 0.8),
             'recm':   self.rec_markers,
             'recs':   self.rec_sessions,
+            'sp':     self.spotify.snapshot() if self.spotify else None,
         }
 
 
@@ -997,6 +1018,41 @@ def api_play():
     shown = '' if n is None else ' ' + (_clock(n) if action == 'seek' else str(n))
     print(f'[mixer] playback: {action.upper()}{shown} card {L} (was {st}) from {_who()}', flush=True)
     return jsonify(ok=True, card=card)
+
+
+# ── Pi playback (v2.4): go-librespot "Stage Rig" -- see mixer/spotify.py ──
+@bp.route('/api/sp/cmd', methods=['POST'])
+def api_sp_cmd():
+    """{cmd: playpause|next|prev|seek|shuffle|repeat|disconnect, v}. Forwarded to go-librespot."""
+    sp = _mixer.spotify
+    if not sp:
+        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+    d = request.get_json(silent=True) or {}
+    cmd, v = str(d.get('cmd', '')), d.get('v')
+    if cmd not in sp.CMDS:
+        return jsonify(ok=False, err='bad command'), 400
+    ok, err = sp.command(cmd, v)
+    if cmd in ('disconnect', 'shuffle', 'repeat', 'next', 'prev', 'playpause') or not ok:
+        print(f'[mixer] spotify: {cmd.upper()}{"" if v is None else " " + str(v)} from {_who()}'
+              f'{"" if ok else " -- REFUSED: " + err}', flush=True)
+    return (jsonify(ok=True), 200) if ok else (jsonify(ok=False, err=err), 409)
+
+
+@bp.route('/api/sp/service', methods=['POST'])
+def api_sp_service():
+    """Kill switch, service level: {action: restart|repair}. repair = sign out (forget the saved
+    login) and restart -> a new pairing code shows on the page."""
+    sp = _mixer.spotify
+    if not sp:
+        return jsonify(ok=False, err='Pi playback is not enabled'), 503
+    action = str((request.get_json(silent=True) or {}).get('action', ''))
+    if action not in ('restart', 'repair'):
+        return jsonify(ok=False, err='bad action'), 400
+    print(f'[mixer] spotify: SERVICE {action.upper()} from {_who()}', flush=True)
+    ok, err = sp.service(action)
+    if not ok:
+        print(f'[mixer] spotify: SERVICE {action.upper()} FAILED: {err}', flush=True)
+    return (jsonify(ok=True), 200) if ok else (jsonify(ok=False, err=err), 500)
 
 
 # ── WebRTC: browsers set up their connection through these (all behind the /mixer guard) ──
