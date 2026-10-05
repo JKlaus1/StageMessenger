@@ -1,5 +1,10 @@
 """
-WING remote mixer + listen-back for Stage Messenger.
+WING / X32 / M32 remote mixer + listen-back for Stage Messenger.
+
+The console driver is chosen by mixer_config.json "mixer_type": "wing" | "x32" | "auto" (auto asks
+mixer_ip for /xinfo on 10023, then for a WING reply on 2223; the last one seen is remembered). Both
+drivers speak the WING address dialect to this module and the page; x32.py translates. Features the
+X32 path doesn't have yet are switched off through CAPS (the page sizes itself from them).
 
 Everything lives under /mixer so one Cloudflare Access path rule protects the page,
 the API and the audio stream. Mixer traffic deliberately does NOT use Socket.IO: the
@@ -20,9 +25,10 @@ import urllib.request
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory, abort
 
-from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, N_SD, SRC_GROUPS, SRC_LEAVES, parse_describe
+from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, N_SD, SRC_GROUPS, SRC_LEAVES, parse_describe, osc_msg, osc_parse
 from .listen import Listener
 from .meters import Meters
+from . import x32 as x32mod
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(os.path.dirname(HERE), 'mixer_config.json')
@@ -30,6 +36,7 @@ STATE_PATH = os.path.join(os.path.dirname(HERE), 'mixer_state.json')
 
 DEFAULTS = {
     'mixer_ip':        '192.168.0.91',
+    'mixer_type':      'auto',   # 'wing' | 'x32' (X32 / M32 family) | 'auto'
     'remote_enabled':  False,
     'usb_patch':       True,     # the Pi owns WING USB outs 1-43 and 47-48
     'ambient': {                 # USB 43: room/stage ambient mic
@@ -109,6 +116,48 @@ SRC_NAMES = {'LCL': 'Local', 'A': 'AES A', 'B': 'AES B', 'C': 'AES C', 'SC': 'St
              'USR': 'User', 'OSC': 'Osc', 'AUX': 'Aux'}
 
 
+# ── console capabilities (the page sizes itself from these) ──────────────────────
+CAPS = {
+    'wing': {'console': 'wing', 'model': 'WING', 'nch': N_CH, 'naux': N_AUX, 'nbus': N_BUS, 'nmtx': N_MTX,
+             'nmg': 8, 'main2': 'Main 2', 'sheet': True, 'recorder': 'wlive', 'listen': True, 'spotify': True,
+             'alt': True},
+    'x32':  {'console': 'x32', 'model': 'X32', 'nch': x32mod.N_CH, 'naux': x32mod.N_AUX, 'nbus': x32mod.N_BUS,
+             'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': False, 'recorder': None,
+             'listen': False, 'spotify': False, 'alt': False},
+}
+
+
+def wing_probe(ip, timeout=0.6):
+    """True if a WING answers an OSC query on 2223."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.settimeout(timeout)
+        s.sendto(osc_msg('/main/1/name'), (ip, 2223))
+        d, _ = s.recvfrom(4096)
+        return osc_parse(d)[0] == '/main/1/name'
+    except (OSError, ValueError):
+        return False
+    finally:
+        s.close()
+
+
+def pick_console(cfg, last):
+    """-> ('wing'|'x32', xinfo or None, how)"""
+    want = str(cfg.get('mixer_type', 'auto')).lower()
+    if want in ('x32', 'm32'):
+        return 'x32', x32mod.probe(cfg['mixer_ip']), 'configured'
+    if want == 'wing':
+        return 'wing', None, 'configured'
+    info = x32mod.probe(cfg['mixer_ip'])
+    if info:
+        return 'x32', info, 'auto: answered /xinfo'
+    if wing_probe(cfg['mixer_ip']):
+        return 'wing', None, 'auto: WING answered'
+    kind = last if last in CAPS else 'wing'
+    return kind, None, f'auto: nothing answered, using last ({kind})'
+
+
 # ── SSE hub ─────────────────────────────────────────────────────────────────────
 
 class Hub:
@@ -165,12 +214,22 @@ class Mixer:
         self.ambient_label = 'Ambient mic'
         self.node_cache = {}
         self._ovr_lock = threading.RLock()
+        self._state_raw = self._read_state_file()
+        self.console, info, how = pick_console(cfg, self._state_raw.get('console'))
+        self.x32 = self.console == 'x32'
+        self.caps = dict(CAPS[self.console])
+        if info:
+            self.caps['model'] = info.get('model') or self.caps['model']
+            self.caps['fw'] = info.get('fw', '')
+        print(f"[mixer] console: {self.caps['model']} at {cfg['mixer_ip']} ({how})", flush=True)
         self._load_state()
         self.patch_note = ''
         self._last_patch = 0.0
         self._patch_lock = threading.Lock()
-        self.wing = Wing(cfg['mixer_ip'], on_update=self._on_update,
-                         on_conn=self._on_conn, on_loaded=self._on_loaded)
+        # 'self.wing' is the console driver (wing.Wing or x32.X32 -- same interface)
+        Driver = x32mod.X32 if self.x32 else Wing
+        self.wing = Driver(cfg['mixer_ip'], on_update=self._on_update,
+                           on_conn=self._on_conn, on_loaded=self._on_loaded)
         rtc = cfg.get('rtc', {})
         self.rtc_enabled = bool(rtc.get('enabled'))
         self._turn, self._turn_exp, self._turn_lock = None, 0.0, threading.Lock()
@@ -184,9 +243,13 @@ class Mixer:
                                  cushion_s=cfg.get('cushion_s', 0.5), max_queue_s=cfg.get('max_queue_s', 1.0),
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
 
-        self.meters = Meters(cfg['mixer_ip'], wanted=lambda: bool(self.hub.subs))
+        if self.x32:
+            from .x32meters import X32Meters
+            self.meters = X32Meters(self.wing, wanted=lambda: bool(self.hub.subs))
+        else:
+            self.meters = Meters(cfg['mixer_ip'], wanted=lambda: bool(self.hub.subs))
         self.spotify = None                           # the Spotify card is optional: never blocks the mixer
-        if (cfg.get('spotify') or {}).get('enabled'):
+        if (cfg.get('spotify') or {}).get('enabled') and self.caps['spotify']:
             try:
                 from .spotify import Spotify
                 self.spotify = Spotify(cfg['spotify'], self.hub.publish, lambda: bool(self.hub.subs),
@@ -207,11 +270,14 @@ class Mixer:
                 self.spotify = None
 
     def _strips(self):
-        return [('ch', i) for i in range(1, N_CH + 1)] + [('aux', i) for i in range(1, N_AUX + 1)]
+        return [('ch', i) for i in range(1, self.caps['nch'] + 1)] + [('aux', i) for i in range(1, self.caps['naux'] + 1)]
 
     def _routing_poll(self):
         """The WING pushes nothing when a channel is re-patched, so re-read every strip's input
-        patch and the physical-input settings (gain/48V/name) behind it every few seconds."""
+        patch and the physical-input settings (gain/48V/name) behind it every few seconds.
+        (The X32 pushes re-patches and mutes -- nothing to poll.)"""
+        if self.x32:
+            return
         while True:
             time.sleep(3)
             if not self.wing.loaded:
@@ -232,6 +298,8 @@ class Mixer:
         return [f'/{k}/{n}/$mute' for k, n in self._strips()]
 
     def refresh_mutes(self, delay=0.15):
+        if self.x32:
+            return                                    # the X32 pushes every member's mix/on
         def go():
             time.sleep(delay)
             self.wing.poke(self._mute_addrs())
@@ -246,23 +314,38 @@ class Mixer:
     def _tag_list(tags):
         return [t.strip() for t in str(tags or '').split(',') if t.strip()]
 
-    def _load_state(self):
-        self.overrides, self.order = {}, []
+    @staticmethod
+    def _read_state_file():
         try:
             with open(STATE_PATH) as f:
                 data = json.load(f)
-            self.overrides = {k: list(v) for k, v in data.get('overrides', {}).items()}
-            self.order = self.clean_order(data.get('order', []))
+            return data if isinstance(data, dict) else {}
         except FileNotFoundError:
-            pass
+            return {}
         except Exception as e:
             print(f'[mixer] bad {STATE_PATH}: {e}', flush=True)
+            return {}
+
+    @property
+    def _order_key(self):
+        return 'order' if self.console == 'wing' else f'order_{self.console}'   # each console keeps its own
+
+    def _load_state(self):
+        data = self._state_raw
+        self.overrides = {k: list(v) for k, v in data.get('overrides', {}).items()} if not self.x32 else {}
+        self.order = self.clean_order(data.get(self._order_key, []))
+        if data.get('console') != self.console:
+            self._write_state()
 
     def _write_state(self):
         try:
+            data = dict(self._state_raw)                 # keep the other console's order
+            data.update({'overrides': self.overrides if not self.x32 else data.get('overrides', {}),
+                         self._order_key: self.order, 'console': self.console})
+            self._state_raw = data
             tmp = STATE_PATH + '.tmp'
             with open(tmp, 'w') as f:
-                json.dump({'overrides': self.overrides, 'order': self.order}, f)
+                json.dump(data, f)
             os.replace(tmp, STATE_PATH)
         except OSError as e:
             print(f'[mixer] could not save {STATE_PATH}: {e}', flush=True)
@@ -272,9 +355,8 @@ class Mixer:
         self.hub.publish({'t': 'ovr', 'v': sorted(self.overrides)})
 
     # ── channel display order (page only; shared by every device, never sent to the WING) ──
-    @staticmethod
-    def clean_order(order):
-        valid = {f'{k}/{n}' for k, n in [('ch', i) for i in range(1, N_CH + 1)] + [('aux', i) for i in range(1, N_AUX + 1)]}
+    def clean_order(self, order):
+        valid = {f'{k}/{n}' for k, n in self._strips()}
         out = []
         for k in order if isinstance(order, list) else []:
             if isinstance(k, str) and k in valid and k not in out:
@@ -314,6 +396,8 @@ class Mixer:
     def check_overrides(self):
         """Restore tags for groups that are no longer engaged (released at the console, another app,
         or the page). A tag already back (scene recall) just clears the record."""
+        if self.x32:
+            return                                    # X32 override is a plain unmute; nothing to restore
         for b, removed in list(self.overrides.items()):
             tags = self._tag_list(self.wing.get(b + '/tags'))
             for g in list(removed):
@@ -333,6 +417,11 @@ class Mixer:
         $mute 2 (group-muted)    -> remove the engaged groups' tags (override), verify it unmuted
         otherwise                -> toggle the strip's own 'mute'."""
         b = f'/{kind}/{n}'
+        if self.x32:
+            ok, action, st = self.wing.toggle_mute(kind, n)
+            if action == 'override':
+                print(f'[mixer] mute {b}: group override -> $mute {st}', flush=True)
+            return ok, action, st
         if b in self.overrides:
             self._restore_tags(b)
             return True, 'regroup', self.wing.get(b + '/$mute')
@@ -438,6 +527,9 @@ class Mixer:
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
+        if self.x32:
+            self.hub.publish({'t': 'upd', 'a': addr, 'v': v})
+            return
         if addr.startswith('/cards/wlive/'):
             if addr.endswith(('/etime', '/sdfree')):      # pushed 7-10x/s while recording / playing
                 now = time.time()
@@ -468,6 +560,11 @@ class Mixer:
         self.hub.publish({'t': 'conn', 'ok': ok})
 
     def _on_loaded(self):
+        if self.x32:
+            st = self.wing.snapshot()
+            print(f"[mixer] {self.caps['model']} loaded: {len(st)} values", flush=True)
+            self.hub.publish({'t': 'snap', **self.snapshot()})
+            return
         self.wing.query_many(self._source_addrs(), timeout=1.5)     # physical-input settings
         if self.overrides:                                          # after a restart / reconnect
             self.wing.query_many([b + '/tags' for b in self.overrides]
@@ -488,6 +585,8 @@ class Mixer:
         return fallback
 
     def feeds(self):
+        if not self.caps['listen']:
+            return []
         out = []
         for fid, ul, ur, grp, il, ir in feed_table():
             if fid == 'main1':
@@ -533,7 +632,7 @@ class Mixer:
 
     def ensure_patch(self, force=False):
         """Make WING USB outs match feed_table + ambient. Writes only what differs."""
-        if not self.cfg.get('usb_patch', True) or not self.wing.connected:
+        if self.x32 or not self.cfg.get('usb_patch', True) or not self.wing.connected:
             return
         with self._patch_lock:
             if not force and time.time() - self._last_patch < 10:   # never fight a recall loop
@@ -658,7 +757,8 @@ class Mixer:
             'feed':   self.feed_id,
             'listen': self.listener.status(),
             'patch':  self.patch_note,
-            'nbus':   N_BUS,
+            'nbus':   self.caps['nbus'],
+            'caps':   self.caps,
             'meters': self.meters.levels is not None,
             'srcgroups': SRC_GROUPS,
             'ovr':    sorted(self.overrides),
@@ -697,9 +797,23 @@ def _log_rejects(resp):
     return resp
 
 
+def _not_here(feature):
+    """409 for features the connected console's driver doesn't do yet (None when it does)."""
+    if feature == 'sheet' and not _mixer.caps['sheet'] or feature == 'recorder' and not _mixer.caps['recorder'] \
+            or feature == 'listen' and not _mixer.caps['listen']:
+        return jsonify(ok=False, err=f"not available on the {_mixer.caps['model']} yet"), 409
+    return None
+
+
 @bp.route('', strict_slashes=False)
 def page():
-    resp = send_from_directory(HERE, 'mixer.html')
+    # The page builds its strips before the first snapshot arrives, so it gets the console's
+    # capabilities up front (a later snapshot with different caps makes it reload).
+    with open(os.path.join(HERE, 'mixer.html'), encoding='utf-8') as f:
+        html = f.read()
+    caps = json.dumps(_mixer.caps, separators=(',', ':')).replace('</', '<\\/')
+    html = html.replace('const CAPS = null; /*CAPS*/', f'const CAPS = {caps}; /*CAPS*/', 1)
+    resp = Response(html, mimetype='text/html')
     resp.headers['Cache-Control'] = 'no-store'
     return resp
 
@@ -759,6 +873,8 @@ def api_feed():
 
 @bp.route('/api/patch', methods=['POST'])
 def api_patch():
+    if _not_here('sheet'):
+        return _not_here('sheet')
     d = request.get_json(silent=True) or {}
     kind, grp = str(d.get('kind', '')), str(d.get('grp', ''))
     try:
@@ -773,6 +889,8 @@ def api_patch():
 
 @bp.route('/api/srcnames')
 def api_srcnames():
+    if _not_here('sheet'):
+        return _not_here('sheet')
     grp = request.args.get('g', '')
     if grp not in SRC_COUNT:
         return jsonify(ok=False, err='bad group'), 400
@@ -781,6 +899,8 @@ def api_srcnames():
 
 @bp.route('/api/node')
 def api_node():
+    if _not_here('sheet'):
+        return _not_here('sheet')
     path = request.args.get('path', '')
     if not _node_ok(path):
         return jsonify(ok=False, err='bad node'), 400
@@ -790,6 +910,8 @@ def api_node():
 
 @bp.route('/api/nodeset', methods=['POST'])
 def api_nodeset():
+    if _not_here('sheet'):
+        return _not_here('sheet')
     d = request.get_json(silent=True) or {}
     path, key = str(d.get('path', '')), str(d.get('key', ''))
     if not _node_ok(path):
@@ -811,7 +933,7 @@ def api_mute():
         n = int(d.get('n'))
     except (TypeError, ValueError):
         return jsonify(ok=False, err='bad number'), 400
-    lim = {'ch': N_CH, 'aux': N_AUX}.get(kind)
+    lim = {'ch': _mixer.caps['nch'], 'aux': _mixer.caps['naux']}.get(kind)
     if not lim or not 1 <= n <= lim:
         return jsonify(ok=False, err='bad strip'), 400
     ok, action, state = _mixer.toggle_mute(kind, n)
@@ -828,12 +950,16 @@ def api_order():
 
 @bp.route('/api/repatch', methods=['POST'])
 def api_repatch():
+    if _not_here('listen'):
+        return _not_here('listen')
     threading.Thread(target=_mixer.ensure_patch, kwargs={'force': True}, daemon=True).start()
     return jsonify(ok=True)
 
 
 @bp.route('/stream.mp3')
 def stream():
+    if _not_here('listen'):
+        return _not_here('listen')
     threading.Thread(target=_mixer.ensure_patch, daemon=True).start()
     q = _mixer.listener.add_client(request.args.get('id', ''))
 
@@ -864,6 +990,8 @@ def api_rec():
     """WING-LIVE recorder: {action: rec|stop|marker, card: 1|2|'all'}. 'all' (markers only) marks
     every card that is recording; if none is, every card that is playing or paused (marker at the
     play head). Every press is logged -- it's the show recording."""
+    if _not_here('recorder'):
+        return _not_here('recorder')
     d = request.get_json(silent=True) or {}
     action, card = str(d.get('action', '')), d.get('card')
     playback = False
@@ -934,6 +1062,8 @@ def api_play():
     marker jump while playing is done as a seek to the marker's time). 'mark' adds a marker at the play
     head, 'movemark n' moves marker n there, 'delmark n' deletes it -- any state but recording; these
     write to the SD card. Every press is logged."""
+    if _not_here('recorder'):
+        return _not_here('recorder')
     d = request.get_json(silent=True) or {}
     action = str(d.get('action', ''))
     try:
@@ -1127,7 +1257,7 @@ def api_rtc_config():
 
 @bp.route('/api/rtc/whep', methods=['POST'])
 def api_rtc_whep():
-    if not _mixer.rtc_enabled:
+    if not _mixer.rtc_enabled or not _mixer.caps['listen']:
         return Response('WebRTC disabled', 404, mimetype='text/plain')
     if (request.content_length or 0) > 65536:
         return Response('offer too large', 413, mimetype='text/plain')
@@ -1177,7 +1307,7 @@ def init_mixer(app):
     _mixer.select_feed('main1')
     app.register_blueprint(bp)
     _mixer.start()
-    print(f"[mixer] WING at {_mixer.cfg['mixer_ip']}; remote "
+    print(f"[mixer] {_mixer.caps['model']} at {_mixer.cfg['mixer_ip']}; remote "
           f"{'ENABLED' if _mixer.cfg.get('remote_enabled') else 'disabled'}", flush=True)
     # A fader drag is ~20 POSTs/s: keep the successful ones (and the meter/event plumbing) out of
     # the journal. Anything that was NOT 2xx still gets logged, so rejected control is visible.

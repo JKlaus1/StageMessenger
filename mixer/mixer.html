@@ -228,7 +228,7 @@
     .auto-row select { width: 100%; margin-top: .15rem; padding: .4rem; font-size: .74rem; }
     .nm i.alt { color: var(--amber); }
     /* recorder (WING-LIVE SD card) */
-    #rec-card.none { display: none; }
+    #rec-card.none, #listen-card.none, #patch-foot.none { display: none; }
     #rec-toggle { width: 100%; display: flex; align-items: center; gap: .5rem; background: transparent; border: 0;
       color: var(--text); padding: .1rem 0; }
     #rec-toggle .label { margin: 0; }
@@ -478,7 +478,7 @@
 </head>
 <body>
   <header>
-    <h1>WING Mixer</h1>
+    <h1 id="title">WING Mixer</h1>
     <div class="hdr-right">
       <span id="alt-badge" title="The console is using every channel's ALT input">INPUTS ON ALT</span>
       <button id="solo-clear" title="Clear all solos">SOLO ✕</button>
@@ -487,7 +487,7 @@
   </header>
   <div id="link-banner" role="alert"><span id="link-msg"></span><button id="link-reload">RELOAD</button></div>
 
-  <section class="card">
+  <section class="card" id="listen-card">
     <div class="label">Listen</div>
     <div class="listen-row">
       <button id="listen-btn">&#9654; Listen</button>
@@ -590,7 +590,7 @@
     <div id="strips"></div>
   </section>
 
-  <footer>
+  <footer id="patch-foot">
     <span id="patch-note"></span>
     <button id="repatch-btn" title="Re-check and rewrite the Pi-owned WING USB outputs">Re-patch USB</button>
   </footer>
@@ -686,7 +686,13 @@
 
 <script>
 (() => {
-  const NBUS = 16, NCH = 40, NAUX = 8;
+  // Console capabilities: the Pi fills CAPS in when it serves this page (mixer/__init__.py page()).
+  const CAPS = null; /*CAPS*/
+  const CAP = Object.assign({ console: 'wing', model: 'WING', nch: 40, naux: 8, nbus: 16, nmg: 8, main2: 'Main 2',
+                              sheet: true, listen: true, alt: true }, CAPS || {});
+  const X32 = CAP.console === 'x32';
+  const NBUS = CAP.nbus, NCH = CAP.nch, NAUX = CAP.naux;
+  const ALT_TAG = X32 ? 'PLAY' : 'ALT';      // X32: routing REC/PLAY switch plays the WING's MAIN/ALT role
   const MON_FEED = 'mon1';
   const $ = id => document.getElementById(id);
 
@@ -822,13 +828,14 @@
     return fallback;
   }
   const SRC = { LCL: 'Local', A: 'AES A', B: 'AES B', C: 'AES C', SC: 'StageCon', USB: 'USB', CRD: 'Card',
-                MOD: 'Module', PLAY: 'Player', AES: 'AES/EBU', USR: 'User', OSC: 'Osc', AUX: 'Aux' };
+                MOD: 'Module', PLAY: 'Player', AES: 'AES/EBU', USR: 'User', OSC: 'Osc', AUX: 'Aux',
+                FX: 'FX', BUS: 'Bus', TB: 'Talkback' };
   const onAlt = r => !r.master && S[`/${r.kind}/${r.n}/in/set/altsrc`] === 1;
   function srcOf(r) {                  // the source the strip is actually hearing (main, or alt when switched)
     const b = `/${r.kind}/${r.n}/in/conn/`, alt = onAlt(r);
     const g = S[b + (alt ? 'altgrp' : 'grp')], i = S[b + (alt ? 'altin' : 'in')];
-    if (typeof g !== 'string' || !g || g === 'OFF') return alt ? 'ALT · off' : '';
-    return (alt ? 'ALT · ' : '') + (SRC[g] || g) + (i != null ? ' ' + i : '');
+    if (typeof g !== 'string' || !g || g === 'OFF') return alt ? ALT_TAG + ' · off' : '';
+    return (alt ? ALT_TAG + ' · ' : '') + (SRC[g] || g) + (i ? ' ' + i : '');
   }
 
   // WING palette, col 1..18 (hex from a real console session; see wing-mcp-server notes)
@@ -838,7 +845,7 @@
     const c = S[base + '/$col'] || S[base + '/col'];
     return (typeof c === 'number' && c >= 1 && c <= 18) ? PALETTE[c - 1] : 'transparent';
   }
-  const NMG = 8;
+  const NMG = CAP.nmg;
   function groupsOf(r) {              // mute groups from tags "#M1,#M2"
     const t = S[`/${r.kind}/${r.n}/tags`];
     return typeof t === 'string' ? (t.match(/#M(\d)/g) || []).map(x => +x.slice(2)) : [];
@@ -900,7 +907,7 @@
     if (r.pi) el.querySelector('.hd').classList.add('none');
     if (r.master === 'bus') el.querySelector('.nm').addEventListener('click', () => selectMix(r.bus, true));
     else if (!r.master && !r.pi) {
-      el.querySelector('.nm').addEventListener('click', () => { if (!ordering) openSheet(r); });
+      el.querySelector('.nm').addEventListener('click', () => { if (!ordering && CAP.sheet) openSheet(r); });
       el.querySelector('.hd').addEventListener('pointerdown', e => startDrag(r, e));
     }
     r.sb.addEventListener('click', () => {
@@ -915,13 +922,13 @@
       else if (!r.master) {                       // channel/aux: console semantics incl. group override
         const b = `/${r.kind}/${r.n}`, st = muteState(r);
         if (st.piOvr) { OVR.delete(b); S[b + '/$mute'] = 2; }
-        else if (st.grp) { OVR.add(b); S[b + '/$mute'] = 0; }
+        else if (st.grp) { if (!X32) OVR.add(b); S[b + '/$mute'] = 0; }   // X32: a plain unmute is the override
         else { S[b + '/mute'] = st.own ? 0 : 1; S[b + '/$mute'] = st.own ? 0 : 1; }
         localSetAt[b + '/$mute'] = localSetAt[b + '/mute'] = Date.now();
         postJSON('/mixer/api/mute', { kind: r.kind, n: r.n })
           .then(x => x && x.json()).then(res => {
             if (res && res.action === 'override-failed') { OVR.delete(b); paintRow(r);
-              alert('The WING did not unmute this channel - the group mute is unchanged.'); }
+              alert(`The ${CAP.model} did not unmute this channel - the group mute is unchanged.`); }
           }).catch(() => {});
       }
       else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); }
@@ -932,7 +939,7 @@
   }
 
   function rowTag(r) {
-    if (r.master === 'main2') return 'MAIN 2';
+    if (r.master === 'main2') return X32 ? CAP.main2 : 'MAIN 2';
     if (r.master === 'bus') return 'BUS ' + r.bus;
     if (r.master) return mix === 'lr' ? 'MAIN 1' : 'BUS ' + mix;
     return (r.kind === 'ch' ? 'CH ' : 'AUX ') + r.n;
@@ -941,7 +948,7 @@
   function paintRow(r) {
     const A = addrs(r);
     const tag = rowTag(r);
-    r.nb.textContent = nameOf(A.name, r.master === 'main2' ? 'Main 2' : r.master === 'bus' ? 'Bus ' + r.bus
+    r.nb.textContent = nameOf(A.name, r.master === 'main2' ? CAP.main2 : r.master === 'bus' ? 'Bus ' + r.bus
       : r.master ? (mix === 'lr' ? 'LR' : 'Bus ' + mix) : tag);
     const st = muteState(r), gm = !!(st && st.grp);
     const chMuted = !!(st && A.chMute && (st.own || st.grp));          // bus view: muted at the channel
@@ -2596,7 +2603,7 @@
     const d = $('status-dot'), t = $('status-text');
     if (!piLink) { d.className = 'off'; t.textContent = 'No link to Pi'; return; }
     d.className = conn ? (loaded ? 'on' : 'load') : 'off';
-    t.textContent = conn ? (loaded ? 'WING' : 'Loading') : 'WING offline';
+    t.textContent = conn ? (loaded ? CAP.model : 'Loading') : CAP.model + ' offline';
   }
   let rowIndex = {};
   function reindex() {             // '/ch/N/' -> row
@@ -2632,6 +2639,11 @@
   }
 
   function applySnap(m) {
+    const SS = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return '1'; } },
+                 set(k, v) { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch (e) {} } };
+    if (m.caps && (m.caps.console !== CAP.console || m.caps.nch !== CAP.nch)) {   // console changed: rebuild once
+      if (!SS.get('mixer.capsReload')) { SS.set('mixer.capsReload', '1'); location.reload(); return; }
+    } else SS.set('mixer.capsReload', '');
     S = m.state || {}; feeds = m.feeds || []; feedId = m.feed || feedId; srcGroups = m.srcgroups || srcGroups;
     paintSheet();
     setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
@@ -2693,6 +2705,11 @@
     hideInf = !hideInf; $('hide-btn').classList.toggle('on', hideInf); paintAll();
   });
   $('repatch-btn').addEventListener('click', () => postJSON('/mixer/api/repatch', {}));
+
+  // console-specific chrome
+  $('title').textContent = CAP.model + ' Mixer';
+  if (!CAP.listen) { $('listen-card').classList.add('none'); $('patch-foot').classList.add('none'); }
+  if (X32) $('alt-badge').textContent = 'INPUTS ON PLAYBACK';
 
   buildRec(); buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll(); connect();
 })();
