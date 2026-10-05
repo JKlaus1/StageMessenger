@@ -55,7 +55,10 @@
     .pk div { height: 6px; background: #0f0f22; border-radius: 3px; overflow: hidden; }
     .pk span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--green) 70%, var(--amber) 88%, var(--red)); transition: width .12s linear; }
     #listen-note { margin-top: .45rem; font-size: .68rem; color: var(--muted); min-height: 1em; }
-    #lag-note { margin-top: .2rem; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1em; }
+    .listen-foot { display: flex; align-items: center; gap: .5rem; margin-top: .2rem; }
+    #lag-note { flex: 1; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1em; }
+    #lag-note .rtc { color: var(--green); font-weight: 800; }
+    #mode-btn { flex: none; padding: .25rem .55rem; font-size: .58rem; }
     #lag-note b { color: var(--text); }
     #lag-note b.hi { color: var(--amber); }
 
@@ -261,7 +264,7 @@
     </div>
     <div class="pk"><div><span id="pk-l"></span></div><div><span id="pk-r"></span></div></div>
     <div id="listen-note"></div>
-    <div id="lag-note"></div>
+    <div class="listen-foot"><div id="lag-note"></div><button class="toggle" id="mode-btn" title="Low-latency WebRTC audio, falling back to MP3">Low latency</button></div>
     <audio id="player" preload="none"></audio>
   </section>
 
@@ -862,35 +865,177 @@
     sel.value = feedId;
   }
   $('feed-sel').addEventListener('change', e => { feedBeforeSolo = null; selectFeed(e.target.value); });
-  // Latency (v1.10). Each stream gets an id so the Pi can say where it started; the page
-  // measures how far behind live it plays, keeps only listenTarget seconds buffered (plays 5%
-  // fast or jumps ahead to shed the rest), and reconnects if audio piles up in the network
-  // (the tunnel holds it there, out of reach of both the Pi and the browser).
-  let streamId = '', playStartAt = 0, lastJump = 0, lastRestart = 0, seekOK = true;
-  let listenTarget = 0.8, netMin = Infinity, netHigh = 0, catchups = 0;
-  try { player.preservesPitch = true; player.webkitPreservesPitch = true; } catch (e) {}
+  // ── Low-latency listen (v2.0): WebRTC first (Opus via MediaMTX, ~0.3-0.8 s), MP3 as fallback ──
+  // The page asks the Pi for ICE servers (Cloudflare TURN when configured), sends a complete offer
+  // through /mixer/api/rtc/whep (no trickle), and plays the track in the same <audio> element.
+  // Anything that stops WebRTC from connecting drops to the MP3 stream automatically.
+  let mode = '', listenPref = 'auto';
+  try { listenPref = localStorage.getItem('mixer.listenMode') || 'auto'; } catch (e) {}
+  let pc = null, rtcSession = null, rtcStream = null, rtcGen = 0, rtcTimer = null;
+  let rtcDrops = 0, rtcLastFail = 0, rtcWhy = '', rtcTurn = false;
+  const setLag = html => { $('lag-note').innerHTML = html; };
+  function paintModeBtn() {
+    $('mode-btn').textContent = listenPref === 'mp3' ? 'MP3 only' : 'Low latency';
+    $('mode-btn').classList.toggle('on', listenPref !== 'mp3');
+  }
+  paintModeBtn();
+  $('mode-btn').addEventListener('click', () => {
+    listenPref = listenPref === 'mp3' ? 'auto' : 'mp3';
+    try { localStorage.setItem('mixer.listenMode', listenPref); } catch (e) {}
+    rtcLastFail = 0; paintModeBtn();
+    if (wantPlay) startPlay();
+  });
+
   function startPlay(catchup) {
     wantPlay = true;
-    catchups = catchup ? catchups + 1 : 0;
-    streamId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-    playStartAt = Date.now(); netMin = Infinity; netHigh = 0;
-    $('lag-note').textContent = '';
-    player.src = '/mixer/stream.mp3?id=' + streamId;
-    player.play().catch(err => { $('listen-note').textContent = 'Playback blocked: ' + err.message; });
     $('listen-btn').classList.add('on'); $('listen-btn').innerHTML = '&#9632; Stop';
+    // after a failure, stay on MP3 for a minute instead of paying the failed attempt every tap
+    if (!catchup && listenPref !== 'mp3' && Date.now() - rtcLastFail > 60000) startRTC();
+    else startMP3(catchup);
   }
   function stopPlay() {
-    wantPlay = false; streamId = ''; $('lag-note').textContent = '';
+    wantPlay = false; streamId = ''; mode = '';
+    closeRTC();
     player.pause(); player.removeAttribute('src'); player.load();
+    setLag('');
     $('listen-btn').classList.remove('on'); $('listen-btn').innerHTML = '&#9654; Listen';
   }
   $('listen-btn').addEventListener('click', () => wantPlay ? stopPlay() : startPlay());
   $('resync-btn').addEventListener('click', () => { if (wantPlay) startPlay(); });
-  player.addEventListener('error', () => { if (wantPlay) setTimeout(() => wantPlay && startPlay(), 2000); });
-  player.addEventListener('ended', () => { if (wantPlay) setTimeout(() => wantPlay && startPlay(), 1000); });
+  player.addEventListener('error', () => { if (wantPlay && mode === 'mp3') setTimeout(() => wantPlay && startMP3(), 2000); });
+  player.addEventListener('ended', () => { if (wantPlay && mode === 'mp3') setTimeout(() => wantPlay && startMP3(), 1000); });
+  window.addEventListener('pagehide', () => closeRTC());
+
+  function closeRTC() {
+    rtcGen++;
+    clearTimeout(rtcTimer);
+    if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+    if (rtcSession) { fetch(rtcSession, { method: 'DELETE', keepalive: true }).catch(() => {}); rtcSession = null; }
+    if (rtcStream) { rtcStream.getTracks().forEach(t => t.stop()); rtcStream = null; }
+    if (player.srcObject) player.srcObject = null;
+  }
+  function iceDone(p, ms) {
+    return new Promise(res => {
+      if (p.iceGatheringState === 'complete') return res();
+      const t = setTimeout(res, ms);
+      p.addEventListener('icegatheringstatechange', () => { if (p.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+    });
+  }
+  async function startRTC() {
+    if (!window.RTCPeerConnection || !window.MediaStream) { rtcFail('this browser has no WebRTC'); return; }
+    closeRTC();
+    const gen = rtcGen;
+    mode = 'rtc'; streamId = '';
+    player.pause(); player.removeAttribute('src');
+    rtcStream = new MediaStream();
+    player.srcObject = rtcStream;
+    player.play().catch(() => {});              // still inside the tap: unlocks playback for the track
+    setLag('Connecting low-latency audio…');
+    try {
+      const cr = await fetch('/mixer/api/rtc/config', { cache: 'no-store', redirect: 'manual' });
+      const cfg = cr.ok ? await cr.json() : { enabled: false, why: 'HTTP ' + cr.status };
+      if (!cfg.enabled) throw new Error(cfg.why || 'unavailable');
+      if (gen !== rtcGen) return;
+      rtcTurn = !!cfg.turn;
+      const p = pc = new RTCPeerConnection({ iceServers: cfg.iceServers || [] });
+      p.addTransceiver('audio', { direction: 'recvonly' });
+      p.ontrack = e => {
+        if (gen !== rtcGen) return;
+        rtcStream.addTrack(e.track);
+        player.play().catch(err => setLag('Tap Listen again to start audio (' + err.message + ')'));
+      };
+      p.onconnectionstatechange = () => rtcState(p, gen);
+      await p.setLocalDescription(await p.createOffer());
+      await iceDone(p, 3000);                    // complete offer: includes the TURN relay candidate
+      if (gen !== rtcGen) return;
+      const r = await fetch('/mixer/api/rtc/whep', { method: 'POST', redirect: 'manual',
+        headers: { 'Content-Type': 'application/sdp' }, body: p.localDescription.sdp });
+      const body = await r.text();
+      if (r.status !== 201) throw new Error(body.slice(0, 80) || 'HTTP ' + r.status);
+      if (gen !== rtcGen) return;
+      rtcSession = r.headers.get('Location');
+      await p.setRemoteDescription({ type: 'answer', sdp: body });
+      clearTimeout(rtcTimer);
+      rtcTimer = setTimeout(() => {
+        if (gen === rtcGen && pc && pc.connectionState !== 'connected') rtcFail(rtcTurn ? 'could not connect' : 'could not connect (no TURN relay configured)');
+      }, 10000);
+    } catch (e) {
+      if (gen === rtcGen) rtcFail(e.message || String(e));
+    }
+  }
+  function rtcState(p, gen) {
+    if (gen !== rtcGen || p !== pc) return;
+    const st = p.connectionState;
+    if (st === 'connected') { clearTimeout(rtcTimer); rtcDrops = 0; }
+    else if (st === 'failed') rtcReconnect('connection failed');
+    else if (st === 'disconnected') {
+      clearTimeout(rtcTimer);
+      rtcTimer = setTimeout(() => { if (gen === rtcGen && pc && pc.connectionState !== 'connected') rtcReconnect('connection lost'); }, 4000);
+    }
+  }
+  function rtcReconnect(why) {
+    if (!wantPlay) return;
+    if (++rtcDrops > 2) { rtcFail(why); return; }
+    setLag('Reconnecting low-latency audio…');
+    startRTC();
+  }
+  function rtcFail(why) {
+    closeRTC();
+    rtcLastFail = Date.now(); rtcWhy = why;
+    if (wantPlay) startMP3();
+  }
+  async function pollRTC() {                   // readout: jitter buffer, round trip, route
+    if (!wantPlay || mode !== 'rtc' || !pc || pc.connectionState !== 'connected') return;
+    const p = pc;
+    let jb = null, rtt = null, lost = 0, recv = 0, route = '', pairId = null;
+    try {
+      const stats = await p.getStats();
+      stats.forEach(r => {
+        if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+          if (r.jitterBufferEmittedCount) jb = r.jitterBufferDelay / r.jitterBufferEmittedCount;
+          lost = r.packetsLost || 0; recv = r.packetsReceived || 0;
+        }
+        if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+      });
+      stats.forEach(r => {
+        const sel = pairId ? r.id === pairId : (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded');
+        if (r.type === 'candidate-pair' && sel) {
+          if (typeof r.currentRoundTripTime === 'number') rtt = r.currentRoundTripTime;
+          const lc = stats.get(r.localCandidateId);
+          if (lc) route = lc.candidateType === 'relay' ? 'via Cloudflare relay' : (lc.candidateType === 'host' ? 'direct (local)' : 'direct');
+        }
+      });
+    } catch (e) { return; }
+    if (p !== pc) return;
+    const f = x => x.toFixed(2);
+    const est = (jb || 0) + (rtt || 0) / 2 + 0.1;          // + ~0.1 s capture/encode on the Pi
+    setLag(`<span class="rtc">LOW LATENCY</span> · ≈<b>${est.toFixed(1)} s</b> behind live`
+      + (jb != null ? ` · buffer ${f(jb)}` : '') + (rtt != null ? ` · RTT ${f(rtt)}` : '')
+      + (route ? ' · ' + route : '')
+      + (recv && lost / (recv + lost) > 0.01 ? ` · ${(100 * lost / (recv + lost)).toFixed(1)}% lost` : ''));
+  }
+  setInterval(pollRTC, 1000);
+
+  // ── MP3 fallback (v1.10 latency control). Each stream gets an id so the Pi can say where it
+  // started; the page measures how far behind live it plays, keeps only listenTarget seconds
+  // buffered (plays 5% fast or jumps ahead to shed the rest), and reconnects if audio piles up
+  // in the network (the tunnel holds it there, out of reach of both the Pi and the browser).
+  let streamId = '', playStartAt = 0, lastJump = 0, lastRestart = 0, seekOK = true;
+  let listenTarget = 0.8, netMin = Infinity, netHigh = 0, catchups = 0;
+  try { player.preservesPitch = true; player.webkitPreservesPitch = true; } catch (e) {}
+  function startMP3(catchup) {
+    closeRTC();
+    mode = 'mp3';
+    catchups = catchup ? catchups + 1 : 0;
+    streamId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    playStartAt = Date.now(); netMin = Infinity; netHigh = 0;
+    setLag(listenPref === 'mp3' ? '' : (rtcWhy && Date.now() - rtcLastFail < 60000 ? 'MP3 · low latency unavailable: ' + rtcWhy : ''));
+    player.src = '/mixer/stream.mp3?id=' + streamId;
+    player.play().catch(err => { $('listen-note').textContent = 'Playback blocked: ' + err.message; });
+  }
   const aheadOf = () => { const b = player.buffered; return b.length ? Math.max(0, b.end(b.length - 1) - player.currentTime) : 0; };
   setInterval(() => {                          // keep only listenTarget seconds buffered in the browser
-    if (!wantPlay || player.paused || !player.buffered.length) return;
+    if (!wantPlay || mode !== 'mp3' || player.paused || !player.buffered.length) return;
     const T = listenTarget, ahead = aheadOf();
     if (ahead > T + 2 && Date.now() - lastJump > 3000) {
       lastJump = Date.now();
@@ -900,14 +1045,14 @@
         if (Math.abs(player.currentTime - before) < 0.2) seekOK = false;   // this browser won't seek a live stream
         else return;
       }
-      if (ahead > T + 4 && Date.now() - lastRestart > 15000) { lastRestart = Date.now(); startPlay(true); return; }
+      if (ahead > T + 4 && Date.now() - lastRestart > 15000) { lastRestart = Date.now(); startMP3(true); return; }
     }
     const rate = ahead > T + 0.3 ? 1.05 : (ahead <= T + 0.05 ? 1 : player.playbackRate);
     if (player.playbackRate !== rate) player.playbackRate = rate;
   }, 500);
 
   async function pollLag() {
-    if (!wantPlay || !streamId || player.paused || player.readyState < 3 || Date.now() - playStartAt < 3000) return;
+    if (!wantPlay || mode !== 'mp3' || !streamId || player.paused || player.readyState < 3 || Date.now() - playStartAt < 3000) return;
     const id = streamId, t0 = performance.now();
     let j = null;
     try {
@@ -922,13 +1067,14 @@
     netMin = Math.min(netMin, net);
     netHigh = net > netMin + 2 ? netHigh + 1 : 0;
     const f = x => x.toFixed(1);
-    $('lag-note').innerHTML = `Behind live <b class="${lag > 3 ? 'hi' : ''}">${f(lag)} s</b>`
+    setLag((listenPref === 'mp3' ? 'MP3' : 'MP3 fallback') + ` · behind live <b class="${lag > 3 ? 'hi' : ''}">${f(lag)} s</b>`
       + ` · network ${f(net)} · buffer ${f(ahead)}`
       + (player.playbackRate > 1 ? ' · catching up' : '')
       + (j.drops ? ` · Pi skipped ${j.drops}×` : '')
-      + (catchups ? ` · reconnected ${catchups}×` : '');
+      + (catchups ? ` · reconnected ${catchups}×` : '')
+      + (listenPref !== 'mp3' && rtcWhy ? ` · low latency unavailable: ${rtcWhy}` : ''));
     if (netHigh >= 4 && Date.now() - lastRestart > 20000) {   // audio stuck in the network: start fresh at live
-      lastRestart = Date.now(); startPlay(true);
+      lastRestart = Date.now(); startMP3(true);
     }
   }
   setInterval(pollLag, 1000);
@@ -939,7 +1085,7 @@
     $('pk-l').style.width = st.running ? pct(st.peak[0]) : '0%';
     $('pk-r').style.width = st.running ? pct(st.peak[1]) : '0%';
     $('listen-note').textContent = st.error ? st.error
-      : st.running ? `Streaming · ${st.listeners} listener${st.listeners === 1 ? '' : 's'} · USB ${st.pair[0] + 1}/${st.pair[1] + 1}`
+      : st.running ? `Streaming · ${st.listeners + (st.rtc || 0)} listener${st.listeners + (st.rtc || 0) === 1 ? '' : 's'} · USB ${st.pair[0] + 1}/${st.pair[1] + 1}`
         + (feedBeforeSolo ? ' · following solo' : '')
         + (st.overruns ? ` · ${st.overruns} capture overrun${st.overruns === 1 ? '' : 's'}` : '')
       : (wantPlay ? 'Starting…' : '');

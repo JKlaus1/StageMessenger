@@ -14,6 +14,12 @@ Latency (v1.10): the cushion is cushion_s (default 0.5 s, was 1.5 s); each liste
 is capped at max_queue_s -- a listener that falls behind is flushed back to live instead of
 hearing everything late. Every listener has an id and a start offset in the encoded stream,
 so position(id) lets the page measure exactly how far behind live it is playing.
+
+Low-latency (v2.0): when rtc_url is set, the same ffmpeg also encodes Opus and publishes it to
+MediaMTX over RTSP (ffmpeg tee muxer, onfail=ignore -- if MediaMTX is down the MP3 side carries
+on). WebRTC listeners live in MediaMTX, so rtc_probe() (the MediaMTX API) tells the watchdog how
+many there are: capture keeps running while anyone listens either way. hold_rtc() starts capture
+ahead of a WebRTC handshake, because MediaMTX refuses a reader until the stream is publishing.
 """
 import collections
 import os
@@ -95,7 +101,8 @@ _RATES = [44100, 48000, 32000]
 
 
 class Listener:
-    def __init__(self, capture_cmd=None, bitrate='128k', on_status=None, cushion_s=0.5, max_queue_s=1.0):
+    def __init__(self, capture_cmd=None, bitrate='128k', on_status=None, cushion_s=0.5, max_queue_s=1.0,
+                 rtc_url='', opus_bitrate='96k', rtc_probe=None):
         self.capture_cmd = capture_cmd or [
             'arecord', '-D', 'hw:WING', '-c', str(CHANNELS),
             '-f', 'S24_3LE', '-r', '48000', '-t', 'raw', '--buffer-time=500000',
@@ -105,6 +112,14 @@ class Listener:
         self.cushion_bytes = int(self.bps * max(0.0, float(cushion_s)))
         self.max_queue_bytes = int(self.bps * max(0.25, float(max_queue_s)))
         self._pos = 0                        # bytes encoded since the pipeline started
+        self.rtc_url = rtc_url or ''
+        self.opus_bitrate = opus_bitrate
+        self.rtc_probe = rtc_probe or (lambda: (False, False, 0))   # -> (api_ok, ready, readers)
+        self.rtc_readers = 0
+        self.rtc_ready = False
+        self._hold_until = 0.0
+        self._started_at = 0.0
+        self._restarts = 0
         self.on_status = on_status or (lambda st: None)
         self.pair = (0, 1)
         shm = '/dev/shm' if os.path.isdir('/dev/shm') else tempfile.gettempdir()
@@ -167,10 +182,30 @@ class Listener:
                 self._idle_since = time.time()
         self._status()
 
+    # ── WebRTC (MediaMTX) side ──
+    def hold_rtc(self, seconds=20):
+        """Keep capture running for `seconds` (covers a WebRTC handshake) and start it if idle."""
+        self._hold_until = max(self._hold_until, time.time() + seconds)
+        with self.lock:
+            need_start = not self.running
+        if need_start:
+            self._start()
+
+    def wait_rtc_ready(self, timeout=6.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            api_ok, ready, readers = self.rtc_probe()
+            if ready:
+                self.rtc_ready = True
+                return True
+            time.sleep(0.2)
+        return False
+
     def status(self):
         return {
             'running':   self.running,
             'listeners': len(self.clients),
+            'rtc':       self.rtc_readers,
             'error':     self.error,
             'pair':      list(self.pair),
             'peak':      [round(p, 1) for p in self.peak],
@@ -195,15 +230,24 @@ class Listener:
             self._pos = 0
             self._gen += 1
             gen = self._gen
+            self._started_at = time.time()
+        if self.rtc_url:          # one encoder, two outputs: MP3 for HTTP listeners + Opus for MediaMTX
+            out = ['-map', '0:a', '-map', '0:a',
+                   '-c:a:0', 'libmp3lame', '-b:a:0', self.bitrate, '-reservoir:a:0', '0',
+                   '-c:a:1', 'libopus', '-b:a:1', self.opus_bitrate, '-application:a:1', 'lowdelay',
+                   '-flush_packets', '1', '-f', 'tee',
+                   '[select=0:f=mp3:onfail=ignore]pipe:1'
+                   f'|[select=1:f=rtsp:rtsp_transport=tcp:onfail=ignore:use_fifo=1]{self.rtc_url}']
+        else:
+            out = ['-c:a', 'libmp3lame', '-b:a', self.bitrate, '-reservoir', '0',
+                   '-flush_packets', '1', '-f', 'mp3', 'pipe:1']
         try:
             pick = subprocess.Popen([sys.executable, os.path.join(HERE, 'picker.py'), self.ctl]
                                     + self.capture_cmd,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             enc = subprocess.Popen(
                 ['ffmpeg', '-hide_banner', '-loglevel', 'error',
-                 '-f', 's24le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0',
-                 '-c:a', 'libmp3lame', '-b:a', self.bitrate, '-reservoir', '0',
-                 '-flush_packets', '1', '-f', 'mp3', 'pipe:1'],
+                 '-f', 's24le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0'] + out,
                 stdin=pick.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
             pick.stdout.close()                 # ffmpeg owns the pipe now
         except OSError as e:
@@ -216,12 +260,12 @@ class Listener:
         threading.Thread(target=self._watchdog, args=(gen,), daemon=True, name='listen-wd').start()
         self._status()
 
-    def _teardown(self):
+    def _teardown(self, keep_clients=False):
         with self.lock:
             self.running = False
             self._gen += 1
             procs, self._procs = self._procs, []
-            clients = list(self.clients)
+            clients = [] if keep_clients else list(self.clients)
         for p in procs:
             try:
                 p.kill(); p.wait(timeout=2)
@@ -277,12 +321,39 @@ class Listener:
                 else:
                     c.put(chunk)
 
+    def _restart_encoder(self, why):
+        """Respawn capture+encoder without dropping MP3 listeners (their HTTP streams just continue;
+        MP3 decoders don't mind a new encoder). Used when MediaMTX lost the Opus publisher."""
+        self._restarts += 1
+        print(f'[mixer] listen: restarting encoder ({why})', flush=True)
+        self._teardown(keep_clients=True)
+        self._start()
+
     def _watchdog(self, gen):
+        last_probe, not_ready_since, idle_since = 0.0, None, None
         while gen == self._gen:
             time.sleep(0.25)
+            now = time.time()
+            if self.rtc_url and now - last_probe >= 2:
+                last_probe = now
+                api_ok, ready, readers = self.rtc_probe()
+                self.rtc_readers, self.rtc_ready = readers, ready
+                # MediaMTX is up but our Opus publisher isn't there (MediaMTX restarted, or it was
+                # down when capture started): reconnect -- but only once MediaMTX itself answers.
+                if api_ok and not ready and now - self._started_at > 6:
+                    not_ready_since = not_ready_since or now
+                    if now - not_ready_since > 4:
+                        self._restart_encoder('MediaMTX has no stream')
+                        return
+                else:
+                    not_ready_since = None
             with self.lock:
-                idle = self._idle_since
-            if idle and time.time() - idle > 10:
-                self._teardown(); self._status()
-                return
+                busy = bool(self.clients)
+            if busy or self.rtc_readers > 0 or now < self._hold_until:
+                idle_since = None
+            else:
+                idle_since = idle_since or now
+                if now - idle_since > 10:
+                    self._teardown(); self._status()
+                    return
             self._status()                      # carries the peak meter (4 Hz)

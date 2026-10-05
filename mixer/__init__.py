@@ -15,6 +15,8 @@ import queue
 import re
 import threading
 import time
+import urllib.error
+import urllib.request
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory, abort
 
@@ -39,6 +41,17 @@ DEFAULTS = {
     'cushion_s':       0.5,      # audio handed to a new listener up front (was 1.5)
     'max_queue_s':     1.0,      # a listener further behind than this on the Pi is skipped to live
     'listen_target_s': 0.8,      # how much audio the page keeps buffered; it trims anything beyond
+    # low-latency listen-back via WebRTC (v2.0): MediaMTX on the Pi + Cloudflare TURN for remote ears
+    'rtc': {
+        'enabled':        True,
+        'rtsp':           'rtsp://127.0.0.1:8554/listen',
+        'api':            'http://127.0.0.1:9997',
+        'whep':           'http://127.0.0.1:8889/listen/whep',
+        'opus_bitrate':   '96k',
+        'turn_key_id':    '',        # Cloudflare Realtime TURN key -- set these in mixer_config.json,
+        'turn_api_token': '',        # never in git
+        'turn_ttl':       86400,
+    },
 }
 
 
@@ -142,7 +155,12 @@ class Mixer:
         self._patch_lock = threading.Lock()
         self.wing = Wing(cfg['mixer_ip'], on_update=self._on_update,
                          on_conn=self._on_conn, on_loaded=self._on_loaded)
+        rtc = cfg.get('rtc', {})
+        self.rtc_enabled = bool(rtc.get('enabled'))
+        self._turn, self._turn_exp, self._turn_lock = None, 0.0, threading.Lock()
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
+                                 rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
+                                 opus_bitrate=rtc.get('opus_bitrate', '96k'), rtc_probe=self.rtc_probe,
                                  cushion_s=cfg.get('cushion_s', 0.5), max_queue_s=cfg.get('max_queue_s', 1.0),
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
 
@@ -487,6 +505,55 @@ class Mixer:
             self.hub.publish({'t': 'patch', 'note': self.patch_note})
 
     # ── snapshot ──
+    # ── WebRTC listen-back (MediaMTX) ──
+    def rtc_probe(self):
+        """(api_ok, stream_ready, reader_count) for the MediaMTX 'listen' path."""
+        try:
+            with urllib.request.urlopen(self.cfg['rtc']['api'] + '/v3/paths/get/listen', timeout=0.6) as r:
+                p = json.load(r)
+            return True, bool(p.get('ready')), len(p.get('readers') or [])
+        except urllib.error.HTTPError:
+            return True, False, 0          # MediaMTX answered: path just isn't publishing
+        except Exception:
+            return False, False, 0
+
+    def ice_servers(self):
+        """ICE servers for browsers: Cloudflare TURN (cached short-lived credentials) when a key is
+        configured, else STUN only (fine on the same network, usually not across the internet)."""
+        stun = [{'urls': ['stun:stun.cloudflare.com:3478']}]
+        rtc = self.cfg['rtc']
+        kid, tok, ttl = rtc.get('turn_key_id'), rtc.get('turn_api_token'), int(rtc.get('turn_ttl') or 86400)
+        if not (kid and tok):
+            return stun, False
+        with self._turn_lock:
+            now = time.time()
+            if self._turn and now < self._turn_exp - ttl / 2:
+                return self._turn, True
+            try:
+                req = urllib.request.Request(
+                    f'https://rtc.live.cloudflare.com/v1/turn/keys/{kid}/credentials/generate-ice-servers',
+                    data=json.dumps({'ttl': ttl}).encode(), method='POST',
+                    headers={'Authorization': f'Bearer {tok}', 'Content-Type': 'application/json',
+                             'User-Agent': 'stage-messenger'})
+                with urllib.request.urlopen(req, timeout=6) as r:
+                    servers = json.load(r).get('iceServers') or []
+                # Keep it to four URLs (browsers slow down with more): STUN, TURN/UDP, TURN/TCP,
+                # and TURN over TLS 443 for networks that block everything else.
+                keep = ('stun:', '3478?transport=udp', '3478?transport=tcp', 'turns:turn.cloudflare.com:443')
+                out = []
+                for s in servers:
+                    urls = [u for u in ([s['urls']] if isinstance(s.get('urls'), str) else s.get('urls', []))
+                            if any(k in u for k in keep)]
+                    if urls:
+                        out.append({**s, 'urls': urls})
+                self._turn, self._turn_exp = out or servers, now + ttl
+                return self._turn, True
+            except Exception as e:
+                print(f'[mixer] TURN credentials failed: {e}', flush=True)
+                if self._turn and now < self._turn_exp:
+                    return self._turn, True
+                return stun, False
+
     def snapshot(self):
         return {
             'conn':   self.wing.connected,
@@ -683,6 +750,60 @@ def stream():
 
     return Response(gen(), mimetype='audio/mpeg',
                     headers={'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no'})
+
+
+# ── WebRTC: browsers set up their connection through these (all behind the /mixer guard) ──
+_SESSION_ID = re.compile(r'^[0-9a-fA-F-]{36}$')
+
+
+@bp.route('/api/rtc/config')
+def api_rtc_config():
+    if not _mixer.rtc_enabled:
+        return jsonify(ok=True, enabled=False, why='turned off in mixer_config.json')
+    if not _mixer.rtc_probe()[0]:
+        return jsonify(ok=True, enabled=False, why='MediaMTX is not running on the Pi')
+    ice, turn = _mixer.ice_servers()
+    return jsonify(ok=True, enabled=True, iceServers=ice, turn=turn)
+
+
+@bp.route('/api/rtc/whep', methods=['POST'])
+def api_rtc_whep():
+    if not _mixer.rtc_enabled:
+        return Response('WebRTC disabled', 404, mimetype='text/plain')
+    if (request.content_length or 0) > 65536:
+        return Response('offer too large', 413, mimetype='text/plain')
+    offer = request.get_data(cache=False)
+    if not offer.startswith(b'v=0'):
+        return Response('expected an SDP offer', 400, mimetype='text/plain')
+    _mixer.listener.hold_rtc(20)               # MediaMTX refuses readers until audio is publishing
+    if not _mixer.listener.wait_rtc_ready(6):
+        return Response('audio stream not ready', 503, mimetype='text/plain')
+    req = urllib.request.Request(_mixer.cfg['rtc']['whep'], data=offer, method='POST',
+                                 headers={'Content-Type': 'application/sdp'})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            answer, loc = r.read(), r.headers.get('Location', '')
+    except urllib.error.HTTPError as e:
+        return Response(e.read()[:300], e.code, mimetype='text/plain')
+    except Exception as e:
+        return Response(f'MediaMTX unreachable: {e}', 502, mimetype='text/plain')
+    resp = Response(answer, 201, mimetype='application/sdp')
+    m = re.search(r'/whep/([0-9a-fA-F-]{36})', loc)
+    if m:
+        resp.headers['Location'] = '/mixer/api/rtc/session/' + m.group(1)
+    return resp
+
+
+@bp.route('/api/rtc/session/<sid>', methods=['DELETE'])
+def api_rtc_session(sid):
+    if not _SESSION_ID.match(sid):
+        return Response('bad session', 400, mimetype='text/plain')
+    try:
+        urllib.request.urlopen(urllib.request.Request(_mixer.cfg['rtc']['whep'] + '/' + sid, method='DELETE'),
+                               timeout=3).close()
+    except Exception:
+        pass                                   # already gone; MediaMTX times sessions out anyway
+    return jsonify(ok=True)
 
 
 @bp.route('/api/listenpos')

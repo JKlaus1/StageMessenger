@@ -1,0 +1,33 @@
+# MediaMTX config for Stage Messenger low-latency listen-back (v2.0).
+#   Pipeline:  WING USB -> picker.py -> ffmpeg (Opus) -> RTSP 127.0.0.1:8554/listen -> MediaMTX -> WebRTC -> browser
+# Everything except the WebRTC media port is bound to localhost: browsers never talk to MediaMTX
+# directly for setup -- Flask proxies the WHEP handshake under /mixer (so Cloudflare Access still
+# guards it) and hands out the TURN credentials. Only UDP 8189 (the audio itself) is open.
+# MediaMTX reloads this file automatically when it changes (e.g. after a git pull).
+
+logLevel: info
+
+api: true
+apiAddress: 127.0.0.1:9997          # Flask checks path readiness / listener count here
+
+rtsp: true
+rtspTransports: [tcp]               # local publisher only; no RTP/RTCP UDP ports
+rtspAddress: 127.0.0.1:8554
+
+webrtc: true
+webrtcAddress: 127.0.0.1:8889       # WHEP handshake: reached only through the Flask proxy
+webrtcLocalUDPAddress: :8189        # the one public-facing port: audio packets
+webrtcLocalTCPAddress: ""
+webrtcICEServers2:
+  - url: stun:stun.cloudflare.com:3478   # lets the Pi learn its public address behind the hotspot
+
+rtmp: false
+hls: false
+srt: false
+moq: false
+playback: false
+metrics: false
+
+paths:
+  listen:
+    source: publisher
