@@ -20,6 +20,11 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
   * Input routing: /ch/N/in/conn/grp ('A', 'LCL', 'B', ...) + /ch/N/in/conn/in (1-based).
   * Writes: fader / send levels take a FLOAT in dB (an int is ignored).
     Mutes and send on/off take an INT 0/1.
+  * WING-LIVE SD recorder (verified Oct 2026, fw 3.1): /cards/wlive/{1,2}/$ctl/control
+    accepts 'REC' / 'STOP' (string); 'PPAUSE' is ignored while recording (no record-pause) and
+    REC while recording is a no-op. $ctl/setmarker = int 1 adds one marker and self-resets to 0.
+    $stat/state|etime|sdfree|markers|markerlist|sessions are PUSHED via /*S (etime, sdfree in
+    ms; list values push as text but a query returns [text, norm, index] -- read the text).
   * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
     /io/out/USB/N/in is 1-based on write (int or str); readback display string is 1-based.
 """
@@ -84,6 +89,19 @@ SRC_GROUPS = [('LCL', 24), ('A', 48), ('B', 48), ('C', 48), ('SC', 32), ('USB', 
               ('CRD', 64), ('MOD', 64), ('PLAY', 4), ('AES', 2)]
 SRC_LEAVES = ('name', 'mode', 'g', 'vph', 'pol')
 KEEP_SHADOW = ('/$name', '/$solo', '/$col', '/$mute')     # '$' paths we do track (see _rx_loop)
+N_SD = 2                                                     # WING-LIVE card: SD slots A, B
+REC_TEXT = ('/state', '/control', '/sdstate', '/markerlist', '/sessionlist', '/errormessage', '/$type')
+
+
+def rec_addrs():
+    """WING-LIVE recorder state the page shows (all '$' paths, all pushed when they change)."""
+    a = ['/cards/$type']
+    for n in range(1, N_SD + 1):
+        b = f'/cards/wlive/{n}'
+        a += [f'{b}/$ctl/control'] + [f'{b}/$stat/{k}' for k in
+              ('state', 'etime', 'sdfree', 'sdsize', 'sdstate', 'markers', 'sessions', 'errormessage')]
+    return a
+
 
 def strip_addrs():
     """Every control address the mixer page reads (names, levels, mutes, sends)."""
@@ -105,6 +123,7 @@ def strip_addrs():
         a += [f'/mgrp/{i}/name', f'/mgrp/{i}/mute']
     for i in range(1, N_MTX + 1):
         a += [f'/mtx/{i}/name', f'/mtx/{i}/$name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute']
+    a += rec_addrs()
     # Sends last: the page is usable (LR mode) before these finish loading.
     for kind, n in (('ch', N_CH), ('aux', N_AUX)):
         for i in range(1, n + 1):
@@ -124,6 +143,8 @@ def value_from_reply(addr, args):
         if isinstance(args[0], (int, float)):
             return int(args[0]) + 1
         return int(args[0]) if str(args[0]).isdigit() else args[0]
+    if addr.startswith('/cards/') and addr.endswith(REC_TEXT):
+        return args[0]                              # recorder lists: keep the text ('REC', 'READY')
     if len(args) >= 3:
         v = args[2]
     else:
@@ -193,7 +214,7 @@ class Wing:
             # '$' paths are read-only shadows (e.g. /ch/1/$fdr duplicates every fader push).
             # Keep '$name': it is the name the console actually displays (it can follow the
             # input source), while plain 'name' may hold a stale stored value.
-            if '$' in addr and not addr.endswith(KEEP_SHADOW):
+            if '$' in addr and not addr.endswith(KEEP_SHADOW) and not addr.startswith('/cards/'):
                 continue
             v = value_from_reply(addr, args)
             if v is None:
@@ -261,6 +282,14 @@ class Wing:
             v = str(value); self._send(addr, v)
         elif leaf in ('in',):
             v = int(value); self._send(addr, v)
+        elif leaf == 'control' and addr.startswith('/cards/wlive/'):
+            v = str(value).upper()
+            if v not in ('REC', 'STOP'):
+                return None
+            self._send(addr, v)
+        elif leaf == 'setmarker' and addr.startswith('/cards/wlive/'):
+            self._send(addr, 1)
+            return 1                                # self-resetting trigger: don't cache it
         else:
             return None
         with self.lock:

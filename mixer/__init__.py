@@ -20,7 +20,7 @@ import urllib.request
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory, abort
 
-from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, SRC_GROUPS, SRC_LEAVES, parse_describe
+from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, N_SD, SRC_GROUPS, SRC_LEAVES, parse_describe
 from .listen import Listener
 from .meters import Meters
 
@@ -158,6 +158,8 @@ class Mixer:
         rtc = cfg.get('rtc', {})
         self.rtc_enabled = bool(rtc.get('enabled'))
         self._turn, self._turn_exp, self._turn_lock = None, 0.0, threading.Lock()
+        self.rec_markers = {n: [] for n in range(1, N_SD + 1)}   # card -> marker times (current session)
+        self._rec_pub = {}                                        # throttle for 10 Hz etime / sdfree pushes
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
                                  rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
                                  opus_bitrate=rtc.get('opus_bitrate', '96k'), rtc_probe=self.rtc_probe,
@@ -403,6 +405,14 @@ class Mixer:
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
+        if addr.startswith('/cards/wlive/'):
+            if addr.endswith(('/etime', '/sdfree')):      # the WING pushes these 10x/s while recording
+                now = time.time()
+                if now - self._rec_pub.get(addr, 0) < 0.5:
+                    return                                # cache is current; skip this publish
+                self._rec_pub[addr] = now
+            elif addr.endswith(('/markers', '/sessions', '/state')) and self.wing.loaded:
+                self.refresh_markers(int(addr.split('/')[3]), delay=0.3)
         self.hub.publish({'t': 'upd', 'a': addr, 'v': v})
         if not self.wing.loaded:
             return                                   # initial load: one snapshot at the end
@@ -421,6 +431,8 @@ class Mixer:
             self.wing.query_many([b + '/tags' for b in self.overrides]
                                  + [f'/mgrp/{g}/mute' for g in range(1, 9)], timeout=1.0)
             self.check_overrides()
+        for n in range(1, N_SD + 1):
+            self.refresh_markers(n, publish=False)
         self.hub.publish({'t': 'snap', **self.snapshot()})
         self.ensure_patch(force=True)
 
@@ -505,6 +517,30 @@ class Mixer:
             self.hub.publish({'t': 'patch', 'note': self.patch_note})
 
     # ── snapshot ──
+    # ── WING-LIVE SD recorder ──
+    # The marker *list* only exists as the option list of $stat/markerlist (a push carries just the
+    # selected entry), so it is read from the node description whenever the count/state changes.
+    def refresh_markers(self, card, delay=0.0, publish=True):
+        def go():
+            if delay:
+                time.sleep(delay)
+            txt = self.wing.describe(f'/cards/wlive/{card}/$stat')
+            if txt is None:
+                return
+            p = next((x for x in parse_describe(txt) if x['key'] == 'markerlist'), None)
+            marks = [m for m in (p or {}).get('opts', []) if m]
+            if marks != self.rec_markers.get(card):
+                self.rec_markers[card] = marks
+                if publish:
+                    self.hub.publish({'t': 'recm', 'c': card, 'v': marks})
+        if publish:
+            threading.Thread(target=go, daemon=True).start()
+        else:
+            go()
+
+    def rec_state(self, card):
+        return self.wing.get(f'/cards/wlive/{card}/$stat/state')
+
     # ── WebRTC listen-back (MediaMTX) ──
     def rtc_probe(self):
         """(api_ok, stream_ready, reader_count) for the MediaMTX 'listen' path."""
@@ -569,6 +605,7 @@ class Mixer:
             'ovr':    sorted(self.overrides),
             'order':  self.order,
             'listen_target': self.cfg.get('listen_target_s', 0.8),
+            'recm':   self.rec_markers,
         }
 
 
@@ -750,6 +787,49 @@ def stream():
 
     return Response(gen(), mimetype='audio/mpeg',
                     headers={'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no'})
+
+
+def _who():
+    ip = request.headers.get('Cf-Connecting-Ip')
+    return f'tunnel {ip}' if ip else f'local {request.remote_addr}'
+
+
+@bp.route('/api/rec', methods=['POST'])
+def api_rec():
+    """WING-LIVE recorder: {action: rec|stop|marker, card: 1|2|'all'}. 'all' (markers only) marks
+    every card that is recording. Every press is logged -- it's the show recording."""
+    d = request.get_json(silent=True) or {}
+    action, card = str(d.get('action', '')), d.get('card')
+    if card == 'all' and action == 'marker':
+        cards = [n for n in range(1, N_SD + 1) if _mixer.rec_state(n) == 'REC']
+        if not cards:
+            return jsonify(ok=False, err='nothing is recording'), 409
+    else:
+        try:
+            cards = [int(card)]
+        except (TypeError, ValueError):
+            return jsonify(ok=False, err='bad card'), 400
+        if not 1 <= cards[0] <= N_SD:
+            return jsonify(ok=False, err='bad card'), 400
+    if action not in ('rec', 'stop', 'marker'):
+        return jsonify(ok=False, err='bad action'), 400
+    if not _mixer.wing.connected:
+        return jsonify(ok=False, err='WING offline'), 503
+    for n in cards:
+        base = f'/cards/wlive/{n}'
+        if action == 'rec':
+            sd = _mixer.wing.get(f'{base}/$stat/sdstate')
+            if sd != 'READY':
+                return jsonify(ok=False, err=f'card {"AB"[n - 1]} is {sd or "not ready"}'), 409
+            _mixer.wing.set(f'{base}/$ctl/control', 'REC')
+        elif action == 'stop':
+            _mixer.wing.set(f'{base}/$ctl/control', 'STOP')
+        else:
+            if _mixer.rec_state(n) != 'REC':
+                return jsonify(ok=False, err=f'card {"AB"[n - 1]} is not recording'), 409
+            _mixer.wing.set(f'{base}/$ctl/setmarker', 1)
+    print(f'[mixer] recorder: {action.upper()} card {"+".join("AB"[n - 1] for n in cards)} from {_who()}', flush=True)
+    return jsonify(ok=True, cards=cards)
 
 
 # ── WebRTC: browsers set up their connection through these (all behind the /mixer guard) ──

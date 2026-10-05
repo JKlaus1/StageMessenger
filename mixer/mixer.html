@@ -213,6 +213,47 @@
     .gtrack.gr .g-fill { background: var(--amber); }
     .gtrack .thr { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--red); }
     .note.small { font-size: .6rem; }
+    /* recorder (WING-LIVE SD card) */
+    #rec-card.none { display: none; }
+    #rec-toggle { width: 100%; display: flex; align-items: center; gap: .5rem; background: transparent; border: 0;
+      color: var(--text); padding: .1rem 0; }
+    #rec-toggle .label { margin: 0; }
+    #rec-sum { flex: 1; text-align: right; font-size: .66rem; font-weight: 900; letter-spacing: .06em; color: var(--red);
+      font-variant-numeric: tabular-nums; }
+    #rec-caret { color: var(--muted); font-size: .8rem; transition: transform .15s; }
+    #rec-card.open #rec-caret { transform: rotate(180deg); }
+    #rec-body { display: none; margin-top: .5rem; }
+    #rec-card.open #rec-body { display: block; }
+    .rec-row { display: grid; grid-template-columns: 2.2rem 1fr auto; grid-template-areas: "id tm bt" "id in bt" "mk mk mk";
+      gap: .1rem .6rem; align-items: center; padding: .55rem 0; border-top: 1px solid #1c1c38; }
+    .rec-row:first-child { border-top: 0; }
+    .rec-id { grid-area: id; text-align: center; }
+    .rec-id b { display: block; font-size: 1.1rem; font-weight: 900; }
+    .rec-badge { display: inline-block; margin-top: .15rem; font-size: .5rem; font-weight: 900; letter-spacing: .08em;
+      padding: .12rem .3rem; border-radius: 4px; background: #1c1c38; color: var(--muted); }
+    .rec-row.rec .rec-badge { background: var(--red); color: #fff; animation: recpulse 1.2s ease-in-out infinite; }
+    .rec-row.play .rec-badge { background: var(--green); color: #001a0d; }
+    @keyframes recpulse { 50% { opacity: .45; } }
+    .rec-time { grid-area: tm; font-size: 1.25rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .rec-row.rec .rec-time { color: var(--red); }
+    .rec-info { grid-area: in; font-size: .64rem; color: var(--muted); font-weight: 700; }
+    .rec-info .warn { color: var(--amber); }
+    .rec-bt { grid-area: bt; display: flex; gap: .4rem; }
+    .rec-go, .rec-stop { min-width: 4.6rem; height: 2.6rem; border-radius: 10px; font-size: .7rem; font-weight: 900;
+      letter-spacing: .08em; border: 1px solid var(--red); background: transparent; color: var(--red); position: relative; overflow: hidden; }
+    .rec-go:disabled { border-color: var(--border); color: var(--muted); }
+    .rec-stop { border-color: var(--text); color: var(--text); touch-action: none; }
+    .rec-stop i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,255,255,.22); }
+    .rec-stop.hold i { width: 100%; transition: width 1s linear; }
+    .rec-stop span, .rec-go span { position: relative; }
+    .rec-marks { grid-area: mk; font-size: .62rem; color: var(--muted); font-variant-numeric: tabular-nums;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rec-marks:empty { display: none; }
+    #rec-marker { width: 100%; margin-top: .5rem; height: 3.2rem; border-radius: 12px; border: 1px solid var(--amber);
+      background: transparent; color: var(--amber); font-size: .9rem; font-weight: 900; letter-spacing: .14em; }
+    #rec-marker:disabled { border-color: var(--border); color: var(--muted); }
+    #rec-marker.flash { background: var(--amber); color: #1a1000; }
+    #rec-note { min-height: 1em; }
     /* buses: collapsible list of bus masters */
     #bus-toggle { width: 100%; display: flex; align-items: center; gap: .5rem;
       background: transparent; border: 0; color: var(--text); padding: .1rem 0; }
@@ -275,6 +316,19 @@
   <section class="card">
     <div class="label">Mute groups</div>
     <div id="mg-grid"></div>
+  </section>
+
+  <section class="card none" id="rec-card">
+    <button id="rec-toggle">
+      <span class="label">Recorder</span>
+      <span id="rec-sum"></span>
+      <span id="rec-caret">&#9662;</span>
+    </button>
+    <div id="rec-body">
+      <div id="rec-rows"></div>
+      <button id="rec-marker" disabled>&#9670; MARKER</button>
+      <div class="note" id="rec-note"></div>
+    </div>
   </section>
 
   <section class="card" id="bus-card">
@@ -724,6 +778,101 @@
   $('bus-toggle').addEventListener('click', () => {
     LS.set('mixer.busesOpen', $('bus-card').classList.toggle('open') ? '1' : '0');
   });
+  // ── recorder: WING-LIVE SD card, slots A (1) and B (2) ──
+  // State comes from the console's own pushes. Elapsed time arrives ~2x/s (server-throttled), so
+  // the clock is extrapolated locally between updates. STOP needs a 1 s hold; MARKER marks every
+  // card that is recording.
+  const NSD = 2, RB = n => `/cards/wlive/${n}`;
+  let recM = {};                                   // card -> marker times of the current session
+  const recSeen = {};                              // card -> [etime ms, local ms when received]
+  const recRows = [];
+  if (LS.get('mixer.recOpen') !== '0') $('rec-card').classList.add('open');
+  $('rec-toggle').addEventListener('click', () => {
+    LS.set('mixer.recOpen', $('rec-card').classList.toggle('open') ? '1' : '0');
+  });
+  const hms = ms => { const t = Math.max(0, Math.floor((ms || 0) / 1000));
+    return `${Math.floor(t / 3600)}:${String(Math.floor(t / 60) % 60).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+  const freeTxt = ms => { const m = Math.floor((ms || 0) / 60000); return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} m` : `${m} min`; };
+  const recState = n => S[RB(n) + '/$stat/state'] || 'STOP';
+  function recElapsed(n) {
+    const e = recSeen[n];
+    if (!e) return S[RB(n) + '/$stat/etime'] || 0;
+    return recState(n) === 'REC' ? e[0] + (Date.now() - e[1]) : e[0];
+  }
+  function recPost(body) {
+    return postJSON('/mixer/api/rec', body).then(x => x && x.json()).catch(() => null);
+  }
+  function buildRec() {
+    const box = $('rec-rows');
+    for (let n = 1; n <= NSD; n++) {
+      const el = document.createElement('div'); el.className = 'rec-row';
+      el.innerHTML = `<div class="rec-id"><b>${'AB'[n - 1]}</b><span class="rec-badge">STOP</span></div>`
+        + '<div class="rec-time">0:00:00</div><div class="rec-info"></div>'
+        + '<div class="rec-bt"><button class="rec-go"><span>&#9679; REC</span></button>'
+        + '<button class="rec-stop"><i></i><span>&#9632; HOLD</span></button></div><div class="rec-marks"></div>';
+      const r = { n, el, badge: el.querySelector('.rec-badge'), time: el.querySelector('.rec-time'),
+                  info: el.querySelector('.rec-info'), go: el.querySelector('.rec-go'),
+                  stop: el.querySelector('.rec-stop'), marks: el.querySelector('.rec-marks') };
+      r.go.addEventListener('click', () => {
+        if (recState(n) === 'REC') return;
+        $('rec-note').textContent = `Starting card ${'AB'[n - 1]}…`;
+        recPost({ action: 'rec', card: n });
+      });
+      let holdT = null, fired = false;             // STOP: press and hold 1 s
+      const cancel = () => { clearTimeout(holdT); holdT = null; r.stop.classList.remove('hold'); };
+      r.stop.addEventListener('pointerdown', e => {
+        e.preventDefault(); fired = false; r.stop.classList.add('hold');
+        holdT = setTimeout(() => {
+          holdT = null; fired = true; r.stop.classList.remove('hold');
+          $('rec-note').textContent = `Stopping card ${'AB'[n - 1]}…`;
+          recPost({ action: 'stop', card: n });
+        }, 1000);
+      });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => r.stop.addEventListener(t, cancel));
+      r.stop.addEventListener('click', () => {          // the click that ends a completed hold is not a "tap"
+        if (fired) { fired = false; return; }
+        $('rec-note').textContent = 'Hold STOP for a second to stop the recording.';
+      });
+      box.appendChild(el); recRows.push(r);
+    }
+  }
+  $('rec-marker').addEventListener('click', async () => {
+    const rec = recRows.filter(r => recState(r.n) === 'REC');
+    if (!rec.length) return;
+    const b = $('rec-marker'); b.classList.add('flash'); setTimeout(() => b.classList.remove('flash'), 350);
+    const res = await recPost({ action: 'marker', card: 'all' });
+    if (res && res.ok) $('rec-note').textContent = 'Marker ' + res.cards.map(n => `${'AB'[n - 1]} @ ${hms(recElapsed(n))}`).join(' · ');
+  });
+  function paintRec() {
+    const type = S['/cards/$type'];
+    $('rec-card').classList.toggle('none', type !== 'WLIVE');
+    if (type !== 'WLIVE') return;
+    let sum = [];
+    for (const r of recRows) {
+      const b = RB(r.n), st = recState(r.n), sd = S[b + '/$stat/sdstate'];
+      const rec = st === 'REC', play = st === 'PLAY' || st === 'PPAUSE';
+      r.el.classList.toggle('rec', rec); r.el.classList.toggle('play', play);
+      r.badge.textContent = st === 'PPAUSE' ? 'PAUSE' : st;
+      r.time.textContent = hms(recElapsed(r.n));
+      const free = S[b + '/$stat/sdfree'], nm = S[b + '/$stat/markers'] || 0, err = S[b + '/$stat/errormessage'];
+      const bits = [];
+      if (sd && sd !== 'READY') bits.push(`<span class="warn">${sd === 'NONE' ? 'no card' : sd === 'PROTECT' ? 'write-protected' : sd.toLowerCase()}</span>`);
+      else if (typeof free === 'number') bits.push(free < 15 * 60000 ? `<span class="warn">${freeTxt(free)} left</span>` : `${freeTxt(free)} free`);
+      bits.push(`${nm} marker${nm === 1 ? '' : 's'}`);
+      if (err) bits.push(`<span class="warn">${String(err).replace(/[<>&]/g, '')}</span>`);
+      r.info.innerHTML = bits.join(' · ');
+      r.go.style.display = rec || play ? 'none' : '';
+      r.go.disabled = sd !== 'READY' || !piLink;
+      r.stop.style.display = rec || play ? '' : 'none';
+      const ml = recM[r.n] || recM[String(r.n)] || [];
+      r.marks.textContent = ml.length ? '◆ ' + ml.slice(-4).map(t => String(t).replace(/^00:/, '').replace(/\.\d+$/, '')).join('  ◆ ') : '';
+      if (rec) sum.push(`● ${'AB'[r.n - 1]} ${hms(recElapsed(r.n))}`);
+    }
+    $('rec-sum').textContent = sum.join('  ');
+    $('rec-marker').disabled = !recRows.some(r => recState(r.n) === 'REC');
+  }
+  setInterval(() => { if (recRows.some(r => recState(r.n) === 'REC')) paintRec(); }, 250);
+
   function paintBusSum() {
     const n = busRows.filter(r => S[`/bus/${r.bus}/mute`]).length;
     $('bus-sum').textContent = n ? `${n} MUTED` : '';
@@ -1536,6 +1685,11 @@
   function onUpd(a, v) {
     if (localSetAt[a] && Date.now() - localSetAt[a] < 500) return;
     S[a] = v;
+    if (a.startsWith('/cards/')) {
+      const m = a.match(/^\/cards\/wlive\/(\d)\/\$stat\/(etime|state)$/);
+      if (m) recSeen[m[1]] = [S[`/cards/wlive/${m[1]}/$stat/etime`] || 0, Date.now()];
+      paintRec(); return;
+    }
     if (a.startsWith('/io/in/')) { if (sheetRow) paintSheet(); return; }
     const m = a.match(/^\/(ch|aux)\/(\d+)\//);
     if (m) {
@@ -1561,6 +1715,9 @@
     OVR = new Set(m.ovr || []); rows.forEach(paintRow);
     $('patch-note').textContent = m.patch || '';
     ORDER = m.order || []; applyOrder();
+    recM = m.recm || {};
+    for (let n = 1; n <= 2; n++) recSeen[n] = [S[`/cards/wlive/${n}/$stat/etime`] || 0, Date.now()];
+    paintRec();
     if (typeof m.listen_target === 'number' && m.listen_target > 0) listenTarget = m.listen_target;
   }
 
@@ -1600,6 +1757,7 @@
       else if (m.t === 'patch') $('patch-note').textContent = m.note;
       else if (m.t === 'ovr') { OVR = new Set(m.v || []); rows.forEach(paintRow); }
       else if (m.t === 'order') { ORDER = m.v || []; applyOrder(); }
+      else if (m.t === 'recm') { recM[m.c] = m.v || []; paintRec(); }
     };
   }
   $('link-reload').addEventListener('click', () => location.reload());
@@ -1609,7 +1767,7 @@
   });
   $('repatch-btn').addEventListener('click', () => postJSON('/mixer/api/repatch', {}));
 
-  buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll(); connect();
+  buildRec(); buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll(); connect();
 })();
 </script>
 </body>
