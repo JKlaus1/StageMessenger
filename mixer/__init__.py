@@ -833,13 +833,19 @@ def _who():
 @bp.route('/api/rec', methods=['POST'])
 def api_rec():
     """WING-LIVE recorder: {action: rec|stop|marker, card: 1|2|'all'}. 'all' (markers only) marks
-    every card that is recording. Every press is logged -- it's the show recording."""
+    every card that is recording; if none is, every card that is playing or paused (marker at the
+    play head). Every press is logged -- it's the show recording."""
     d = request.get_json(silent=True) or {}
     action, card = str(d.get('action', '')), d.get('card')
+    playback = False
     if card == 'all' and action == 'marker':
         cards = [n for n in range(1, N_SD + 1) if _mixer.rec_state(n) == 'REC']
         if not cards:
-            return jsonify(ok=False, err='nothing is recording'), 409
+            cards = [n for n in range(1, N_SD + 1) if _mixer.rec_state(n) in ('PLAY', 'PPAUSE')
+                     and _mixer.wing.get(f'/cards/wlive/{n}/$stat/sdstate') == 'READY']
+            playback = True
+        if not cards:
+            return jsonify(ok=False, err='nothing is recording or playing'), 409
     else:
         try:
             cards = [int(card)]
@@ -863,14 +869,20 @@ def api_rec():
         elif action == 'stop':
             _mixer.wing.set(f'{base}/$ctl/control', 'STOP')
         else:
-            if _mixer.rec_state(n) != 'REC':
+            if not playback and _mixer.rec_state(n) != 'REC':
                 return jsonify(ok=False, err=f'card {"AB"[n - 1]} is not recording'), 409
+            if playback and int(_mixer.wing.get(f'{base}/$stat/markers') or 0) >= 100:
+                return jsonify(ok=False, err=f'card {"AB"[n - 1]}: session already has 100 markers'), 409
             _mixer.wing.set(f'{base}/$ctl/setmarker', 1)
-    print(f'[mixer] recorder: {action.upper()} card {"+".join("AB"[n - 1] for n in cards)} from {_who()}', flush=True)
-    return jsonify(ok=True, cards=cards)
+            if playback:
+                for dl in (0.4, 1.5):
+                    _mixer.refresh_markers(n, delay=dl)
+    print(f'[mixer] recorder: {action.upper()} card {"+".join("AB"[n - 1] for n in cards)}'
+          f'{" (playback)" if playback else ""} from {_who()}', flush=True)
+    return jsonify(ok=True, cards=cards, playback=playback)
 
 
-PLAY_ACTIONS = ('open', 'play', 'pause', 'stop', 'goto', 'seek')
+PLAY_ACTIONS = ('open', 'play', 'pause', 'stop', 'goto', 'seek', 'mark', 'movemark', 'delmark')
 _MARK_T = re.compile(r'^(\d+):(\d+):(\d+(?:\.\d+)?)$')
 
 
@@ -890,7 +902,9 @@ def api_play():
     """WING-LIVE playback: {card: 1|2, action: open|play|pause|stop|goto|seek, n, ms}.
     'open n' opens session n (1-based, sessionlist order). 'goto n' jumps to marker n; 'seek ms' moves
     the play head (stime + gotomarker 101, see wing.py) -- both work paused, stopped and playing (a
-    marker jump while playing is done as a seek to the marker's time). Every press is logged."""
+    marker jump while playing is done as a seek to the marker's time). 'mark' adds a marker at the play
+    head, 'movemark n' moves marker n there, 'delmark n' deletes it -- any state but recording; these
+    write to the SD card. Every press is logged."""
     d = request.get_json(silent=True) or {}
     action = str(d.get('action', ''))
     try:
@@ -902,7 +916,7 @@ def api_play():
     if action not in PLAY_ACTIONS:
         return jsonify(ok=False, err='bad action'), 400
     n = None
-    if action in ('open', 'goto'):
+    if action in ('open', 'goto', 'movemark', 'delmark'):
         try:
             n = int(d.get('n'))
         except (TypeError, ValueError):
@@ -952,6 +966,28 @@ def api_play():
             w.seek(card, t)                                # gotomarker N is only proven paused/stopped
         else:
             w.set(f'{base}/$ctl/gotomarker', n)
+    elif action in ('mark', 'movemark', 'delmark'):
+        if not count('sessions') or float(w.get(f'{base}/$stat/sessionlen') or 0) <= 0:
+            return jsonify(ok=False, err=f'no session open on card {L}'), 409
+        here = _clock(float(w.get(f'{base}/$stat/etime') or 0))
+        if action == 'mark':
+            if count('markers') >= 100:
+                return jsonify(ok=False, err='this session already has 100 markers'), 409
+            w.set(f'{base}/$ctl/setmarker', 1)
+            n = None
+            what = f' @ {here}'
+        else:
+            if not 1 <= n <= count('markers'):
+                return jsonify(ok=False, err=f'no marker {n} in this session'), 409
+            marks = _mixer.rec_markers.get(card) or []
+            was = marks[n - 1] if n <= len(marks) else '?'
+            w.set(f'{base}/$ctl/{"editmarker" if action == "movemark" else "deletemarker"}', n)
+            what = f' ({was} -> {here})' if action == 'movemark' else f' ({was})'
+        for dl in (0.4, 1.5):                       # editmarker pushes nothing useful: re-read the list
+            _mixer.refresh_markers(card, delay=dl)  # (publishes only if it changed)
+        print(f'[mixer] playback: {action.upper()}{"" if n is None else " " + str(n)}{what} card {L} '
+              f'(was {st}) from {_who()}', flush=True)
+        return jsonify(ok=True, card=card)
     else:                                                  # seek
         length = float(w.get(f'{base}/$stat/sessionlen') or 0)
         if length <= 0 or not count('sessions'):

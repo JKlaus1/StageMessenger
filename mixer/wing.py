@@ -38,6 +38,11 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
     0..101: 101 = "go to stime"). Verified from OSC while PAUSED, STOPPED and PLAYING -- the console
     UI only offers it while paused. stime alone does nothing, and $stat/etime writes are echoed but
     not a reliable seek. etime pushes ~7/s while playing; sessionlen = open session length (ms).
+  * Markers outside recording (probed on a test session): $ctl/setmarker 1 adds a marker at the play
+    head while PLAYING, PAUSED or STOPPED (list stays sorted, 'markers' count pushed);
+    $ctl/editmarker N moves marker N to the play head (count unchanged -> nothing useful is pushed,
+    re-read the list); $ctl/deletemarker N deletes marker N. N is 1-based; all three self-reset to 0
+    and write to the SD card. Max 100 markers per session (param ranges are 0..100).
     Display strings for times are inconsistent ('0:02:90', '1:56:30:40') -- use the native ms.
   * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
     /io/out/USB/N/in is 1-based on write (int or str); readback display string is 1-based.
@@ -319,7 +324,7 @@ class Wing:
         elif leaf == 'stime' and addr.startswith('/cards/wlive/'):
             v = float(round(max(0.0, min(360000000.0, float(value)))))
             self._send(addr, v)                     # float only: an int write is ignored
-        elif leaf in ('opensession', 'gotomarker') and addr.startswith('/cards/wlive/'):
+        elif leaf in ('opensession', 'gotomarker', 'editmarker', 'deletemarker') and addr.startswith('/cards/wlive/'):
             v = int(value)
             if not 1 <= v <= 100:
                 return None

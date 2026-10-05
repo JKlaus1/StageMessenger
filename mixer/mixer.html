@@ -304,6 +304,19 @@
     .pb-nudge button { height: 2.3rem; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: var(--text);
       font-size: .72rem; font-weight: 800; font-variant-numeric: tabular-nums; }
     .pb-nudge button:disabled { color: var(--muted); }
+    .pb-addm { width: 100%; height: 2.5rem; margin-top: .45rem; border-radius: 10px; border: 1px solid var(--amber); background: transparent;
+      color: var(--amber); font-size: .74rem; font-weight: 900; letter-spacing: .08em; }
+    .pb-addm:disabled { border-color: var(--border); color: var(--muted); }
+    .pb-addm.flash { background: var(--amber); color: #1a1000; }
+    .pb-marks button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    .pb-marks button.sel { outline: 2px solid var(--text); outline-offset: 1px; }
+    .pb-medit { display: none; gap: .35rem; margin-top: .4rem; align-items: center; }
+    .pb-medit.show { display: flex; }
+    .pb-medit button { flex: 1; height: 2.3rem; border-radius: 9px; border: 1px solid var(--text); background: transparent; color: var(--text);
+      font-size: .7rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .pb-medit button.del { border-color: var(--red); color: var(--red); }
+    .pb-medit button.x { flex: 0 0 2.6rem; border-color: var(--border); color: var(--muted); }
+    #rec-marker small { font-size: .62rem; font-weight: 800; letter-spacing: .04em; opacity: .85; }
     .pb-marks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
     .pb-marks button { padding: .42rem .55rem; border-radius: 8px; border: 1px solid var(--amber); background: transparent; color: var(--amber);
       font-size: .66rem; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -902,7 +915,10 @@
         + '<div class="pb-scrub"><div class="pb-bar"><div class="f"></div><div class="k"></div><div class="pb-bub"></div></div></div>'
         + '<div class="pb-nudge"><button data-d="-30000">&minus;30 s</button><button data-d="-10000">&minus;10 s</button>'
         + '<button data-d="10000">+10 s</button><button data-d="30000">+30 s</button></div>'
-        + '<div class="pb-marks"></div><div class="pb-hint"></div></div></div>';
+        + '<button class="pb-addm">&#9670; ADD MARKER</button>'
+        + '<div class="pb-marks"></div>'
+        + '<div class="pb-medit"><button class="mv"></button><button class="del"></button><button class="x">&#10005;</button></div>'
+        + '<div class="pb-hint"></div></div></div>';
       const r = { n, el, badge: el.querySelector('.rec-badge'), time: el.querySelector('.rec-time'),
                   info: el.querySelector('.rec-info'), go: el.querySelector('.rec-go'),
                   stop: el.querySelector('.rec-stop'), marks: el.querySelector('.rec-marks'),
@@ -911,7 +927,32 @@
                   bar: el.querySelector('.pb-bar'), fill: el.querySelector('.pb-bar .f'), chips: el.querySelector('.pb-marks'),
                   hint: el.querySelector('.pb-hint'), scrub: el.querySelector('.pb-scrub'), knob: el.querySelector('.pb-bar .k'),
                   bub: el.querySelector('.pb-bub'), nudge: [...el.querySelectorAll('.pb-nudge button')],
-                  sessKey: null, markKey: null, wasPlay: false, drag: null, hold: null };
+                  addm: el.querySelector('.pb-addm'), medit: el.querySelector('.pb-medit'),
+                  mv: el.querySelector('.pb-medit .mv'), del: el.querySelector('.pb-medit .del'),
+                  sessKey: null, markKey: null, wasPlay: false, drag: null, hold: null, sel: null };
+      // markers anytime (v2.3.2): add at the play head; long-press a chip to move it here / delete it.
+      // These write to the SD card, like doing it at the console.
+      r.addm.addEventListener('click', async () => {
+        r.addm.classList.add('flash'); setTimeout(() => r.addm.classList.remove('flash'), 350);
+        const at = clk(shownPos(r));
+        const res = await playPost({ card: n, action: 'mark' });
+        if (res && res.ok) $('rec-note').textContent = `Marker added on ${'AB'[n - 1]} @ ${at}`;
+      });
+      r.mv.addEventListener('click', async () => {
+        const k = r.sel; if (!k) return;
+        const at = clk(shownPos(r)); r.sel = null; paintRec();
+        const res = await playPost({ card: n, action: 'movemark', n: k });
+        if (res && res.ok) $('rec-note').textContent = `Marker ${k} on ${'AB'[n - 1]} moved to ${at}`;
+      });
+      r.del.addEventListener('click', async () => {
+        const k = r.sel; if (!k) return;
+        const t = listOf(recM, n)[k - 1] || '';
+        if (!confirm(`Delete marker ${k} (${t.replace(/^00:/, '').replace(/\.\d+$/, '')}) from card ${'AB'[n - 1]}?\nThis removes it from the SD card.`)) return;
+        r.sel = null; paintRec();
+        const res = await playPost({ card: n, action: 'delmark', n: k });
+        if (res && res.ok) $('rec-note').textContent = `Marker ${k} deleted on ${'AB'[n - 1]}`;
+      });
+      el.querySelector('.pb-medit .x').addEventListener('click', () => { r.sel = null; paintRec(); });
       // scrub: drag shows the target, release sends ONE seek; the target is held on screen until the
       // console's position push confirms it (or 1.5 s), so the thumb doesn't snap back meanwhile.
       const lenOf = () => S[RB(n) + '/$stat/sessionlen'] || 0;
@@ -977,12 +1018,17 @@
       box.appendChild(el); recRows.push(r);
     }
   }
-  $('rec-marker').addEventListener('click', async () => {
+  // Big MARKER: marks every recording card; when nothing records, every playing / paused card.
+  function markTargets() {
     const rec = recRows.filter(r => recState(r.n) === 'REC');
-    if (!rec.length) return;
+    if (rec.length) return { rows: rec, playback: false };
+    return { rows: recRows.filter(r => ['PLAY', 'PPAUSE'].includes(recState(r.n)) && S[RB(r.n) + '/$stat/sdstate'] === 'READY'), playback: true };
+  }
+  $('rec-marker').addEventListener('click', async () => {
+    if (!markTargets().rows.length) return;
     const b = $('rec-marker'); b.classList.add('flash'); setTimeout(() => b.classList.remove('flash'), 350);
-    const res = await recPost({ action: 'marker', card: 'all' });
-    if (res && res.ok) $('rec-note').textContent = 'Marker ' + res.cards.map(n => `${'AB'[n - 1]} @ ${hms(recElapsed(n))}`).join(' · ');
+    const res = await postJSON('/mixer/api/rec', { action: 'marker', card: 'all' }).then(x => x && x.json()).catch(() => null);
+    if (res && res.ok) $('rec-note').textContent = 'Marker ' + res.cards.map(n => `${'AB'[n - 1]} @ ${res.playback ? clk(recElapsed(n)) : hms(recElapsed(n))}`).join(' · ');
   });
   function paintRec() {
     const type = S['/cards/$type'];
@@ -1013,7 +1059,11 @@
       paintPlay(r, st, sd);
     }
     $('rec-sum').textContent = sum.join('  ');
-    $('rec-marker').disabled = !recRows.some(r => recState(r.n) === 'REC');
+    const mt = markTargets(), mb = $('rec-marker');
+    mb.disabled = !mt.rows.length || !piLink;
+    const who = mt.rows.map(r => 'AB'[r.n - 1]).join('+');
+    const lbl = '◆ MARKER' + (mt.rows.length ? ` <small>· ${mt.playback ? who + ' (playback)' : 'REC ' + who}</small>` : '');
+    if (mb.dataset.lbl !== lbl) { mb.dataset.lbl = lbl; mb.innerHTML = lbl; }
   }
   function shownPos(r) {                       // what the bar shows: drag target > pending seek > live position
     if (r.drag !== null) return r.drag;
@@ -1056,20 +1106,38 @@
     // marker chips + ticks: rebuilt only when the list or session length changes
     const mkey = ml.join('|') + '@' + len;
     if (mkey !== r.markKey) {
-      r.markKey = mkey; r.chips.innerHTML = '';
+      r.markKey = mkey; r.chips.innerHTML = ''; r.sel = null;     // indices shift when the list changes
       r.bar.querySelectorAll('.t').forEach(t => t.remove());
       ml.forEach((t, i) => {
         const ms = markMs(t), c = document.createElement('button');
         c.textContent = `◆${i + 1} ${ms === null ? t : clk(ms)}`;
-        c.addEventListener('click', () => playPost({ card: r.n, action: 'goto', n: i + 1 }));
+        let lpT = null, lpFired = false;            // long-press (0.6 s) = edit; tap = jump
+        const lpClear = () => { clearTimeout(lpT); lpT = null; };
+        c.addEventListener('pointerdown', () => {
+          lpFired = false; lpClear();
+          lpT = setTimeout(() => { lpT = null; lpFired = true; r.sel = i + 1; paintRec(); }, 600);
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => c.addEventListener(t, lpClear));
+        c.addEventListener('contextmenu', e => e.preventDefault());
+        c.addEventListener('click', () => {
+          if (lpFired) { lpFired = false; return; }
+          playPost({ card: r.n, action: 'goto', n: i + 1 });
+        });
         r.chips.appendChild(c);
         if (ms !== null && len) { const k = document.createElement('i'); k.className = 't'; k.style.left = `${Math.min(100, ms / len * 100)}%`; r.bar.appendChild(k); }
       });
     }
     const mp = S[b + '/$stat/markerpos'] || 0;
-    [...r.chips.children].forEach((c, i) => { c.disabled = !piLink; c.classList.toggle('cur', i + 1 === mp); });
+    [...r.chips.children].forEach((c, i) => { c.disabled = !piLink; c.classList.toggle('cur', i + 1 === mp); c.classList.toggle('sel', i + 1 === r.sel); });
+    if (r.sel && r.sel > ml.length) r.sel = null;
+    r.medit.classList.toggle('show', !!r.sel && piLink);
+    if (r.sel) { r.mv.textContent = `Move ◆${r.sel} to ${clk(pos)}`; r.del.textContent = `Delete ◆${r.sel}`; }
+    const nm = S[b + '/$stat/markers'] || 0;
+    r.addm.disabled = !len || !piLink || nm >= 100;
+    r.addm.textContent = `◆ ADD MARKER @ ${clk(pos)}`;
     r.hint.textContent = (playing ? 'Live: moves are heard immediately. ' : '')
-      + (ml.length ? 'Drag the bar, nudge, or tap a marker.' : 'Drag the bar or nudge. No markers in this session.');
+      + (ml.length ? 'Drag the bar, nudge, or tap a marker. Hold a marker to move or delete it.'
+                   : 'Drag the bar or nudge. No markers in this session.');
   }
   setInterval(() => { if (recRows.some(r => ['REC', 'PLAY'].includes(recState(r.n)))) paintRec(); }, 250);
 
