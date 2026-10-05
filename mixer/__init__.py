@@ -161,7 +161,9 @@ class Mixer:
         self.rtc_enabled = bool(rtc.get('enabled'))
         self._turn, self._turn_exp, self._turn_lock = None, 0.0, threading.Lock()
         self.rec_markers = {n: [] for n in range(1, N_SD + 1)}   # card -> marker times (current session)
+        self.rec_sessions = {n: [] for n in range(1, N_SD + 1)}  # card -> session list (newest first)
         self._rec_pub = {}                                        # throttle for 10 Hz etime / sdfree pushes
+        self._rec_tail = set()                                    # throttled addrs awaiting a trailing publish
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
                                  rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
                                  opus_bitrate=rtc.get('opus_bitrate', '96k'), rtc_probe=self.rtc_probe,
@@ -409,12 +411,16 @@ class Mixer:
     # ── WING callbacks ──
     def _on_update(self, addr, v):
         if addr.startswith('/cards/wlive/'):
-            if addr.endswith(('/etime', '/sdfree')):      # the WING pushes these 10x/s while recording
+            if addr.endswith(('/etime', '/sdfree')):      # pushed 7-10x/s while recording / playing
                 now = time.time()
-                if now - self._rec_pub.get(addr, 0) < 0.5:
-                    return                                # cache is current; skip this publish
+                wait = 0.5 - (now - self._rec_pub.get(addr, 0))
+                if wait > 0:                              # cache is current; publish the latest value at the
+                    if addr not in self._rec_tail:        # end of the window, so the final position (pause,
+                        self._rec_tail.add(addr)          # marker jump) is never the one that gets dropped
+                        threading.Timer(wait, self._rec_flush, (addr,)).start()
+                    return
                 self._rec_pub[addr] = now
-            elif addr.endswith(('/markers', '/sessions', '/state')) and self.wing.loaded:
+            elif addr.endswith(('/markers', '/sessions', '/state', '/sessionpos')) and self.wing.loaded:
                 self.refresh_markers(int(addr.split('/')[3]), delay=0.3)
         self.hub.publish({'t': 'upd', 'a': addr, 'v': v})
         if not self.wing.loaded:
@@ -424,6 +430,11 @@ class Mixer:
             threading.Thread(target=self.ensure_patch, daemon=True).start()
         if addr.endswith('name'):
             self.hub.publish({'t': 'feeds', 'feeds': self.feeds()})
+
+    def _rec_flush(self, addr):
+        self._rec_tail.discard(addr)
+        self._rec_pub[addr] = time.time()
+        self.hub.publish({'t': 'upd', 'a': addr, 'v': self.wing.get(addr)})
 
     def _on_conn(self, ok):
         self.hub.publish({'t': 'conn', 'ok': ok})
@@ -521,8 +532,9 @@ class Mixer:
 
     # ── snapshot ──
     # ── WING-LIVE SD recorder ──
-    # The marker *list* only exists as the option list of $stat/markerlist (a push carries just the
-    # selected entry), so it is read from the node description whenever the count/state changes.
+    # The marker and session *lists* only exist as the option lists of $stat/markerlist and
+    # $stat/sessionlist (a push carries just the selected entry), so they are read from the node
+    # description whenever the count / state / open session changes.
     def refresh_markers(self, card, delay=0.0, publish=True):
         def go():
             if delay:
@@ -530,12 +542,17 @@ class Mixer:
             txt = self.wing.describe(f'/cards/wlive/{card}/$stat')
             if txt is None:
                 return
-            p = next((x for x in parse_describe(txt) if x['key'] == 'markerlist'), None)
-            marks = [m for m in (p or {}).get('opts', []) if m]
+            ps = {x['key']: x for x in parse_describe(txt)}
+            marks = [m for m in ps.get('markerlist', {}).get('opts', []) if m]
+            sess = [x for x in ps.get('sessionlist', {}).get('opts', []) if x]
             if marks != self.rec_markers.get(card):
                 self.rec_markers[card] = marks
                 if publish:
                     self.hub.publish({'t': 'recm', 'c': card, 'v': marks})
+            if sess != self.rec_sessions.get(card):
+                self.rec_sessions[card] = sess
+                if publish:
+                    self.hub.publish({'t': 'recs', 'c': card, 'v': sess})
         if publish:
             threading.Thread(target=go, daemon=True).start()
         else:
@@ -543,6 +560,17 @@ class Mixer:
 
     def rec_state(self, card):
         return self.wing.get(f'/cards/wlive/{card}/$stat/state')
+
+    def after_open(self, card):
+        """opensession pushes little: re-read the open session's length/position/markers twice."""
+        b = f'/cards/wlive/{card}/$stat'
+        addrs = [f'{b}/{k}' for k in ('sessionpos', 'sessionlen', 'markers', 'markerpos', 'etime', 'state')]
+        def go():
+            for d in (0.8, 1.7):
+                time.sleep(d)
+                self.wing.query_many(addrs, timeout=0.8)
+                self.refresh_markers(card, publish=True)
+        threading.Thread(target=go, daemon=True).start()
 
     # ── WebRTC listen-back (MediaMTX) ──
     def rtc_probe(self):
@@ -609,6 +637,7 @@ class Mixer:
             'order':  self.order,
             'listen_target': self.cfg.get('listen_target_s', 0.8),
             'recm':   self.rec_markers,
+            'recs':   self.rec_sessions,
         }
 
 
@@ -825,6 +854,8 @@ def api_rec():
     for n in cards:
         base = f'/cards/wlive/{n}'
         if action == 'rec':
+            if _mixer.rec_state(n) in ('PLAY', 'PPAUSE'):
+                return jsonify(ok=False, err=f'card {"AB"[n - 1]} is playing back -- stop it first'), 409
             sd = _mixer.wing.get(f'{base}/$stat/sdstate')
             if sd != 'READY':
                 return jsonify(ok=False, err=f'card {"AB"[n - 1]} is {sd or "not ready"}'), 409
@@ -837,6 +868,70 @@ def api_rec():
             _mixer.wing.set(f'{base}/$ctl/setmarker', 1)
     print(f'[mixer] recorder: {action.upper()} card {"+".join("AB"[n - 1] for n in cards)} from {_who()}', flush=True)
     return jsonify(ok=True, cards=cards)
+
+
+PLAY_ACTIONS = ('open', 'play', 'pause', 'stop', 'goto')
+
+
+@bp.route('/api/play', methods=['POST'])
+def api_play():
+    """WING-LIVE playback: {card: 1|2, action: open|play|pause|stop|goto, n}. 'open n' opens session n
+    (1-based, sessionlist order); 'goto n' jumps to marker n -- only while PAUSED or STOPPED (the head
+    can't be moved while playing). There is no arbitrary seek (see wing.py). Every press is logged."""
+    d = request.get_json(silent=True) or {}
+    action = str(d.get('action', ''))
+    try:
+        card = int(d.get('card'))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, err='bad card'), 400
+    if not 1 <= card <= N_SD:
+        return jsonify(ok=False, err='bad card'), 400
+    if action not in PLAY_ACTIONS:
+        return jsonify(ok=False, err='bad action'), 400
+    n = None
+    if action in ('open', 'goto'):
+        try:
+            n = int(d.get('n'))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, err='bad number'), 400
+    if not _mixer.wing.connected:
+        return jsonify(ok=False, err='WING offline'), 503
+    w, base, L = _mixer.wing, f'/cards/wlive/{card}', 'AB'[card - 1]
+    st = _mixer.rec_state(card) or 'STOP'
+    if st == 'REC':
+        return jsonify(ok=False, err=f'card {L} is recording'), 409
+    sd = w.get(f'{base}/$stat/sdstate')
+    if sd != 'READY' and action != 'stop':
+        return jsonify(ok=False, err=f'card {L} is {sd or "not ready"}'), 409
+    count = lambda k: int(w.get(f'{base}/$stat/{k}') or 0)
+    if action == 'open':
+        if not 1 <= n <= count('sessions'):
+            return jsonify(ok=False, err=f'card {L} has no session {n}'), 409
+        if st == 'PLAY':
+            return jsonify(ok=False, err='stop playback first'), 409
+        if st == 'PPAUSE':
+            w.set(f'{base}/$ctl/control', 'STOP'); time.sleep(0.15)
+        w.set(f'{base}/$ctl/opensession', n)
+        _mixer.after_open(card)
+    elif action == 'play':
+        if not count('sessions'):
+            return jsonify(ok=False, err=f'card {L} has no sessions'), 409
+        w.set(f'{base}/$ctl/control', 'PLAY')
+    elif action == 'pause':
+        if st != 'PLAY':
+            return jsonify(ok=False, err=f'card {L} is not playing'), 409
+        w.set(f'{base}/$ctl/control', 'PPAUSE')
+    elif action == 'stop':
+        w.set(f'{base}/$ctl/control', 'STOP')
+    else:                                                  # goto
+        if st == 'PLAY':
+            return jsonify(ok=False, err='pause first -- the play head only moves while paused'), 409
+        if not 1 <= n <= count('markers'):
+            return jsonify(ok=False, err=f'no marker {n} in this session'), 409
+        w.set(f'{base}/$ctl/gotomarker', n)
+    print(f'[mixer] playback: {action.upper()}{"" if n is None else " " + str(n)} card {L} '
+          f'(was {st}) from {_who()}', flush=True)
+    return jsonify(ok=True, card=card)
 
 
 # ── WebRTC: browsers set up their connection through these (all behind the /mixer guard) ──

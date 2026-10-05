@@ -268,6 +268,35 @@
     #rec-marker:disabled { border-color: var(--border); color: var(--muted); }
     #rec-marker.flash { background: var(--amber); color: #1a1000; }
     #rec-note { min-height: 1em; }
+    /* playback (v2.3): one panel per card row */
+    .rec-row { grid-template-areas: "id tm bt" "id in bt" "mk mk mk" "pb pb pb"; }
+    .pb { grid-area: pb; }
+    .rec-row.rec .pb, .pb.none { display: none; }
+    .pb-tog { width: 100%; display: flex; align-items: center; gap: .4rem; background: transparent; border: 0; padding: .35rem 0 .1rem;
+      color: var(--muted); font-size: .6rem; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+    .pb-tog .c { transition: transform .15s; }
+    .pb.open .pb-tog .c { transform: rotate(90deg); }
+    .pb-tog .s { flex: 1; text-align: right; letter-spacing: .04em; text-transform: none; font-variant-numeric: tabular-nums; }
+    .pb-body { display: none; padding-top: .25rem; }
+    .pb.open .pb-body { display: block; }
+    .pb-sess { width: 100%; padding: .45rem; font-size: .76rem; }
+    .pb-ctl { display: flex; align-items: center; gap: .45rem; margin-top: .45rem; }
+    .pb-play, .pb-stop { min-width: 5.2rem; height: 2.6rem; border-radius: 10px; font-size: .72rem; font-weight: 900; letter-spacing: .06em;
+      background: transparent; border: 1px solid var(--green); color: var(--green); }
+    .pb-play.pause { background: var(--green); color: #001a0d; }
+    .pb-stop { min-width: 3.6rem; border-color: var(--text); color: var(--text); }
+    .pb-play:disabled, .pb-stop:disabled { border-color: var(--border); color: var(--muted); background: transparent; }
+    .pb-pos { flex: 1; text-align: right; font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .pb-pos small { font-size: .7rem; color: var(--muted); font-weight: 700; }
+    .pb-bar { position: relative; height: 8px; margin: .55rem 0 .2rem; border-radius: 4px; background: var(--border); overflow: visible; }
+    .pb-bar .f { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px; background: var(--green); }
+    .pb-bar .t { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--amber); }
+    .pb-marks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
+    .pb-marks button { padding: .42rem .55rem; border-radius: 8px; border: 1px solid var(--amber); background: transparent; color: var(--amber);
+      font-size: .66rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .pb-marks button.cur { background: var(--amber); color: #1a1000; }
+    .pb-marks button:disabled { border-color: var(--border); color: var(--muted); background: transparent; }
+    .pb-hint { font-size: .6rem; color: var(--muted); font-weight: 700; margin-top: .3rem; min-height: .8em; }
     /* buses: collapsible list of bus masters */
     #bus-toggle { width: 100%; display: flex; align-items: center; gap: .5rem;
       background: transparent; border: 0; color: var(--text); padding: .1rem 0; }
@@ -810,6 +839,7 @@
   // card that is recording.
   const NSD = 2, RB = n => `/cards/wlive/${n}`;
   let recM = {};                                   // card -> marker times of the current session
+  let recS = {};                                   // card -> session list ('2026-09-26 20:11:54  10'), newest first
   const recSeen = {};                              // card -> [etime ms, local ms when received]
   const recRows = [];
   if (LS.get('mixer.recOpen') !== '0') $('rec-card').classList.add('open');
@@ -823,7 +853,23 @@
   function recElapsed(n) {
     const e = recSeen[n];
     if (!e) return S[RB(n) + '/$stat/etime'] || 0;
-    return recState(n) === 'REC' ? e[0] + (Date.now() - e[1]) : e[0];
+    const st = recState(n);
+    return st === 'REC' || st === 'PLAY' ? e[0] + (Date.now() - e[1]) : e[0];
+  }
+  // ── playback (v2.3). Probed: gotomarker is the only seek the WING honours over OSC, and only while
+  // PAUSED or STOPPED; STOP rewinds to 0:00. Position = $stat/etime, length = $stat/sessionlen (ms).
+  const listOf = (o, n) => (o && (o[n] || o[String(n)])) || [];
+  const clk = ms => { const t = Math.max(0, Math.floor((ms || 0) / 1000)), h = Math.floor(t / 3600),
+    m = Math.floor(t / 60) % 60, sec = String(t % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`; };
+  const markMs = txt => { const m = String(txt).match(/^(\d+):(\d+):(\d+)(?:\.(\d+))?$/);
+    return m ? ((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 + (m[4] ? Math.round(+('0.' + m[4]) * 1000) : 0) : null; };
+  const sessTxt = txt => { const m = String(txt).replace(/\s+\d+$/, '').match(/^(\d{4})-(\d\d)-(\d\d)\s+(.*)$/);
+    return m ? `${+m[3]} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[2] - 1] || m[2]} ${m[1]} · ${m[4]}`
+             : String(txt); };
+  async function playPost(body) {
+    const x = await postJSON('/mixer/api/play', body);   // refusals show in the banner (with the reason)
+    return x ? x.json().catch(() => null) : null;
   }
   function recPost(body) {
     return postJSON('/mixer/api/rec', body).then(x => x && x.json()).catch(() => null);
@@ -835,10 +881,39 @@
       el.innerHTML = `<div class="rec-id"><b>${'AB'[n - 1]}</b><span class="rec-badge">STOP</span></div>`
         + '<div class="rec-time">0:00:00</div><div class="rec-info"></div>'
         + '<div class="rec-bt"><button class="rec-go"><span>&#9679; REC</span></button>'
-        + '<button class="rec-stop"><i></i><span>&#9632; HOLD</span></button></div><div class="rec-marks"></div>';
+        + '<button class="rec-stop"><i></i><span>&#9632; HOLD</span></button></div><div class="rec-marks"></div>'
+        + '<div class="pb"><button class="pb-tog"><span class="c">&#9656;</span>Playback<span class="s"></span></button>'
+        + '<div class="pb-body"><select class="pb-sess"></select>'
+        + '<div class="pb-ctl"><button class="pb-play">&#9654; PLAY</button>'
+        + '<button class="pb-stop" title="Stop (rewinds to 0:00)">&#9632;</button><span class="pb-pos"></span></div>'
+        + '<div class="pb-bar"><div class="f"></div></div><div class="pb-marks"></div><div class="pb-hint"></div></div></div>';
       const r = { n, el, badge: el.querySelector('.rec-badge'), time: el.querySelector('.rec-time'),
                   info: el.querySelector('.rec-info'), go: el.querySelector('.rec-go'),
-                  stop: el.querySelector('.rec-stop'), marks: el.querySelector('.rec-marks') };
+                  stop: el.querySelector('.rec-stop'), marks: el.querySelector('.rec-marks'),
+                  pb: el.querySelector('.pb'), pbSum: el.querySelector('.pb-tog .s'), sess: el.querySelector('.pb-sess'),
+                  play: el.querySelector('.pb-play'), pstop: el.querySelector('.pb-stop'), pos: el.querySelector('.pb-pos'),
+                  bar: el.querySelector('.pb-bar'), fill: el.querySelector('.pb-bar .f'), chips: el.querySelector('.pb-marks'),
+                  hint: el.querySelector('.pb-hint'), sessKey: null, markKey: null, wasPlay: false };
+      if (LS.get('mixer.pbOpen.' + n) === '1') r.pb.classList.add('open');
+      el.querySelector('.pb-tog').addEventListener('click', () => {
+        LS.set('mixer.pbOpen.' + n, r.pb.classList.toggle('open') ? '1' : '0');
+      });
+      r.sess.addEventListener('change', async () => {
+        const want = +r.sess.value;
+        $('rec-note').textContent = `Opening session #${want} on card ${'AB'[n - 1]}…`;
+        const res = await playPost({ card: n, action: 'open', n: want });
+        if (!res) r.sess.value = S[RB(n) + '/$stat/sessionpos'] || 1;
+        r.sess.blur();
+      });
+      r.play.addEventListener('click', () => {
+        const st = recState(n);
+        if (st === 'PLAY') { playPost({ card: n, action: 'pause' }); return; }
+        if (S['/cards/wlive/auto_play'] === 'ALT' && S['/io/altsw'] !== 1
+            && !confirm('Card "On play" is set to ALT:\nplaying switches ALL channels to their ALT inputs.\nPlay anyway?')) return;
+        $('rec-note').textContent = `Card ${'AB'[n - 1]}: ${st === 'PPAUSE' ? 'resume' : 'play'}…`;
+        playPost({ card: n, action: 'play' });
+      });
+      r.pstop.addEventListener('click', () => playPost({ card: n, action: 'stop' }));
       r.go.addEventListener('click', () => {
         if (recState(n) === 'REC') return;
         $('rec-note').textContent = `Starting card ${'AB'[n - 1]}…`;
@@ -889,15 +964,60 @@
       r.info.innerHTML = bits.join(' · ');
       r.go.style.display = rec || play ? 'none' : '';
       r.go.disabled = sd !== 'READY' || !piLink;
-      r.stop.style.display = rec || play ? '' : 'none';
-      const ml = recM[r.n] || recM[String(r.n)] || [];
-      r.marks.textContent = ml.length ? '◆ ' + ml.slice(-4).map(t => String(t).replace(/^00:/, '').replace(/\.\d+$/, '')).join('  ◆ ') : '';
+      r.stop.style.display = rec ? '' : 'none';
+      const ml = listOf(recM, r.n);
+      r.marks.textContent = rec && ml.length ? '◆ ' + ml.slice(-4).map(t => String(t).replace(/^00:/, '').replace(/\.\d+$/, '')).join('  ◆ ') : '';
       if (rec) sum.push(`● ${'AB'[r.n - 1]} ${hms(recElapsed(r.n))}`);
+      else if (st === 'PLAY') sum.push(`▶ ${'AB'[r.n - 1]} ${clk(recElapsed(r.n))}`);
+      else if (st === 'PPAUSE') sum.push(`❚❚ ${'AB'[r.n - 1]} ${clk(recElapsed(r.n))}`);
+      paintPlay(r, st, sd);
     }
     $('rec-sum').textContent = sum.join('  ');
     $('rec-marker').disabled = !recRows.some(r => recState(r.n) === 'REC');
   }
-  setInterval(() => { if (recRows.some(r => recState(r.n) === 'REC')) paintRec(); }, 250);
+  function paintPlay(r, st, sd) {
+    const b = RB(r.n), sl = listOf(recS, r.n), ml = listOf(recM, r.n);
+    const nsess = S[b + '/$stat/sessions'] || 0, cur = S[b + '/$stat/sessionpos'] || 0;
+    r.pb.classList.toggle('none', sd !== 'READY' || !nsess);
+    if (sd !== 'READY' || !nsess) return;
+    const playing = st === 'PLAY', paused = st === 'PPAUSE';
+    if ((playing || paused) && !r.wasPlay && !r.pb.classList.contains('open')) r.pb.classList.add('open');   // auto-open
+    r.wasPlay = playing || paused;
+    const len = S[b + '/$stat/sessionlen'] || 0, pos = Math.min(recElapsed(r.n), len || Infinity);
+    // session picker: rebuilt only when the list changes
+    const key = sl.join('|');
+    if (key !== r.sessKey) {
+      r.sessKey = key; r.sess.innerHTML = '';
+      sl.forEach((t, i) => { const o = document.createElement('option'); o.value = i + 1; o.textContent = `#${i + 1}  ${sessTxt(t)}`; r.sess.appendChild(o); });
+    }
+    if (document.activeElement !== r.sess && cur) r.sess.value = cur;
+    r.sess.disabled = playing || !piLink;
+    r.play.textContent = playing ? '❚❚ PAUSE' : paused ? '▶ RESUME' : '▶ PLAY';
+    r.play.classList.toggle('pause', playing);
+    r.play.disabled = !piLink;
+    r.pstop.disabled = st === 'STOP' || !piLink;
+    r.pos.innerHTML = `${clk(pos)} <small>/ ${len ? clk(len) : '–'}</small>`;
+    r.fill.style.width = len ? `${Math.min(100, pos / len * 100)}%` : '0';
+    r.pbSum.textContent = `#${cur || '–'}${len ? ' · ' + clk(len) : ''}${playing ? ' · playing' : paused ? ' · paused' : ''}`;
+    // marker chips + ticks: rebuilt only when the list or session length changes
+    const mkey = ml.join('|') + '@' + len;
+    if (mkey !== r.markKey) {
+      r.markKey = mkey; r.chips.innerHTML = '';
+      r.bar.querySelectorAll('.t').forEach(t => t.remove());
+      ml.forEach((t, i) => {
+        const ms = markMs(t), c = document.createElement('button');
+        c.textContent = `◆${i + 1} ${ms === null ? t : clk(ms)}`;
+        c.addEventListener('click', () => playPost({ card: r.n, action: 'goto', n: i + 1 }));
+        r.chips.appendChild(c);
+        if (ms !== null && len) { const k = document.createElement('i'); k.className = 't'; k.style.left = `${Math.min(100, ms / len * 100)}%`; r.bar.appendChild(k); }
+      });
+    }
+    const mp = S[b + '/$stat/markerpos'] || 0;
+    [...r.chips.children].forEach((c, i) => { c.disabled = playing || !piLink; c.classList.toggle('cur', i + 1 === mp); });
+    r.hint.textContent = !ml.length ? 'No markers in this session.'
+      : playing ? 'Pause to jump to a marker.' : 'Tap a marker to move the play head there.';
+  }
+  setInterval(() => { if (recRows.some(r => ['REC', 'PLAY'].includes(recState(r.n)))) paintRec(); }, 250);
 
   // ── Main / Alt inputs (console-wide /io/altsw) and the card's own auto-switching ──
   document.querySelectorAll('.auto-row select').forEach(sel => {
@@ -1769,7 +1889,7 @@
     OVR = new Set(m.ovr || []); rows.forEach(paintRow);
     $('patch-note').textContent = m.patch || '';
     ORDER = m.order || []; applyOrder();
-    recM = m.recm || {}; paintAlt();
+    recM = m.recm || {}; recS = m.recs || {}; paintAlt();
     for (let n = 1; n <= 2; n++) recSeen[n] = [S[`/cards/wlive/${n}/$stat/etime`] || 0, Date.now()];
     paintRec();
     if (typeof m.listen_target === 'number' && m.listen_target > 0) listenTarget = m.listen_target;
@@ -1812,6 +1932,7 @@
       else if (m.t === 'ovr') { OVR = new Set(m.v || []); rows.forEach(paintRow); }
       else if (m.t === 'order') { ORDER = m.v || []; applyOrder(); }
       else if (m.t === 'recm') { recM[m.c] = m.v || []; paintRec(); }
+      else if (m.t === 'recs') { recS[m.c] = m.v || []; paintRec(); }
     };
   }
   $('link-reload').addEventListener('click', () => location.reload());

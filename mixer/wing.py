@@ -29,6 +29,14 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
     /io/altsw (int 0/1) is the console-wide switch -- writable over OSC, pushed on change; each
     channel's in/set/altsrc (r/o) follows it (ch 1-40), and $name/$col follow the active source.
     /cards/wlive/auto_play|auto_rec|auto_stop (KEEP/MAIN/ALT, text) make the card flip it itself.
+  * WING-LIVE playback (probed Oct 2026): $ctl/control 'PLAY' / 'PPAUSE' (real pause; PLAY resumes) /
+    'STOP' (rewinds to 0:00). $ctl/opensession N (int, 1-based in $stat/sessionlist order, newest
+    first) opens a session; $stat/sessionpos = the open session. $ctl/gotomarker N (int, 1-based)
+    jumps instantly while PAUSED or STOPPED (PLAY then starts there), pushes etime + markerpos and
+    self-resets to 0. There is NO arbitrary seek over OSC: $ctl/stime stores a float but is never
+    applied, and writes to $stat/etime are echoed back but ignored by the transport (paused, stopped
+    or playing). etime pushes ~7/s while playing; sessionlen = open session length (ms).
+    Display strings for times are inconsistent ('0:02:90', '1:56:30:40') -- use the native ms.
   * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
     /io/out/USB/N/in is 1-based on write (int or str); readback display string is 1-based.
 """
@@ -105,7 +113,8 @@ def rec_addrs():
     for n in range(1, N_SD + 1):
         b = f'/cards/wlive/{n}'
         a += [f'{b}/$ctl/control'] + [f'{b}/$stat/{k}' for k in
-              ('state', 'etime', 'sdfree', 'sdsize', 'sdstate', 'markers', 'sessions', 'errormessage')]
+              ('state', 'etime', 'sdfree', 'sdsize', 'sdstate', 'markers', 'sessions', 'errormessage',
+               'sessionpos', 'sessionlen', 'markerpos')]
     return a
 
 
@@ -299,12 +308,18 @@ class Wing:
             self._send(addr, v)
         elif leaf == 'control' and addr.startswith('/cards/wlive/'):
             v = str(value).upper()
-            if v not in ('REC', 'STOP'):
+            if v not in ('REC', 'STOP', 'PLAY', 'PPAUSE'):
                 return None
             self._send(addr, v)
         elif leaf == 'setmarker' and addr.startswith('/cards/wlive/'):
             self._send(addr, 1)
             return 1                                # self-resetting trigger: don't cache it
+        elif leaf in ('opensession', 'gotomarker') and addr.startswith('/cards/wlive/'):
+            v = int(value)
+            if not 1 <= v <= 100:
+                return None
+            self._send(addr, v)
+            return v                                # one-shot triggers (the console resets them)
         else:
             return None
         with self.lock:
