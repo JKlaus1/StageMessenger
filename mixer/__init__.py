@@ -870,14 +870,27 @@ def api_rec():
     return jsonify(ok=True, cards=cards)
 
 
-PLAY_ACTIONS = ('open', 'play', 'pause', 'stop', 'goto')
+PLAY_ACTIONS = ('open', 'play', 'pause', 'stop', 'goto', 'seek')
+_MARK_T = re.compile(r'^(\d+):(\d+):(\d+(?:\.\d+)?)$')
+
+
+def _mark_ms(txt):
+    """'00:13:53.23' -> 833230.0 (None if unparseable)."""
+    m = _MARK_T.match(str(txt).strip())
+    return ((int(m.group(1)) * 60 + int(m.group(2))) * 60 + float(m.group(3))) * 1000 if m else None
+
+
+def _clock(ms):
+    t = int(ms // 1000)
+    return f'{t // 3600}:{t // 60 % 60:02d}:{t % 60:02d}' if t >= 3600 else f'{t // 60}:{t % 60:02d}'
 
 
 @bp.route('/api/play', methods=['POST'])
 def api_play():
-    """WING-LIVE playback: {card: 1|2, action: open|play|pause|stop|goto, n}. 'open n' opens session n
-    (1-based, sessionlist order); 'goto n' jumps to marker n -- only while PAUSED or STOPPED (the head
-    can't be moved while playing). There is no arbitrary seek (see wing.py). Every press is logged."""
+    """WING-LIVE playback: {card: 1|2, action: open|play|pause|stop|goto|seek, n, ms}.
+    'open n' opens session n (1-based, sessionlist order). 'goto n' jumps to marker n; 'seek ms' moves
+    the play head (stime + gotomarker 101, see wing.py) -- both work paused, stopped and playing (a
+    marker jump while playing is done as a seek to the marker's time). Every press is logged."""
     d = request.get_json(silent=True) or {}
     action = str(d.get('action', ''))
     try:
@@ -894,6 +907,13 @@ def api_play():
             n = int(d.get('n'))
         except (TypeError, ValueError):
             return jsonify(ok=False, err='bad number'), 400
+    elif action == 'seek':
+        try:
+            n = float(d.get('ms'))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, err='bad time'), 400
+        if n != n:                                         # NaN
+            return jsonify(ok=False, err='bad time'), 400
     if not _mixer.wing.connected:
         return jsonify(ok=False, err='WING offline'), 503
     w, base, L = _mixer.wing, f'/cards/wlive/{card}', 'AB'[card - 1]
@@ -923,14 +943,23 @@ def api_play():
         w.set(f'{base}/$ctl/control', 'PPAUSE')
     elif action == 'stop':
         w.set(f'{base}/$ctl/control', 'STOP')
-    else:                                                  # goto
-        if st == 'PLAY':
-            return jsonify(ok=False, err='pause first -- the play head only moves while paused'), 409
+    elif action == 'goto':
         if not 1 <= n <= count('markers'):
             return jsonify(ok=False, err=f'no marker {n} in this session'), 409
-        w.set(f'{base}/$ctl/gotomarker', n)
-    print(f'[mixer] playback: {action.upper()}{"" if n is None else " " + str(n)} card {L} '
-          f'(was {st}) from {_who()}', flush=True)
+        marks = _mixer.rec_markers.get(card) or []
+        t = _mark_ms(marks[n - 1]) if n <= len(marks) else None
+        if st == 'PLAY' and t is not None:
+            w.seek(card, t)                                # gotomarker N is only proven paused/stopped
+        else:
+            w.set(f'{base}/$ctl/gotomarker', n)
+    else:                                                  # seek
+        length = float(w.get(f'{base}/$stat/sessionlen') or 0)
+        if length <= 0 or not count('sessions'):
+            return jsonify(ok=False, err=f'no session open on card {L}'), 409
+        n = max(0.0, min(length, n))
+        w.seek(card, n)
+    shown = '' if n is None else ' ' + (_clock(n) if action == 'seek' else str(n))
+    print(f'[mixer] playback: {action.upper()}{shown} card {L} (was {st}) from {_who()}', flush=True)
     return jsonify(ok=True, card=card)
 
 

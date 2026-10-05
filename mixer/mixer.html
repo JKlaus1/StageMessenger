@@ -288,9 +288,22 @@
     .pb-play:disabled, .pb-stop:disabled { border-color: var(--border); color: var(--muted); background: transparent; }
     .pb-pos { flex: 1; text-align: right; font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; }
     .pb-pos small { font-size: .7rem; color: var(--muted); font-weight: 700; }
-    .pb-bar { position: relative; height: 8px; margin: .55rem 0 .2rem; border-radius: 4px; background: var(--border); overflow: visible; }
+    .pb-scrub { position: relative; padding: 14px 0; margin: .3rem 0 0; touch-action: none; cursor: pointer; }
+    .pb-bar { position: relative; height: 8px; border-radius: 4px; background: var(--border); }
     .pb-bar .f { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px; background: var(--green); }
-    .pb-bar .t { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--amber); }
+    .pb-bar .t { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--amber); pointer-events: none; }
+    .pb-bar .k { position: absolute; top: 50%; left: 0; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%;
+      background: var(--text); box-shadow: 0 0 0 3px rgba(0,0,0,.35); pointer-events: none; }
+    .pb-scrub.drag .k { transform: scale(1.25); background: var(--green); }
+    .pb-bub { position: absolute; bottom: 100%; left: 0; transform: translateX(-50%); padding: .2rem .45rem; border-radius: 6px;
+      background: var(--green); color: #001a0d; font-size: .8rem; font-weight: 900; font-variant-numeric: tabular-nums;
+      white-space: nowrap; pointer-events: none; display: none; }
+    .pb-scrub.drag .pb-bub { display: block; }
+    .pb-scrub.off { pointer-events: none; opacity: .45; }
+    .pb-nudge { display: grid; grid-template-columns: repeat(4, 1fr); gap: .35rem; }
+    .pb-nudge button { height: 2.3rem; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: var(--text);
+      font-size: .72rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .pb-nudge button:disabled { color: var(--muted); }
     .pb-marks { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
     .pb-marks button { padding: .42rem .55rem; border-radius: 8px; border: 1px solid var(--amber); background: transparent; color: var(--amber);
       font-size: .66rem; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -856,8 +869,8 @@
     const st = recState(n);
     return st === 'REC' || st === 'PLAY' ? e[0] + (Date.now() - e[1]) : e[0];
   }
-  // ── playback (v2.3). Probed: gotomarker is the only seek the WING honours over OSC, and only while
-  // PAUSED or STOPPED; STOP rewinds to 0:00. Position = $stat/etime, length = $stat/sessionlen (ms).
+  // ── playback (v2.3/2.3.1). Seek = stime + gotomarker 101 (the console's own method), works paused,
+  // stopped and playing; STOP rewinds to 0:00. Position = $stat/etime, length = $stat/sessionlen (ms).
   const listOf = (o, n) => (o && (o[n] || o[String(n)])) || [];
   const clk = ms => { const t = Math.max(0, Math.floor((ms || 0) / 1000)), h = Math.floor(t / 3600),
     m = Math.floor(t / 60) % 60, sec = String(t % 60).padStart(2, '0');
@@ -886,14 +899,41 @@
         + '<div class="pb-body"><select class="pb-sess"></select>'
         + '<div class="pb-ctl"><button class="pb-play">&#9654; PLAY</button>'
         + '<button class="pb-stop" title="Stop (rewinds to 0:00)">&#9632;</button><span class="pb-pos"></span></div>'
-        + '<div class="pb-bar"><div class="f"></div></div><div class="pb-marks"></div><div class="pb-hint"></div></div></div>';
+        + '<div class="pb-scrub"><div class="pb-bar"><div class="f"></div><div class="k"></div><div class="pb-bub"></div></div></div>'
+        + '<div class="pb-nudge"><button data-d="-30000">&minus;30 s</button><button data-d="-10000">&minus;10 s</button>'
+        + '<button data-d="10000">+10 s</button><button data-d="30000">+30 s</button></div>'
+        + '<div class="pb-marks"></div><div class="pb-hint"></div></div></div>';
       const r = { n, el, badge: el.querySelector('.rec-badge'), time: el.querySelector('.rec-time'),
                   info: el.querySelector('.rec-info'), go: el.querySelector('.rec-go'),
                   stop: el.querySelector('.rec-stop'), marks: el.querySelector('.rec-marks'),
                   pb: el.querySelector('.pb'), pbSum: el.querySelector('.pb-tog .s'), sess: el.querySelector('.pb-sess'),
                   play: el.querySelector('.pb-play'), pstop: el.querySelector('.pb-stop'), pos: el.querySelector('.pb-pos'),
                   bar: el.querySelector('.pb-bar'), fill: el.querySelector('.pb-bar .f'), chips: el.querySelector('.pb-marks'),
-                  hint: el.querySelector('.pb-hint'), sessKey: null, markKey: null, wasPlay: false };
+                  hint: el.querySelector('.pb-hint'), scrub: el.querySelector('.pb-scrub'), knob: el.querySelector('.pb-bar .k'),
+                  bub: el.querySelector('.pb-bub'), nudge: [...el.querySelectorAll('.pb-nudge button')],
+                  sessKey: null, markKey: null, wasPlay: false, drag: null, hold: null };
+      // scrub: drag shows the target, release sends ONE seek; the target is held on screen until the
+      // console's position push confirms it (or 1.5 s), so the thumb doesn't snap back meanwhile.
+      const lenOf = () => S[RB(n) + '/$stat/sessionlen'] || 0;
+      const fracAt = e => { const b = r.bar.getBoundingClientRect(); return b.width ? Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)) : 0; };
+      const seekTo = ms => {
+        const len = lenOf(); if (!len) return;
+        ms = Math.max(0, Math.min(len, Math.round(ms)));
+        r.hold = { ms, t0: Date.now() }; paintRec();
+        playPost({ card: n, action: 'seek', ms });
+      };
+      r.scrub.addEventListener('pointerdown', e => {
+        if (!lenOf()) return;
+        e.preventDefault(); try { r.scrub.setPointerCapture(e.pointerId); } catch (x) {}
+        r.drag = fracAt(e) * lenOf(); r.scrub.classList.add('drag'); paintRec();
+      });
+      r.scrub.addEventListener('pointermove', e => { if (r.drag === null) return; r.drag = fracAt(e) * lenOf(); paintRec(); });
+      r.scrub.addEventListener('pointerup', e => {
+        if (r.drag === null) return;
+        const ms = fracAt(e) * lenOf(); r.drag = null; r.scrub.classList.remove('drag'); seekTo(ms);
+      });
+      r.scrub.addEventListener('pointercancel', () => { r.drag = null; r.scrub.classList.remove('drag'); paintRec(); });
+      r.nudge.forEach(b => b.addEventListener('click', () => seekTo(shownPos(r) + +b.dataset.d)));
       if (LS.get('mixer.pbOpen.' + n) === '1') r.pb.classList.add('open');
       el.querySelector('.pb-tog').addEventListener('click', () => {
         LS.set('mixer.pbOpen.' + n, r.pb.classList.toggle('open') ? '1' : '0');
@@ -975,6 +1015,17 @@
     $('rec-sum').textContent = sum.join('  ');
     $('rec-marker').disabled = !recRows.some(r => recState(r.n) === 'REC');
   }
+  function shownPos(r) {                       // what the bar shows: drag target > pending seek > live position
+    if (r.drag !== null) return r.drag;
+    if (r.hold) {
+      const seen = recSeen[r.n];
+      const confirmed = seen && seen[1] > r.hold.t0 && Math.abs(seen[0] - r.hold.ms) < 3000;
+      if (Date.now() - r.hold.t0 < 1500 && !confirmed) return r.hold.ms;
+      r.hold = null;
+    }
+    const len = S[RB(r.n) + '/$stat/sessionlen'] || 0;
+    return Math.min(recElapsed(r.n), len || Infinity);
+  }
   function paintPlay(r, st, sd) {
     const b = RB(r.n), sl = listOf(recS, r.n), ml = listOf(recM, r.n);
     const nsess = S[b + '/$stat/sessions'] || 0, cur = S[b + '/$stat/sessionpos'] || 0;
@@ -983,7 +1034,7 @@
     const playing = st === 'PLAY', paused = st === 'PPAUSE';
     if ((playing || paused) && !r.wasPlay && !r.pb.classList.contains('open')) r.pb.classList.add('open');   // auto-open
     r.wasPlay = playing || paused;
-    const len = S[b + '/$stat/sessionlen'] || 0, pos = Math.min(recElapsed(r.n), len || Infinity);
+    const len = S[b + '/$stat/sessionlen'] || 0, pos = shownPos(r);
     // session picker: rebuilt only when the list changes
     const key = sl.join('|');
     if (key !== r.sessKey) {
@@ -997,7 +1048,10 @@
     r.play.disabled = !piLink;
     r.pstop.disabled = st === 'STOP' || !piLink;
     r.pos.innerHTML = `${clk(pos)} <small>/ ${len ? clk(len) : '–'}</small>`;
-    r.fill.style.width = len ? `${Math.min(100, pos / len * 100)}%` : '0';
+    const pct = len ? `${Math.min(100, pos / len * 100)}%` : '0';
+    r.fill.style.width = pct; r.knob.style.left = pct; r.bub.style.left = pct; r.bub.textContent = clk(pos);
+    r.scrub.classList.toggle('off', !len || !piLink);
+    r.nudge.forEach(x => { x.disabled = !len || !piLink; });
     r.pbSum.textContent = `#${cur || '–'}${len ? ' · ' + clk(len) : ''}${playing ? ' · playing' : paused ? ' · paused' : ''}`;
     // marker chips + ticks: rebuilt only when the list or session length changes
     const mkey = ml.join('|') + '@' + len;
@@ -1013,9 +1067,9 @@
       });
     }
     const mp = S[b + '/$stat/markerpos'] || 0;
-    [...r.chips.children].forEach((c, i) => { c.disabled = playing || !piLink; c.classList.toggle('cur', i + 1 === mp); });
-    r.hint.textContent = !ml.length ? 'No markers in this session.'
-      : playing ? 'Pause to jump to a marker.' : 'Tap a marker to move the play head there.';
+    [...r.chips.children].forEach((c, i) => { c.disabled = !piLink; c.classList.toggle('cur', i + 1 === mp); });
+    r.hint.textContent = (playing ? 'Live: moves are heard immediately. ' : '')
+      + (ml.length ? 'Drag the bar, nudge, or tap a marker.' : 'Drag the bar or nudge. No markers in this session.');
   }
   setInterval(() => { if (recRows.some(r => ['REC', 'PLAY'].includes(recState(r.n)))) paintRec(); }, 250);
 

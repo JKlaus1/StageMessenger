@@ -33,9 +33,11 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
     'STOP' (rewinds to 0:00). $ctl/opensession N (int, 1-based in $stat/sessionlist order, newest
     first) opens a session; $stat/sessionpos = the open session. $ctl/gotomarker N (int, 1-based)
     jumps instantly while PAUSED or STOPPED (PLAY then starts there), pushes etime + markerpos and
-    self-resets to 0. There is NO arbitrary seek over OSC: $ctl/stime stores a float but is never
-    applied, and writes to $stat/etime are echoed back but ignored by the transport (paused, stopped
-    or playing). etime pushes ~7/s while playing; sessionlen = open session length (ms).
+    self-resets to 0. SEEK (how the console itself scrubs, caught by watching its pushes): write
+    $ctl/stime = target ms as a FLOAT (an int is ignored), then $ctl/gotomarker = 101 (its range is
+    0..101: 101 = "go to stime"). Verified from OSC while PAUSED, STOPPED and PLAYING -- the console
+    UI only offers it while paused. stime alone does nothing, and $stat/etime writes are echoed but
+    not a reliable seek. etime pushes ~7/s while playing; sessionlen = open session length (ms).
     Display strings for times are inconsistent ('0:02:90', '1:56:30:40') -- use the native ms.
   * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
     /io/out/USB/N/in is 1-based on write (int or str); readback display string is 1-based.
@@ -314,6 +316,9 @@ class Wing:
         elif leaf == 'setmarker' and addr.startswith('/cards/wlive/'):
             self._send(addr, 1)
             return 1                                # self-resetting trigger: don't cache it
+        elif leaf == 'stime' and addr.startswith('/cards/wlive/'):
+            v = float(round(max(0.0, min(360000000.0, float(value)))))
+            self._send(addr, v)                     # float only: an int write is ignored
         elif leaf in ('opensession', 'gotomarker') and addr.startswith('/cards/wlive/'):
             v = int(value)
             if not 1 <= v <= 100:
@@ -324,6 +329,14 @@ class Wing:
             return None
         with self.lock:
             self.state[addr] = v
+        return v
+
+    def seek(self, card, ms):
+        """WING-LIVE: move card's play head to ms (works paused, stopped and playing)."""
+        b = f'/cards/wlive/{int(card)}/$ctl'
+        v = self.set(f'{b}/stime', ms)
+        time.sleep(0.05)
+        self._send(f'{b}/gotomarker', 101)        # 101 = "go to stime"
         return v
 
     def query_many(self, addrs, timeout=1.0):
