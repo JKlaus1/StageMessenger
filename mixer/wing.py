@@ -25,6 +25,10 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
     REC while recording is a no-op. $ctl/setmarker = int 1 adds one marker and self-resets to 0.
     $stat/state|etime|sdfree|markers|markerlist|sessions are PUSHED via /*S (etime, sdfree in
     ms; list values push as text but a query returns [text, norm, index] -- read the text).
+  * Main/Alt inputs: every channel has in/conn/grp+in (main) and in/conn/altgrp+altin (alt).
+    /io/altsw (int 0/1) is the console-wide switch -- writable over OSC, pushed on change; each
+    channel's in/set/altsrc (r/o) follows it (ch 1-40), and $name/$col follow the active source.
+    /cards/wlive/auto_play|auto_rec|auto_stop (KEEP/MAIN/ALT, text) make the card flip it itself.
   * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
     /io/out/USB/N/in is 1-based on write (int or str); readback display string is 1-based.
 """
@@ -90,12 +94,14 @@ SRC_GROUPS = [('LCL', 24), ('A', 48), ('B', 48), ('C', 48), ('SC', 32), ('USB', 
 SRC_LEAVES = ('name', 'mode', 'g', 'vph', 'pol')
 KEEP_SHADOW = ('/$name', '/$solo', '/$col', '/$mute')     # '$' paths we do track (see _rx_loop)
 N_SD = 2                                                     # WING-LIVE card: SD slots A, B
-REC_TEXT = ('/state', '/control', '/sdstate', '/markerlist', '/sessionlist', '/errormessage', '/$type')
+REC_TEXT = ('/state', '/control', '/sdstate', '/markerlist', '/sessionlist', '/errormessage', '/$type',
+            '/auto_play', '/auto_rec', '/auto_stop')
+AUTO_KEYS = ('auto_play', 'auto_rec', 'auto_stop')
 
 
 def rec_addrs():
     """WING-LIVE recorder state the page shows (all '$' paths, all pushed when they change)."""
-    a = ['/cards/$type']
+    a = ['/cards/$type', '/io/altsw'] + [f'/cards/wlive/{k}' for k in AUTO_KEYS]
     for n in range(1, N_SD + 1):
         b = f'/cards/wlive/{n}'
         a += [f'{b}/$ctl/control'] + [f'{b}/$stat/{k}' for k in
@@ -111,6 +117,7 @@ def strip_addrs():
             a += [f'/{kind}/{i}/name', f'/{kind}/{i}/$name', f'/{kind}/{i}/fdr', f'/{kind}/{i}/mute',
                   f'/{kind}/{i}/$solo', f'/{kind}/{i}/$mute', f'/{kind}/{i}/in/conn/grp', f'/{kind}/{i}/in/conn/in',
                   f'/{kind}/{i}/col', f'/{kind}/{i}/$col', f'/{kind}/{i}/tags',
+                  f'/{kind}/{i}/in/conn/altgrp', f'/{kind}/{i}/in/conn/altin', f'/{kind}/{i}/in/set/altsrc',
                   f'/{kind}/{i}/in/set/trim', f'/{kind}/{i}/in/set/inv',
                   f'/{kind}/{i}/flt/lc', f'/{kind}/{i}/flt/lcf', f'/{kind}/{i}/flt/hc', f'/{kind}/{i}/flt/hcf']
     for i in range(1, N_BUS + 1):
@@ -137,7 +144,7 @@ def value_from_reply(addr, args):
     Routing '/in' params are kept 1-based (the display form) to match how they are written."""
     if not args:
         return None
-    if addr.endswith(('/in', '/col', '/$col')):     # 1-based palette / input index
+    if addr.endswith(('/in', '/altin', '/col', '/$col')):     # 1-based palette / input index
         if len(args) >= 3 and str(args[0]).isdigit():
             return int(args[0])
         if isinstance(args[0], (int, float)):
@@ -282,6 +289,14 @@ class Wing:
             v = str(value); self._send(addr, v)
         elif leaf in ('in',):
             v = int(value); self._send(addr, v)
+        elif addr == '/io/altsw':
+            v = 1 if int(value) else 0
+            self._send(addr, v)
+        elif leaf in AUTO_KEYS and addr.startswith('/cards/wlive/'):
+            v = str(value).upper()
+            if v not in ('KEEP', 'MAIN', 'ALT'):
+                return None
+            self._send(addr, v)
         elif leaf == 'control' and addr.startswith('/cards/wlive/'):
             v = str(value).upper()
             if v not in ('REC', 'STOP'):

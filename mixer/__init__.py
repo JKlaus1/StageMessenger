@@ -130,7 +130,9 @@ SETTABLE = re.compile(
     r'|(?:bus|main|mtx)/\d{1,2}/(?:fdr|mute)'
     r'|mgrp/[1-8]/mute'
     r'|(?:ch|aux)/\d{1,2}/(?:in/set/(?:trim|inv)|flt/(?:lc|lcf|hc|hcf))'
-    r'|io/in/(?:LCL|A|B|C|SC|USB|CRD|MOD|PLAY|AES)/\d{1,2}/(?:g|vph|pol))$')
+    r'|io/in/(?:LCL|A|B|C|SC|USB|CRD|MOD|PLAY|AES)/\d{1,2}/(?:g|vph|pol)'
+    r'|io/altsw|cards/wlive/auto_(?:play|rec|stop))$')
+LOGGED_SETS = ('/io/altsw', '/cards/wlive/auto_')   # console-wide changes: note who made them
 SRC_COUNT = dict(SRC_GROUPS)
 NODE_PATH = re.compile(r'^/(ch|aux)/(\d{1,2})/(eq|gate|dyn)$')
 NODE_LOCKED = ('mdl',)          # model changes stay at the console for now
@@ -184,7 +186,8 @@ class Mixer:
             time.sleep(3)
             if not self.wing.loaded:
                 continue
-            self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips() for leaf in ('grp', 'in')]
+            self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips()
+                            for leaf in ('grp', 'in', 'altgrp', 'altin')]
                            + self._mute_addrs() + [f'/mgrp/{g}/mute' for g in range(1, 9)]
                            + [b + '/tags' for b in self.overrides])
             time.sleep(0.2)
@@ -678,7 +681,11 @@ def api_set():
         v = _mixer.wing.set(addr, d.get('v'))
     except (TypeError, ValueError):
         return jsonify(ok=False, err='bad value'), 400
+    if v is None:
+        return jsonify(ok=False, err='bad value'), 400
     _mixer.hub.publish({'t': 'upd', 'a': addr, 'v': v})
+    if addr.startswith(LOGGED_SETS):
+        print(f'[mixer] {addr} = {v} from {_who()}', flush=True)
     if addr.startswith('/mgrp/'):
         _mixer.refresh_mutes()            # members' $mute changes silently
         if not v:                         # group released -> put back any overridden members now
