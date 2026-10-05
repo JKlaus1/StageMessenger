@@ -7,10 +7,11 @@ copy of the package (no `mixer_config.json` / `mixer_state.json` is written into
 | Suite | What | Command |
 |---|---|---|
 | X32 API | fake M32C (`fake_x32.py`) on udp 10023 + Flask test client: detection, caps, canonical values, writes, M32 mute-group semantics, console pushes, meters, channel sheet (input stage, headamps appearing / going with a stagebox, EQ / gate / dyn scalings both ways, source picker), X-LIVE recorder (record, markers, sessions, playback, seek, SD / error states), X32-off features, page CAPS injection, per-console channel order | `python3 -m mixer.tests.test_x32_api` |
+| Auto-detect / hot swap | no IP configured: fake M32C + fake WING on loopback aliases 127.0.0.2/.3; finds whichever answers, swaps X32 -> WING -> WING at a new address without a restart (old driver stopped, socket freed, per-console order, pages told), never second-guesses a connected console, discovery parsing / type filter / subnet sweep | `python3 -m mixer.tests.test_autoswitch` |
 | WING regression | minimal fake WING on udp 2223: WING driver, 40/8/16 strips, USB patch, own mute, float fader writes, WING order key | `python3 -m mixer.tests.test_wing_regression` |
 | Page (jsdom) | the page as served (CAPS injected) + a live snapshot -> DOM; clicks -> requests; X32 channel sheet driven by real driver answers (`x32_api.json`); WING defaults | `python3 -m mixer.tests.gen_page_fixtures /tmp/fx && node mixer/tests/test_page.js /tmp/fx` |
 
-Ports 10023 / 2223 on 127.0.0.1 must be free (stop `stage-messenger` first if it runs on the same
+Ports 10023 / 2222 / 2223 on 127.0.0.1-3 must be free (stop `stage-messenger` first if it runs on the same
 machine with a console on localhost -- normally it talks to the console's IP, so no clash).
 The page suite needs jsdom (`npm i jsdom`, put its `node_modules` on `NODE_PATH`).
 

@@ -105,9 +105,13 @@ class Meters:
         if self._tcp is t:
             self._drop()
 
+    def stop(self):
+        self._stop.set()
+        self._drop()
+
     def _ctl(self):
         while not self._stop.is_set():
-            if self.wanted():
+            if self.wanted() and self.ip:
                 if not self._tcp and not self._connect():
                     self._stop.wait(5); continue
                 if not self._subscribed:
@@ -124,6 +128,12 @@ class Meters:
 
     # ── data ──
     def _rx(self):
+        try:
+            self._rx_loop()
+        finally:
+            self.udp.close()
+
+    def _rx_loop(self):
         while not self._stop.is_set():
             try:
                 d, _ = self.udp.recvfrom(4096)

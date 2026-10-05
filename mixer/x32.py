@@ -301,8 +301,11 @@ def decode_user_in(u):
 class X32:
     """Owns one UDP socket: raw cache, canonical derivation, writes, /xremote."""
 
+    TIMEOUT = 20          # s of silence before the console counts as gone
+    KA = 8                # /xremote renewal + liveness probe interval (s; the lease is 10 s)
+
     def __init__(self, ip, on_update=None, on_conn=None, on_loaded=None):
-        self.ip = ip
+        self.ip = ip or ''            # '' = no console found yet: nothing is sent
         self.on_update = on_update or (lambda a, v: None)
         self.on_conn = on_conn or (lambda ok: None)
         self.on_loaded = on_loaded or (lambda: None)
@@ -584,12 +587,20 @@ class X32:
         self._stop.set()
 
     def _send(self, addr, *args):
+        if not self.ip:
+            return
         try:
             self.sock.sendto(osc_msg(addr, *args), (self.ip, PORT))
         except OSError:
             pass
 
     def _rx_loop(self):
+        try:
+            self._rx()
+        finally:
+            self.sock.close()                        # stop() (console swap): free the socket
+
+    def _rx(self):
         while not self._stop.is_set():
             try:
                 data, _ = self.sock.recvfrom(65535)
@@ -617,11 +628,11 @@ class X32:
         while not self._stop.is_set():
             self._send('/xremote')
             self._send('/xinfo')              # liveness probe (pushes only flow on change)
-            if self.connected and time.time() - self.last_rx > 20:
+            if self.connected and time.time() - self.last_rx > self.TIMEOUT:
                 self.connected = False
                 self.loaded = False
                 self.on_conn(False)
-            self._stop.wait(8)
+            self._stop.wait(self.KA)
 
     def _load_all(self):
         addrs = self.load_addrs()

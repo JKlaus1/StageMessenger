@@ -2625,11 +2625,12 @@
   }
 
   // ── status / events ──
+  let consoleFound = true;          // false while the Pi is still searching the mixer network (v3.3)
   function setStatus(conn, loaded) {
     const d = $('status-dot'), t = $('status-text');
     if (!piLink) { d.className = 'off'; t.textContent = 'No link to Pi'; return; }
     d.className = conn ? (loaded ? 'on' : 'load') : 'off';
-    t.textContent = conn ? (loaded ? CAP.model : 'Loading') : CAP.model + ' offline';
+    t.textContent = conn ? (loaded ? CAP.model : 'Loading') : (consoleFound ? CAP.model + ' offline' : 'Looking for a console…');
   }
   let rowIndex = {};
   function reindex() {             // '/ch/N/' -> row
@@ -2667,9 +2668,10 @@
   function applySnap(m) {
     const SS = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return '1'; } },
                  set(k, v) { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch (e) {} } };
-    if (m.caps && (m.caps.console !== CAP.console || m.caps.nch !== CAP.nch)) {   // console changed: rebuild once
+    if (m.caps && (m.caps.console !== CAP.console || m.caps.nch !== CAP.nch || m.caps.model !== CAP.model)) {   // console changed: rebuild once
       if (!SS.get('mixer.capsReload')) { SS.set('mixer.capsReload', '1'); location.reload(); return; }
     } else SS.set('mixer.capsReload', '');
+    consoleFound = m.found !== false;
     S = m.state || {}; feeds = m.feeds || []; feedId = m.feed || feedId; srcGroups = m.srcgroups || srcGroups;
     paintSheet();
     setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);

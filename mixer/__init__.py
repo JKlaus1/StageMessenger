@@ -1,10 +1,13 @@
 """
 WING / X32 / M32 remote mixer + listen-back for Stage Messenger.
 
-The console driver is chosen by mixer_config.json "mixer_type": "wing" | "x32" | "auto" (auto asks
-mixer_ip for /xinfo on 10023, then for a WING reply on 2223; the last one seen is remembered). Both
-drivers speak the WING address dialect to this module and the page; x32.py translates. Features the
-X32 path doesn't have yet are switched off through CAPS (the page sizes itself from them).
+The console is found, not configured (v3.3): discover.py asks the mixer interface (eth0) for any
+WING ('WING?' on 2222) or X32 / M32 ('/xinfo' on 10023) and the driver follows whatever answers. A
+watcher keeps looking whenever the console is gone and hot-swaps the driver (WING <-> X32, or a new
+DHCP address) without restarting the service; open pages reload into the new layout. mixer_config.json
+"mixer_type" can still force 'wing' / 'x32' and "mixer_ip" can pin an address, but neither is needed.
+Both drivers speak the WING address dialect to this module and the page; x32.py translates. Features
+the X32 path doesn't have yet are switched off through CAPS (the page sizes itself from them).
 
 Everything lives under /mixer so one Cloudflare Access path rule protects the page,
 the API and the audio stream. Mixer traffic deliberately does NOT use Socket.IO: the
@@ -29,14 +32,18 @@ from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, N_SD, SRC_GROUPS, SRC_LEAVES,
 from .listen import Listener
 from .meters import Meters
 from . import x32 as x32mod
+from .discover import Finder
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(os.path.dirname(HERE), 'mixer_config.json')
 STATE_PATH = os.path.join(os.path.dirname(HERE), 'mixer_state.json')
 
 DEFAULTS = {
-    'mixer_ip':        '192.168.0.91',
-    'mixer_type':      'auto',   # 'wing' | 'x32' (X32 / M32 family) | 'auto'
+    'mixer_ip':        '',       # '' = find the console (v3.3); an address here pins it
+    'mixer_type':      'auto',   # 'wing' | 'x32' (X32 / M32 family) | 'auto' = whichever answers
+    'mixer_iface':     'eth0',   # discovery searches only this interface (the rack / mixer network)
+    'mixer_scan':      [],       # extra addresses to ask (unicast) -- normally empty
+    'watch_s':         3,        # console watcher: how often to look while no console is connected
     'remote_enabled':  False,
     'usb_patch':       True,     # the Pi owns WING USB outs 1-43 and 47-48
     'ambient': {                 # USB 43: room/stage ambient mic
@@ -130,35 +137,9 @@ CAPS = {
 }
 
 
-def wing_probe(ip, timeout=0.6):
-    """True if a WING answers an OSC query on 2223."""
-    import socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.settimeout(timeout)
-        s.sendto(osc_msg('/main/1/name'), (ip, 2223))
-        d, _ = s.recvfrom(4096)
-        return osc_parse(d)[0] == '/main/1/name'
-    except (OSError, ValueError):
-        return False
-    finally:
-        s.close()
-
-
-def pick_console(cfg, last):
-    """-> ('wing'|'x32', xinfo or None, how)"""
-    want = str(cfg.get('mixer_type', 'auto')).lower()
-    if want in ('x32', 'm32'):
-        return 'x32', x32mod.probe(cfg['mixer_ip']), 'configured'
-    if want == 'wing':
-        return 'wing', None, 'configured'
-    info = x32mod.probe(cfg['mixer_ip'])
-    if info:
-        return 'x32', info, 'auto: answered /xinfo'
-    if wing_probe(cfg['mixer_ip']):
-        return 'wing', None, 'auto: WING answered'
-    kind = last if last in CAPS else 'wing'
-    return kind, None, f'auto: nothing answered, using last ({kind})'
+def forced_type(cfg):
+    t = str(cfg.get('mixer_type', 'auto')).lower()
+    return {'m32': 'x32', 'x32': 'x32', 'wing': 'wing'}.get(t)
 
 
 # ── SSE hub ─────────────────────────────────────────────────────────────────────
@@ -220,54 +201,153 @@ class Mixer:
         self.node_cache = {}
         self._ovr_lock = threading.RLock()
         self._state_raw = self._read_state_file()
-        self.console, info, how = pick_console(cfg, self._state_raw.get('console'))
-        self.x32 = self.console == 'x32'
-        self.caps = dict(CAPS[self.console])
-        if info:
-            self.caps['model'] = info.get('model') or self.caps['model']
-            self.caps['fw'] = info.get('fw', '')
-        print(f"[mixer] console: {self.caps['model']} at {cfg['mixer_ip']} ({how})", flush=True)
-        self._load_state()
         self.patch_note = ''
         self._last_patch = 0.0
         self._patch_lock = threading.Lock()
-        # 'self.wing' is the console driver (wing.Wing or x32.X32 -- same interface)
-        Driver = x32mod.X32 if self.x32 else Wing
-        self.wing = Driver(cfg['mixer_ip'], on_update=self._on_update,
-                           on_conn=self._on_conn, on_loaded=self._on_loaded)
+        self._swap_lock = threading.RLock()
+        self._started = False
+        self._gen = 0                                 # driver generation: callbacks from a swapped-out driver are dropped
+        self.finder = Finder(cfg.get('mixer_iface', 'eth0'), cfg.get('mixer_scan') or [])
+        self.pinned = str(cfg.get('mixer_ip') or '').strip()
+        self.want = forced_type(cfg)
+        self._rec_pub = {}                                        # throttle for 10 Hz etime / sdfree pushes
+        self._rec_tail = set()                                    # throttled addrs awaiting a trailing publish
+        found = self._find(sweep=False)          # quick at boot; the watcher sweeps the subnet
+        if found:
+            kind, ip, info, how = found['kind'], found['ip'], found, 'found'
+        else:
+            # nothing answered: no driver traffic until the watcher finds one (then it swaps in)
+            kind = self.want or (self._state_raw.get('console') if self._state_raw.get('console') in CAPS else 'wing')
+            ip = self.pinned
+            if self.want and self.pinned:
+                info, how = None, 'configured'
+            else:
+                where = self.pinned or self.finder.last_where
+                info, how = None, f'nothing answered on {where} -- still looking (last: {kind})'
+        self._attach(kind, ip, info, how)
         rtc = cfg.get('rtc', {})
         self.rtc_enabled = bool(rtc.get('enabled'))
         self._turn, self._turn_exp, self._turn_lock = None, 0.0, threading.Lock()
-        self.n_sd = self.caps['sd']
-        self.rec_markers = {n: [] for n in range(1, self.n_sd + 1)}   # card -> marker times (current session)
-        self.rec_sessions = {n: [] for n in range(1, self.n_sd + 1)}  # card -> session list (WING newest first, X32 console order)
-        self._rec_pub = {}                                        # throttle for 10 Hz etime / sdfree pushes
-        self._rec_tail = set()                                    # throttled addrs awaiting a trailing publish
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
                                  rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
                                  opus_bitrate=rtc.get('opus_bitrate', '96k'), rtc_probe=self.rtc_probe,
                                  cushion_s=cfg.get('cushion_s', 0.5), max_queue_s=cfg.get('max_queue_s', 1.0),
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
+        self.spotify = None                           # the Spotify card is optional: never blocks the mixer
+        self._ensure_spotify()
 
+    # ── console: find / attach / watch / swap (v3.3) ──
+    def _find(self, sweep=True):
+        """-> discovery result dict or None. A pinned mixer_ip is asked alone (no sweep)."""
+        try:
+            if self.pinned:
+                f = Finder('', [self.pinned], timeout=0.6).discover(sweep=False, want=self.want)
+            else:
+                f = self.finder.discover(hints=[self._state_raw.get('console_ip') or ''], sweep=sweep, want=self.want)
+        except Exception as e:
+            print(f'[mixer] discovery error: {e}', flush=True)
+            return None
+        return f[0] if f else None
+
+    def _attach(self, kind, ip, info, how):
+        """Build the console-specific half of the controller (caps, driver, meters, recorder lists,
+        this console's channel order). Not started here."""
+        self.console = kind
+        self.x32 = kind == 'x32'
+        self.ip = ip or ''
+        self.found = bool(info) or how == 'configured'
+        caps = dict(CAPS[kind])
+        if info:
+            caps['model'] = info.get('model') or caps['model']
+            caps['fw'] = info.get('fw', '')
+            caps['name'] = info.get('name', '')
+        self.caps = caps
+        where = self.ip or 'no address yet'
+        print(f"[mixer] console: {caps['model']} at {where} ({how})", flush=True)
+        self._load_state()
+        self._gen += 1
+        gen = self._gen
+        cur = lambda: gen == self._gen
+        # 'self.wing' is the console driver (wing.Wing or x32.X32 -- same interface)
+        Driver = x32mod.X32 if self.x32 else Wing
+        self.wing = Driver(self.ip,
+                           on_update=lambda a, v: cur() and self._on_update(a, v),
+                           on_conn=lambda ok: cur() and self._on_conn(ok),
+                           on_loaded=lambda: cur() and self._on_loaded())
         if self.x32:
             from .x32meters import X32Meters
             self.meters = X32Meters(self.wing, wanted=lambda: bool(self.hub.subs))
         else:
-            self.meters = Meters(cfg['mixer_ip'], wanted=lambda: bool(self.hub.subs))
-        self.spotify = None                           # the Spotify card is optional: never blocks the mixer
-        if (cfg.get('spotify') or {}).get('enabled') and self.caps['spotify']:
-            try:
-                from .spotify import Spotify
-                self.spotify = Spotify(cfg['spotify'], self.hub.publish, lambda: bool(self.hub.subs),
-                                       cfg_path=CONFIG_PATH)
-            except Exception as e:
-                print(f'[mixer] Spotify disabled: {e}', flush=True)
+            self.meters = Meters(self.ip, wanted=lambda: bool(self.hub.subs))
+        self.n_sd = caps['sd']
+        self.rec_markers = {n: [] for n in range(1, self.n_sd + 1)}   # card -> marker times (current session)
+        self.rec_sessions = {n: [] for n in range(1, self.n_sd + 1)}  # card -> session list (WING newest first, X32 console order)
+        self._rec_pub, self._rec_tail = {}, set()
+        if self.found and (self._state_raw.get('console') != kind or self._state_raw.get('console_ip') != self.ip):
+            self._write_state()
+
+    def _ensure_spotify(self):
+        if self.spotify or not self.caps['spotify'] or not (self.cfg.get('spotify') or {}).get('enabled'):
+            return
+        try:
+            from .spotify import Spotify
+            self.spotify = Spotify(self.cfg['spotify'], self.hub.publish, lambda: bool(self.hub.subs),
+                                   cfg_path=CONFIG_PATH)
+            if self._started:
+                self.spotify.start()
+        except Exception as e:
+            print(f'[mixer] Spotify disabled: {e}', flush=True)
+            self.spotify = None
+
+    def _watch(self):
+        """While no console is connected, look for one every watch_s; a different console (type or
+        address) replaces the driver. A connected console is never second-guessed."""
+        every = float(self.cfg.get('watch_s', 3) or 3)
+        quiet_since, n, last_log = time.time(), 0, 0.0
+        while True:
+            time.sleep(every)
+            d = self.wing
+            if d.connected and time.time() - d.last_rx <= 2 * d.KA + 1:
+                quiet_since = time.time()
+                continue                              # liveness replies arrive every KA s
+            if self.pinned and self.want:
+                continue                              # fully configured: the driver reconnects by itself
+            if time.time() - quiet_since < every:
+                continue                              # give a fresh driver a moment to hear its console
+            n += 1
+            f = self._find(sweep=(n % 4 == 1))        # broadcast every pass, subnet sweep every 4th
+            if not f:
+                if time.time() - last_log > 60:
+                    last_log = time.time()
+                    print(f'[mixer] no console on {self.finder.last_where} -- still looking', flush=True)
+                continue
+            if f['kind'] == self.console and f['ip'] == self.ip:
+                continue                              # same console: the driver will pick it back up
+            self.swap(f)
+            quiet_since, n = time.time(), 0
+
+    def swap(self, info):
+        """Hot-swap to the console in `info` (discovery result). Pages reload when the caps change."""
+        with self._swap_lock:
+            old_drv, old_m, old = self.wing, self.meters, f"{self.caps['model']} {self.ip or '-'}"
+            self._gen += 1                            # silence the old driver's callbacks right away
+            old_drv.stop(); old_m.stop()
+            self._attach(info['kind'], info['ip'], info, f'switched from {old}')
+            self._ensure_spotify()
+            self.wing.start(); self.meters.start()
+            self.patch_note = ''
+            if self.caps['listen']:
+                self.select_feed(self.feed_id if any(f['id'] == self.feed_id for f in self.feeds()) else 'main1')
+        self.hub.publish({'t': 'conn', 'ok': False})
+        self.hub.publish({'t': 'snap', **self.snapshot()})
 
     def start(self):
+        self._started = True
         self.wing.start()
         self.meters.start()
         threading.Thread(target=self._meter_pump, daemon=True, name='meter-pump').start()
         threading.Thread(target=self._routing_poll, daemon=True, name='routing-poll').start()
+        threading.Thread(target=self._watch, daemon=True, name='console-watch').start()
         if self.spotify:
             try:
                 self.spotify.start()
@@ -282,11 +362,9 @@ class Mixer:
         """The WING pushes nothing when a channel is re-patched, so re-read every strip's input
         patch and the physical-input settings (gain/48V/name) behind it every few seconds.
         (The X32 pushes re-patches and mutes -- nothing to poll.)"""
-        if self.x32:
-            return
         while True:
             time.sleep(3)
-            if not self.wing.loaded:
+            if self.x32 or not self.wing.loaded:
                 continue
             self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips()
                             for leaf in ('grp', 'in', 'altgrp', 'altin')]
@@ -340,14 +418,14 @@ class Mixer:
         data = self._state_raw
         self.overrides = {k: list(v) for k, v in data.get('overrides', {}).items()} if not self.x32 else {}
         self.order = self.clean_order(data.get(self._order_key, []))
-        if data.get('console') != self.console:
-            self._write_state()
 
     def _write_state(self):
         try:
             data = dict(self._state_raw)                 # keep the other console's order
             data.update({'overrides': self.overrides if not self.x32 else data.get('overrides', {}),
-                         self._order_key: self.order, 'console': self.console})
+                         self._order_key: self.order})
+            if self.found:                           # remembered as the first place to ask next time
+                data.update({'console': self.console, 'console_ip': self.ip})
             self._state_raw = data
             tmp = STATE_PATH + '.tmp'
             with open(tmp, 'w') as f:
@@ -784,6 +862,8 @@ class Mixer:
         return {
             'conn':   self.wing.connected,
             'loaded': self.wing.loaded,
+            'found':  self.found or self.wing.connected,
+            'ip':     self.ip,
             'state':  self.wing.snapshot(),
             'feeds':  self.feeds(),
             'feed':   self.feed_id,
@@ -1342,7 +1422,7 @@ def init_mixer(app):
     _mixer.select_feed('main1')
     app.register_blueprint(bp)
     _mixer.start()
-    print(f"[mixer] {_mixer.caps['model']} at {_mixer.cfg['mixer_ip']}; remote "
+    print(f"[mixer] {_mixer.caps['model']} at {_mixer.ip or '(searching)'}; remote "
           f"{'ENABLED' if _mixer.cfg.get('remote_enabled') else 'disabled'}", flush=True)
     # A fader drag is ~20 POSTs/s: keep the successful ones (and the meter/event plumbing) out of
     # the journal. Anything that was NOT 2xx still gets logged, so rejected control is visible.

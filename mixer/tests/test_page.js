@@ -198,12 +198,24 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   check('PLAY badge + pause button', d.querySelector('#rec-rows .rec-badge').textContent === 'PLAY'
         && d.querySelector('#rec-rows .pb-play').textContent.includes('PAUSE'));
   P.push({ t: 'upd', a: '/cards/wlive/1/$stat/state', v: 'STOP' }); await tick();
+  // ── v3.3 console search ──
+  console.log('console search (v3.3)');
+  const stx = () => d.getElementById('status-text').textContent;
+  P.push({ t: 'snap', ...snap, conn: false, loaded: false, found: false }); await tick();
+  check('searching -> "Looking for a console…"', stx() === 'Looking for a console…', stx());
+  P.push({ t: 'snap', ...snap, conn: false, loaded: false, found: true }); await tick();
+  check('found but gone -> "M32C offline"', stx() === 'M32C offline', stx());
+  P.push({ t: 'snap', ...snap }); await tick();
+  check('back -> model', stx() === 'M32C', stx());
   check('no script errors (X32)', P.errors.length === 0, P.errors);
 
   // caps mismatch -> one reload attempt (guarded)
   const P3 = load(fs.readFileSync(path.join(FX, 'x32.html'), 'utf8'), { ...snap, caps: { ...snap.caps, console: 'wing', nch: 40 } });
   await tick(80);
   check('console change in snapshot -> reload guard set', P3.w.sessionStorage.getItem('mixer.capsReload') === '1');
+  const P4 = load(fs.readFileSync(path.join(FX, 'x32.html'), 'utf8'), { ...snap, caps: { ...snap.caps, model: 'X32' } });
+  await tick(80);
+  check('model change (found the real console) -> reload', P4.w.sessionStorage.getItem('mixer.capsReload') === '1');
 
   // ── WING (no CAPS injected = defaults) ──
   console.log('WING page (defaults)');

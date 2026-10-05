@@ -180,8 +180,11 @@ def value_from_reply(addr, args):
 class Wing:
     """Owns one UDP socket: queries, writes, and the /*S push subscription."""
 
+    TIMEOUT = 15          # s of silence before the console counts as gone
+    KA = 5                # keepalive / liveness probe interval (s)
+
     def __init__(self, ip, on_update=None, on_conn=None, on_loaded=None):
-        self.ip = ip
+        self.ip = ip or ''            # '' = no console found yet: nothing is sent
         self.on_update = on_update or (lambda a, v: None)
         self.on_conn = on_conn or (lambda ok: None)
         self.on_loaded = on_loaded or (lambda: None)
@@ -208,12 +211,20 @@ class Wing:
 
     # ── io ──
     def _send(self, addr, *args):
+        if not self.ip:
+            return
         try:
             self.sock.sendto(osc_msg(addr, *args), (self.ip, PORT))
         except OSError:
             pass
 
     def _rx_loop(self):
+        try:
+            self._rx()
+        finally:
+            self.sock.close()                        # stop() (console swap): free the socket
+
+    def _rx(self):
         while not self._stop.is_set():
             try:
                 data, _ = self.sock.recvfrom(65535)
@@ -255,11 +266,11 @@ class Wing:
         while not self._stop.is_set():
             self._send('/*S')
             self._send('/main/1/name')       # liveness probe; pushes only flow on change
-            if self.connected and time.time() - self.last_rx > 15:
+            if self.connected and time.time() - self.last_rx > self.TIMEOUT:
                 self.connected = False
                 self.loaded = False
                 self.on_conn(False)
-            self._stop.wait(5)
+            self._stop.wait(self.KA)
 
     def _load_all(self):
         for a in strip_addrs():

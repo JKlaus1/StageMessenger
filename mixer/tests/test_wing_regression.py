@@ -16,14 +16,34 @@ from mixer.tests.fake_x32 import msg, parse
 
 
 class FakeWing:
-    def __init__(self):
+    """OSC on host:2223, plus discovery ('WING?' on host:2222 -> 'WING,ip,name,model,serial,fw')."""
+
+    def __init__(self, host='127.0.0.1'):
+        self.host = host
         self.st = {}
         self.writes = []
+        self.disc = 0
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.s.bind(('127.0.0.1', 2223))
+        self.s.bind((host, 2223))
         self.s.settimeout(0.2)
+        self.d = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.d.bind((host, 2222))
+        self.d.settimeout(0.2)
         self._stop = threading.Event()
         threading.Thread(target=self._loop, daemon=True).start()
+        threading.Thread(target=self._disc_loop, daemon=True).start()
+
+    def _disc_loop(self):
+        while not self._stop.is_set():
+            try:
+                d, peer = self.d.recvfrom(1024)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            if d.startswith(b'WING?'):
+                self.disc += 1
+                self.d.sendto(f'WING,{self.host},Josephs-Wing,WING,S1234,3.1'.encode(), peer)
 
     def value(self, a):
         if a in self.st:
@@ -58,7 +78,7 @@ class FakeWing:
                 self.s.sendto(msg(a, disp, 0.5, float(v) if isinstance(v, float) else int(v)), peer)
 
     def stop(self):
-        self._stop.set(); self.s.close()
+        self._stop.set(); self.s.close(); self.d.close()
 
 
 def main():

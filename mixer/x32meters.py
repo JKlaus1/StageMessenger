@@ -53,7 +53,7 @@ class X32Meters:
         """Subscribe within ~1 s of a page opening; renew every 9 s (the console keeps sending 10 s)."""
         last = 0.0
         while not self._stop.is_set():
-            if self.wanted() and self.drv.connected:
+            if self.wanted() and self.drv.connected and self.ip:
                 if time.time() - last >= 9:
                     last = time.time()
                     for b in BANKS:
@@ -66,6 +66,12 @@ class X32Meters:
             self._stop.wait(1)
 
     def _rx(self):
+        try:
+            self._rx_loop()
+        finally:
+            self.sock.close()
+
+    def _rx_loop(self):
         while not self._stop.is_set():
             try:
                 d, _ = self.sock.recvfrom(4096)
