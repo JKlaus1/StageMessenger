@@ -689,7 +689,8 @@
   // Console capabilities: the Pi fills CAPS in when it serves this page (mixer/__init__.py page()).
   const CAPS = null; /*CAPS*/
   const CAP = Object.assign({ console: 'wing', model: 'WING', nch: 40, naux: 8, nbus: 16, nmg: 8, main2: 'Main 2',
-                              sheet: true, listen: true, alt: true }, CAPS || {});
+                              sheet: true, listen: true, alt: true, gain: [-2.5, 45], lcf: [20, 2000], hc: true,
+                              spol: true, auxproc: ['eq', 'gate', 'dyn'], grdb: false }, CAPS || {});
   const X32 = CAP.console === 'x32';
   const NBUS = CAP.nbus, NCH = CAP.nch, NAUX = CAP.naux;
   const ALT_TAG = X32 ? 'PLAY' : 'ALT';      // X32: routing REC/PLAY switch plays the WING's MAIN/ALT role
@@ -829,7 +830,7 @@
   }
   const SRC = { LCL: 'Local', A: 'AES A', B: 'AES B', C: 'AES C', SC: 'StageCon', USB: 'USB', CRD: 'Card',
                 MOD: 'Module', PLAY: 'Player', AES: 'AES/EBU', USR: 'User', OSC: 'Osc', AUX: 'Aux',
-                FX: 'FX', BUS: 'Bus', TB: 'Talkback' };
+                FX: 'FX', BUS: 'Bus', TB: 'Talkback', IN: 'In' };
   const onAlt = r => !r.master && S[`/${r.kind}/${r.n}/in/set/altsrc`] === 1;
   function srcOf(r) {                  // the source the strip is actually hearing (main, or alt when switched)
     const b = `/${r.kind}/${r.n}/in/conn/`, alt = onAlt(r);
@@ -2202,9 +2203,9 @@
     return (typeof g === 'string' && g !== 'OFF' && i) ? `/io/in/${g}/${i}` : null;
   }
   const P = {
-    gain: paramRow('row-gain', -2.5, 45, false, () => srcBase() && srcBase() + '/g', v => typeof v === 'number' ? v.toFixed(1) + ' dB' : ''),
+    gain: paramRow('row-gain', CAP.gain[0], CAP.gain[1], false, () => srcBase() && srcBase() + '/g', v => typeof v === 'number' ? v.toFixed(1) + ' dB' : ''),
     trim: paramRow('row-trim', -18, 18, false, () => base() && base() + '/in/set/trim', v => fmtSigned(v, ' dB')),
-    lcf:  paramRow('row-lcf', 20, 2000, true, () => base() && base() + '/flt/lcf', fmtHz),
+    lcf:  paramRow('row-lcf', CAP.lcf[0], CAP.lcf[1], true, () => base() && base() + '/flt/lcf', fmtHz),
     hcf:  paramRow('row-hcf', 200, 20000, true, () => base() && base() + '/flt/hcf', fmtHz),
   };
   function toggle(id, addrFn, confirmMsg) {
@@ -2255,6 +2256,9 @@
       $('sh-shared').textContent = sh.length ? 'Gain / 48V also affect: ' + sh.join(', ') : '';
     }
     $('sh-inv').classList.toggle('on', !!S[b + '/in/set/inv']);
+    $('row-hcf').style.display = CAP.hc ? '' : 'none';                       // X32: no high cut on a channel
+    $('sh-spol').style.display = CAP.spol ? '' : 'none';                     // X32: no source polarity
+    $('row-lcf').style.display = (X32 && sheetRow.kind === 'aux') ? 'none' : '';   // X32 aux in: no low cut
     for (const k of ['lc', 'hc']) {
       const on = !!S[b + '/flt/' + k];
       $('sh-' + k).classList.toggle('on', on); $('sh-' + k).textContent = on ? 'ON' : 'OFF';
@@ -2271,8 +2275,11 @@
     $('sh-lvdb').textContent = d == null ? '' : (d <= -90 ? '−∞' : d + ' dB');
     if (curTab === 'gate' || curTab === 'dyn') paintGR();
   }
+  const procTabs = r => r.kind === 'aux' ? CAP.auxproc : ['eq', 'gate', 'dyn'];
   function openSheet(r) {
     sheetRow = r; pickGroup = null; $('sh-picker').style.display = 'none';
+    document.querySelectorAll('#sh-tabs .tab').forEach(b => {
+      b.style.display = (b.dataset.tab === 'input' || procTabs(r).includes(b.dataset.tab)) ? '' : 'none'; });
     for (const k of Object.keys(NODE)) delete NODE[k];
     SH.classList.add('open'); selectTab('input'); paintSheet(); paintTabDots();
   }
@@ -2290,7 +2297,8 @@
         const bt = document.createElement('button'); bt.className = 'btn'; bt.textContent = SRC[g] || g; bt.dataset.g = g;
         bt.addEventListener('click', () => loadGroup(g)); box.appendChild(bt);
       });
-      loadGroup(S[base() + '/in/conn/grp'] in Object.fromEntries(srcGroups) ? S[base() + '/in/conn/grp'] : 'LCL');
+      const curG = curPick()[0];
+      loadGroup(curG in Object.fromEntries(srcGroups) ? curG : (srcGroups[0] || ['LCL'])[0]);
     }
   });
   async function loadGroup(g) {
@@ -2310,8 +2318,12 @@
     });
     markCurrentInput();
   }
+  function curPick() {            // [group, n] as the picker lists it (X32: the channel's config/source category)
+    if (X32) { const p = String(S[base() + '/in/conn/pick'] || 'OFF:0').split(':'); return [p[0], +p[1]]; }
+    return [S[base() + '/in/conn/grp'], S[base() + '/in/conn/in']];
+  }
   function markCurrentInput() {
-    const g = S[base() + '/in/conn/grp'], i = S[base() + '/in/conn/in'];
+    const [g, i] = curPick();
     document.querySelectorAll('#sh-inputs .pin').forEach(b => b.classList.toggle('cur', pickGroup === g && +b.dataset.n === i));
   }
   async function doPatch(g, n, nm) {
@@ -2320,7 +2332,7 @@
     if (!confirm(`Patch ${who} to ${SRC[g] || g} ${n}${nm ? ' (' + nm + ')' : ''}?\nCurrent: ${srcLabel()}`)) return;
     try {
       const x = await postJSON('/mixer/api/patch', { kind: r.kind, n: r.n, grp: g, in: n });
-      if (x && !(await x.json()).ok) alert('The WING did not confirm the new patch — check the console.');
+      if (x && !(await x.json()).ok) alert(`The ${CAP.model} did not confirm the new patch — check the console.`);
     } catch (e) { alert('Patch request failed.'); }
     $('sh-picker').style.display = 'none'; pickGroup = null;
   }
@@ -2424,7 +2436,8 @@
   // ── gate / comp panes ──
   const painters = { eq: [], gate: [], dyn: [] };
   const LABELS = { thr: 'Thresh', range: 'Range', att: 'Attack', hld: 'Hold', rel: 'Release', acc: 'Accent', ratio: 'Ratio',
-                   knee: 'Knee', det: 'Detect', env: 'Env', auto: 'Auto', gain: 'Makeup', mix: 'Mix', easy: 'Easy' };
+                   knee: 'Knee', det: 'Detect', env: 'Env', auto: 'Auto', gain: 'Makeup', mix: 'Mix', easy: 'Easy',
+                   mode: 'Mode', pos: 'Position', fon: 'Key filter', ftype: 'Filter', ff: 'Filter freq' };
   function paintProc(t, rebuild) {
     const path = nodePath(t); const ps = NODE[path]; if (!ps) return;
     const on = param(path, 'on'), mdl = param(path, 'mdl');
@@ -2456,13 +2469,17 @@
       $(t + '-key').querySelector('.thr').style.left = thr ? Math.max(0, Math.min(100, (thr.value - lo) / -lo * 100)) + '%' : '-10px';
       $(t + '-keydb').textContent = key <= -90 ? '−∞' : key + ' dB';
       $(t + '-gr').querySelector('.g-fill').style.width = gr + '%';
-      $(t + '-grpct').textContent = gr ? gr + '%' : '';
+      $(t + '-grpct').textContent = grdb != null ? (grdb ? '−' + grdb.toFixed(1) + ' dB' : '') : (gr ? gr + '%' : '');
     };
-    set('gate', d[0], d[1], -80); set('dyn', d[2], d[3], -60);
+    let grdb = CAP.grdb && d.length > 4 ? d[4] : null; set('gate', d[0], d[1], -80);
+    grdb = CAP.grdb && d.length > 5 ? d[5] : null; set('dyn', d[2], d[3], -60);
   }
 
   // ── EQ ──
-  const BANDS = [['l', 'Low'], ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['h', 'High']];
+  // WING STD: low/high shelf-or-peak + 4 PEQ.  X32: 4 bands, each with its own type (incl. low/high cut).
+  const BANDS = X32 ? [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']]
+                    : [['l', 'Low'], ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['h', 'High']];
+  const X32_EQT = { PEQ: 'peq', VEQ: 'peq', LShv: 'ls', HShv: 'hs', LCut: 'hp', HCut: 'lp' };
   let selBand = '1';
   (() => {
     const box = $('eq-bands');
@@ -2473,7 +2490,7 @@
   })();
   function isStdEQ(path) {
     const m = param(path, 'mdl');
-    return m && m.value === 'STD' && BANDS.every(([k]) => param(path, k + 'g') && param(path, k + 'f'));
+    return (X32 || (m && m.value === 'STD')) && BANDS.every(([k]) => param(path, k + 'g') && param(path, k + 'f'));
   }
   function paintEQ(rebuild) {
     const path = nodePath('eq'), std = isStdEQ(path);
@@ -2490,7 +2507,8 @@
     if (rebuild || !painters.eq.length) {
       const box = $('eq-band-ctl'); box.innerHTML = ''; painters.eq = [];
       const k = selBand;
-      if (k === 'l' || k === 'h') { const f = genControl(box, path, k + 'eq', 'Type'); if (f) painters.eq.push(f); }
+      if (X32) { const f = genControl(box, path, k + 'type', 'Type'); if (f) painters.eq.push(f); }
+      else if (k === 'l' || k === 'h') { const f = genControl(box, path, k + 'eq', 'Type'); if (f) painters.eq.push(f); }
       for (const [s2, lab] of [['g', 'Gain'], ['f', 'Freq'], ['q', 'Q']]) { const f = genControl(box, path, k + s2, lab); if (f) painters.eq.push(f); }
       const mb = $('eq-mix'); mb.innerHTML = ''; const fm = genControl(mb, path, 'mix', 'Mix'); if (fm) painters.eq.push(fm);
     } else painters.eq.forEach(f => f());
@@ -2502,6 +2520,8 @@
     const fs = 48000, w0 = 2 * Math.PI * f0 / fs, A = Math.pow(10, g / 40), cw = Math.cos(w0), al = Math.sin(w0) / (2 * Math.max(q, 0.1));
     let b0, b1, b2, a0, a1, a2;
     if (type === 'peq') { b0 = 1 + al * A; b1 = -2 * cw; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cw; a2 = 1 - al / A; }
+    else if (type === 'hp') { b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = (1 + cw) / 2; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; }
+    else if (type === 'lp') { b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = (1 - cw) / 2; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; }
     else {
       const sA = 2 * Math.sqrt(A) * al;
       if (type === 'ls') { b0 = A * ((A + 1) - (A - 1) * cw + sA); b1 = 2 * A * ((A - 1) - (A + 1) * cw); b2 = A * ((A + 1) - (A - 1) * cw - sA);
@@ -2517,6 +2537,8 @@
   const DBR = 18;
   function bandsOf(path) {
     return BANDS.map(([k]) => {
+      if (X32) return { k, type: X32_EQT[param(path, k + 'type')?.value] || 'peq', f: param(path, k + 'f')?.value,
+                        g: param(path, k + 'g')?.value, q: param(path, k + 'q')?.value ?? 1 };
       const t = k === 'l' ? (param(path, 'leq')?.value === 'SHV' ? 'ls' : 'peq') : k === 'h' ? (param(path, 'heq')?.value === 'SHV' ? 'hs' : 'peq') : 'peq';
       return { k, type: t, f: param(path, k + 'f')?.value, g: param(path, k + 'g')?.value, q: param(path, k + 'q')?.value ?? 1 };
     });
@@ -2536,7 +2558,7 @@
     c.beginPath();
     for (let px = 0; px <= W; px += 2) {
       const f = EQF(px / W); let d = 0;
-      for (const b of bands) if (b.f && b.g) d += bandDb(b.type, b.f, b.g, b.q, f);
+      for (const b of bands) if (b.f && (b.g || b.type === 'hp' || b.type === 'lp')) d += bandDb(b.type, b.f, b.g || 0, b.q, f);
       d *= mix; if (px === 0) c.moveTo(px, Y(d)); else c.lineTo(px, Y(d));
     }
     c.strokeStyle = on ? '#00ff88' : '#55557a'; c.lineWidth = 2; c.setLineDash(on ? [] : [5, 4]); c.stroke(); c.setLineDash([]);
@@ -2591,7 +2613,7 @@
   }
   document.querySelectorAll('#sh-tabs .tab').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
   async function paintTabDots() {           // EQ/gate/comp on-state dots, fetched once per sheet open
-    for (const t of ['eq', 'gate', 'dyn']) { if (!NODE[nodePath(t)]) await fetchNode(t); }
+    for (const t of (sheetRow ? procTabs(sheetRow) : [])) { if (!NODE[nodePath(t)]) await fetchNode(t); }
     document.querySelectorAll('#sh-tabs .tab').forEach(b => {
       const t = b.dataset.tab; if (t === 'input') return;
       const on = param(nodePath(t), 'on'); b.querySelector('.dot').classList.toggle('on', !!(on && on.value));

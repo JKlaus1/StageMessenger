@@ -22,6 +22,12 @@ def main(out):
         assert wait_for(lambda: mx.wing.get('/ch/2/$mute') == 2, 3), 'group mute not seen'
         open(os.path.join(out, 'x32.html'), 'w').write(c.get('/mixer').get_data(as_text=True))
         json.dump(c.get('/mixer/api/state').get_json(), open(os.path.join(out, 'x32.json'), 'w'))
+        api = {}                                       # real driver answers for the page's fetch mock
+        for path in ('/ch/1/eq', '/ch/1/gate', '/ch/1/dyn', '/aux/1/eq'):
+            api['/mixer/api/node?path=' + path.replace('/', '%2F')] = c.get('/mixer/api/node?path=' + path).get_json()
+        for g in ('IN', 'AUX', 'USB', 'FX', 'BUS'):
+            api['/mixer/api/srcnames?g=' + g] = c.get('/mixer/api/srcnames?g=' + g).get_json()
+        json.dump(api, open(os.path.join(out, 'x32_api.json'), 'w'))
     finally:
         mx.wing.stop(); mx.meters.stop(); fake.stop()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

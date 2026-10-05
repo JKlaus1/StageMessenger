@@ -97,6 +97,32 @@ def seed():
     for k in range(1, 81):
         st[f'/-stat/solosw/{k:02d}'] = 0
     st['/-stat/solo'] = 0
+    # v3.1: input stage, headamps (no stagebox: every /-ha index -1), processing = probed Ch 1 values
+    eq = {'on': 1}
+    for b, (t, f, g, q) in enumerate(((2, .155, .6, .464789), (2, .465, .141667, .802817),
+                                       (2, .05, .508333, .056338), (3, .79, .675, .43662)), 1):
+        eq.update({f'{b}/type': t, f'{b}/f': f, f'{b}/g': g, f'{b}/q': q})
+    gate = {'on': 1, 'mode': 3, 'thr': .625, 'range': 1.0, 'attack': 0.0, 'hold': .71, 'release': .51, 'keysrc': 0,
+            'filter/on': 0, 'filter/type': 4, 'filter/f': .16}
+    dyn = {'on': 0, 'mode': 0, 'det': 0, 'env': 0, 'thr': .65, 'ratio': 2, 'knee': .2, 'mgain': .270833,
+           'attack': .05, 'hold': .69, 'release': .54, 'pos': 1, 'keysrc': 0, 'mix': 1.0, 'auto': 0,
+           'filter/on': 0, 'filter/type': 5, 'filter/f': .45}
+    for i in range(1, 33):
+        b = f'/ch/{i:02d}'
+        st.update({b + '/preamp/trim': .916667 if i == 1 else .5, b + '/preamp/invert': 0, b + '/preamp/hpon': 1,
+                   b + '/preamp/hpf': .28, b + '/preamp/hpslope': 2})
+        st.update({f'{b}/eq/{k}': v for k, v in eq.items()})
+        st.update({f'{b}/gate/{k}': v for k, v in gate.items()})
+        st.update({f'{b}/dyn/{k}': v for k, v in dyn.items()})
+    for i in range(1, 9):
+        b = f'/auxin/{i:02d}'
+        st.update({b + '/preamp/trim': .555556, b + '/preamp/invert': 0})
+        st.update({f'{b}/eq/{k}': v for k, v in eq.items()})
+    for k in range(40):
+        st[f'/-ha/{k:02d}/index'] = -1
+    for h in range(128):
+        st[f'/headamp/{h:03d}/gain'] = .381944 if h == 32 else .284722
+        st[f'/headamp/{h:03d}/phantom'] = 1 if h == 32 else 0
     return st
 
 

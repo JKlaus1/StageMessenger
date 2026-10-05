@@ -62,6 +62,133 @@ def setup(cfg, state=None):
     return tmp, mixer, mx, app.test_client()
 
 
+def near(a, b, tol=0.02):
+    return isinstance(a, (int, float)) and abs(a - b) <= tol
+
+
+def sheet_suite(c, mx, fake):
+    """v3.1 channel sheet: input stage, headamps, EQ / gate / dyn, source picker."""
+    print('sheet: input stage')
+    g = mx.wing.get
+    check('ch1 trim +15', near(g('/ch/1/in/set/trim'), 15.0), g('/ch/1/in/set/trim'))
+    check('ch1 low cut on, 46 Hz', g('/ch/1/flt/lc') == 1 and g('/ch/1/flt/lcf') == 46, g('/ch/1/flt/lcf'))
+    check('aux1 trim +2, no low cut', near(g('/aux/1/in/set/trim'), 2.0) and g('/aux/1/flt/lc') is None)
+    check('no stagebox -> no preamp values', g('/io/in/A/1/g') is None and g('/io/in/A/1/vph') is None)
+    r = c.post('/mixer/api/set', json={'a': '/ch/1/in/set/trim', 'v': 6}).get_json()
+    check('trim +6 -> 0.6667', r['v'] == 6.0 and F(fake, '/ch/01/preamp/trim', lambda v: near(v, 24 / 36, 1e-4)))
+    r = c.post('/mixer/api/set', json={'a': '/ch/1/in/set/trim', 'v': -30}).get_json()
+    check('trim clamps to -18', r['v'] == -18.0 and F(fake, '/ch/01/preamp/trim', lambda v: near(v, 0, 1e-6)))
+    c.post('/mixer/api/set', json={'a': '/ch/1/in/set/inv', 'v': 1})
+    check('polarity', F(fake, '/ch/01/preamp/invert', lambda v: v == 1) and g('/ch/1/in/set/inv') == 1)
+    r = c.post('/mixer/api/set', json={'a': '/ch/1/flt/lcf', 'v': 100}).get_json()
+    check('low cut 100 Hz -> ln5/ln20', r['v'] == 100 and F(fake, '/ch/01/preamp/hpf', lambda v: near(v, 0.53724, 1e-4)), r)
+    r = c.post('/mixer/api/set', json={'a': '/ch/1/flt/lcf', 'v': 2000}).get_json()
+    check('low cut clamps to 400', r['v'] == 400 and F(fake, '/ch/01/preamp/hpf', lambda v: near(v, 1.0, 1e-6)), r)
+    c.post('/mixer/api/set', json={'a': '/ch/1/flt/lc', 'v': 0})
+    check('low cut off', F(fake, '/ch/01/preamp/hpon', lambda v: v == 0))
+    c.post('/mixer/api/set', json={'a': '/aux/2/in/set/trim', 'v': -6})
+    check('aux trim -> /auxin/02/preamp/trim', F(fake, '/auxin/02/preamp/trim', lambda v: near(v, 12 / 36, 1e-4)))
+
+    print('sheet: headamps (stagebox appears / goes)')
+    fake.console_set('/-ha/00/index', 32)                     # ch 1 -> AES50 A 1 now has a preamp
+    check('ha index -> /io/in/A/1 gain +15.5, 48V on',
+          wait_for(lambda: g('/io/in/A/1/g') == 15.5 and g('/io/in/A/1/vph') == 1), (g('/io/in/A/1/g'), g('/io/in/A/1/vph')))
+    check('other headamps stay hidden', g('/io/in/A/2/g') is None and g('/io/in/B/1/g') is None)
+    r = c.post('/mixer/api/set', json={'a': '/io/in/A/1/g', 'v': 20}).get_json()
+    check('gain +20 -> 32/72', r['v'] == 20.0 and F(fake, '/headamp/032/gain', lambda v: near(v, 32 / 72, 1e-4)), r)
+    r = c.post('/mixer/api/set', json={'a': '/io/in/A/1/g', 'v': 61.3}).get_json()
+    check('gain clamps to +60', r['v'] == 60.0 and F(fake, '/headamp/032/gain', lambda v: near(v, 1.0, 1e-6)), r)
+    c.post('/mixer/api/set', json={'a': '/io/in/A/1/vph', 'v': 0})
+    check('48V off', F(fake, '/headamp/032/phantom', lambda v: v == 0))
+    check('gain on a headamp with no preamp -> 400', c.post('/mixer/api/set', json={'a': '/io/in/B/5/g', 'v': 10}).status_code == 400)
+    fake.console_set('/-ha/00/index', -1)
+    check('stagebox gone -> preamp hidden again', wait_for(lambda: g('/io/in/A/1/g') is None))
+
+    print('sheet: processing read (probed Ch 1 values)')
+    def node(path):
+        r = c.get('/mixer/api/node?path=' + path)
+        return r.status_code, {p['key']: p for p in (r.get_json().get('params') or [])}
+    code, eq = node('/ch/1/eq')
+    check('eq: 17 params', code == 200 and len(eq) == 17, (code, len(eq)))
+    check('eq band 1 PEQ 58.3 Hz +3.0 dB Q~2.0', eq.get('1type', {}).get('value') == 'PEQ' and near(eq['1f']['value'], 58.3, 0.1)
+          and near(eq['1g']['value'], 3.0) and near(eq['1q']['value'], 2.0, 0.06), {k: eq[k]['value'] for k in ('1f', '1g', '1q')})
+    check('eq band 2 497 Hz -10.75 dB Q 0.6', near(eq['2f']['value'], 496.6, 1) and near(eq['2g']['value'], -10.75, 0.01)
+          and near(eq['2q']['value'], 0.6, 0.01), {k: eq[k]['value'] for k in ('2f', '2g', '2q')})
+    check('eq band 3 Q 8.2, band 4 VEQ 4.68 kHz +5.25', near(eq['3q']['value'], 8.2, 0.05) and eq['4type']['value'] == 'VEQ'
+          and near(eq['4f']['value'], 4680, 10) and near(eq['4g']['value'], 5.25, 0.01))
+    check('eq q param is log 0.3..10', eq['1q']['type'] == 'log' and eq['1q']['lo'] == 0.3 and eq['1q']['hi'] == 10)
+    code, gt = node('/ch/1/gate')
+    check('gate GATE -30 dB range 60, hold 70.9 ms, release 151 ms', code == 200 and gt['mode']['value'] == 'GATE'
+          and gt['thr']['value'] == -30 and gt['range']['value'] == 60 and near(gt['hld']['value'], 70.9, 0.2)
+          and near(gt['rel']['value'], 151, 1), {k: v['value'] for k, v in gt.items()})
+    check('gate key filter 1.0 @ 60.4 Hz', gt['ftype']['value'] == '1.0' and near(gt['ff']['value'], 60.4, 0.2) and gt['fon']['value'] == 0)
+    code, dy = node('/ch/1/dyn')
+    check('dyn COMP PEAK LIN -21 dB 1.5:1 knee 1, +6.5 makeup', dy['mode']['value'] == 'COMP' and dy['det']['value'] == 'PEAK'
+          and dy['env']['value'] == 'LIN' and dy['thr']['value'] == -21 and dy['ratio']['value'] == '1.5'
+          and dy['knee']['value'] == 1 and dy['gain']['value'] == 6.5, {k: v['value'] for k, v in dy.items()})
+    check('dyn attack 6 hold 56.3 release 185 POST mix 100', dy['att']['value'] == 6 and near(dy['hld']['value'], 56.3, 0.2)
+          and near(dy['rel']['value'], 185, 1) and dy['pos']['value'] == 'POST' and dy['mix']['value'] == 100)
+    code, aq = node('/aux/1/eq')
+    check('aux eq served', code == 200 and len(aq) == 17)
+    check('aux gate / dyn not on the M32 -> 400', node('/aux/1/gate')[0] == 400 and node('/aux/1/dyn')[0] == 400)
+    check('ch 33 / bus node -> 400', node('/ch/33/eq')[0] == 400 and node('/bus/1/eq')[0] == 400)
+
+    print('sheet: processing writes')
+    def ns(path, key, value):
+        r = c.post('/mixer/api/nodeset', json={'path': path, 'key': key, 'value': value})
+        return r.status_code, r.get_json()
+    code, r = ns('/ch/1/eq', '2g', -6)
+    check('eq 2 gain -6 -> 0.3', r.get('value') == -6.0 and F(fake, '/ch/01/eq/2/g', lambda v: near(v, 0.3, 1e-6)), r)
+    code, r = ns('/ch/1/eq', '3f', 1000)
+    check('eq 3 freq 1 kHz -> log', r.get('value') == 1000 and F(fake, '/ch/01/eq/3/f', lambda v: near(v, 0.566323, 1e-5)), r)
+    code, r = ns('/ch/1/eq', '1q', 0.7)
+    check('eq 1 Q 0.7 -> ln(.07)/ln(.03)', near(r.get('value'), 0.7, 1e-6) and F(fake, '/ch/01/eq/1/q', lambda v: near(v, 0.758368, 1e-5)), r)
+    code, r = ns('/ch/1/eq', '1q', 50)
+    check('eq Q clamps to 10', near(r.get('value'), 10) and F(fake, '/ch/01/eq/1/q', lambda v: near(v, 0, 1e-6)), r)
+    code, r = ns('/ch/1/eq', '1type', 'HShv')
+    check('eq type HShv -> 4', r.get('value') == 'HShv' and F(fake, '/ch/01/eq/1/type', lambda v: v == 4))
+    code, r = ns('/ch/1/eq', 'on', 0)
+    check('eq off', r.get('value') == 0 and F(fake, '/ch/01/eq/on', lambda v: v == 0))
+    code, r = ns('/ch/1/gate', 'thr', -45.5)
+    check('gate thr -45.5 -> 0.43125', r.get('value') == -45.5 and F(fake, '/ch/01/gate/thr', lambda v: near(v, 0.43125, 1e-6)), r)
+    code, r = ns('/ch/1/gate', 'hld', 100)
+    check('gate hold 100 ms -> log', near(r.get('value'), 100, 0.5) and F(fake, '/ch/01/gate/hold', lambda v: near(v, 0.739794, 1e-5)), r)
+    code, r = ns('/ch/1/gate', 'mode', 'DUCK')
+    check('gate mode DUCK -> 4', F(fake, '/ch/01/gate/mode', lambda v: v == 4))
+    code, r = ns('/ch/1/dyn', 'ratio', '4.0')
+    check('dyn ratio 4.0 -> 6', r.get('value') == '4.0' and F(fake, '/ch/01/dyn/ratio', lambda v: v == 6))
+    code, r = ns('/ch/1/dyn', 'gain', 12)
+    check('dyn makeup +12 -> 0.5', r.get('value') == 12 and F(fake, '/ch/01/dyn/mgain', lambda v: near(v, 0.5, 1e-6)))
+    code, r = ns('/ch/1/dyn', 'auto', 1)
+    check('dyn auto on', F(fake, '/ch/01/dyn/auto', lambda v: v == 1))
+    code, r = ns('/ch/1/dyn', 'ff', 2000)
+    check('dyn key filter 2 kHz', F(fake, '/ch/01/dyn/filter/f', lambda v: near(v, 0.666667, 1e-5)))
+    bad = [ns('/ch/1/dyn', 'ratio', '3:1')[0], ns('/ch/1/eq', 'mdl', 'STD')[0], ns('/aux/1/gate', 'thr', -20)[0],
+           ns('/ch/1/gate', 'keysrc', 3)[0]]
+    check('bad option / key / block -> 400', all(x == 400 for x in bad), bad)
+    code, gt = node('/ch/1/gate')
+    check('read-back after writes', gt['thr']['value'] == -45.5 and gt['mode']['value'] == 'DUCK')
+
+    print('sheet: source picker')
+    j = c.get('/mixer/api/srcnames?g=IN').get_json()
+    names = {x['n']: x['name'] for x in j['inputs']}
+    check('IN list: 32, In 1 = AES A 1, In 25 = AES B 17', len(names) == 32 and names[1] == 'AES A 1' and names[25] == 'AES B 17', names.get(25))
+    check('BUS names', c.get('/mixer/api/srcnames?g=BUS').get_json()['inputs'][0]['name'] == 'Gtr')
+    check('FX names', c.get('/mixer/api/srcnames?g=FX').get_json()['inputs'][1]['name'] == 'FX 1R')
+    check('WING group -> 400', c.get('/mixer/api/srcnames?g=A').status_code == 400)
+    r = c.post('/mixer/api/patch', json={'kind': 'ch', 'n': 2, 'grp': 'AUX', 'in': 3}).get_json()
+    check('patch ch2 -> Aux 3 (source 35)', r['ok'] and F(fake, '/ch/02/config/source', lambda v: v == 35))
+    check('pick + source tag follow', wait_for(lambda: g('/ch/2/in/conn/pick') == 'AUX:3' and g('/ch/2/in/conn/grp') == 'AUX'
+                                               and g('/ch/2/in/conn/in') == 3))
+    r = c.post('/mixer/api/patch', json={'kind': 'aux', 'n': 1, 'grp': 'BUS', 'in': 16}).get_json()
+    check('patch aux1 -> Bus 16 (64)', r['ok'] and F(fake, '/auxin/01/config/source', lambda v: v == 64))
+    c.post('/mixer/api/patch', json={'kind': 'ch', 'n': 2, 'grp': 'IN', 'in': 2})
+    check('patch back to In 2', F(fake, '/ch/02/config/source', lambda v: v == 2) and wait_for(lambda: g('/ch/2/in/conn/pick') == 'IN:2'))
+    bad = [c.post('/mixer/api/patch', json={'kind': 'ch', 'n': 1, 'grp': g_, 'in': i_}).status_code
+           for g_, i_ in (('A', 1), ('IN', 33), ('USB', 3), ('BUS', 0))]
+    check('bad patch -> 400', all(x == 400 for x in bad), bad)
+
+
 def main():
     sys.path.insert(0, os.path.dirname(PKG))
     from mixer.tests.fake_x32 import FakeX32
@@ -77,7 +204,9 @@ def main():
         check('spotify not started on x32', mx.spotify is None)
         check('driver connected + loaded', wait_for(lambda: mx.wing.loaded, 8))
         st = c.get('/mixer/api/state').get_json()
-        check('snapshot caps', st['caps']['nch'] == 32 and st['caps']['nmg'] == 6 and not st['caps']['sheet'])
+        check('snapshot caps', st['caps']['nch'] == 32 and st['caps']['nmg'] == 6 and st['caps']['sheet']
+              and st['caps']['gain'] == [-12.0, 60.0] and st['caps']['lcf'] == [20.0, 400.0] and not st['caps']['hc'])
+        check('snapshot srcgroups = picker groups', [g for g, _ in st['srcgroups']] == ['IN', 'AUX', 'USB', 'FX', 'BUS'])
         check('snapshot sp None, feeds []', st['sp'] is None and st['feeds'] == [])
         s = st['state']
 
@@ -127,7 +256,7 @@ def main():
         c.post('/mixer/api/set', json={'a': '/ch/5/$solo', 'v': 0}); c.post('/mixer/api/set', json={'a': '/aux/3/$solo', 'v': 0})
         bad = [c.post('/mixer/api/set', json={'a': a, 'v': 1}).status_code for a in
                ('/mgrp/7/mute', '/ch/33/fdr', '/aux/9/mute', '/mtx/7/fdr', '/main/3/fdr', '/ch/1/send/17/lvl',
-                '/io/in/A/1/g', '/ch/1/in/set/trim', '/cards/wlive/auto_play')]
+                '/io/in/A/1/g', '/io/in/A/1/pol', '/ch/1/flt/hc', '/ch/1/flt/hcf', '/aux/1/flt/lc', '/cards/wlive/auto_play')]
         check('out-of-range / unsupported writes -> 400', all(x == 400 for x in bad), bad)
 
         print('mute groups (M32 semantics)')
@@ -205,16 +334,16 @@ def main():
             check('ch2 fader -inf -> post -99', m['c'][1][1] == -99)
             check('aux1 muted -> post -99, pre -40', m['a'][0] == [-40, -99], m['a'][0])
             check('bus1 out = pre + 0 dB', m['b'][0] == -20, m['b'][0])
+            check('ch dyn rows carry GR dB (6 values)', len(m['cd'][0]) == 6 and m['cd'][0][4] == 0.0, m['cd'][0])
         mx.hub.unsubscribe(mq)
 
+        sheet_suite(c, mx, fake)
+
         print('x32-off features')
-        for path, meth in (('/mixer/api/node?path=/ch/1/eq', 'get'), ('/mixer/api/srcnames?g=A', 'get'),
-                           ('/mixer/stream.mp3', 'get'), ('/mixer/api/repatch', 'post')):
+        for path, meth in (('/mixer/stream.mp3', 'get'), ('/mixer/api/repatch', 'post')):
             code = getattr(c, meth)(path).status_code
             check(f'{path} -> 409', code == 409, code)
-        for path, body in (('/mixer/api/patch', {'kind': 'ch', 'n': 1, 'grp': 'A', 'in': 1}),
-                           ('/mixer/api/nodeset', {'path': '/ch/1/eq', 'key': 'on', 'value': 1}),
-                           ('/mixer/api/rec', {'action': 'rec', 'card': 1}),
+        for path, body in (('/mixer/api/rec', {'action': 'rec', 'card': 1}),
                            ('/mixer/api/play', {'action': 'play', 'card': 1})):
             code = c.post(path, json=body).status_code
             check(f'{path} -> 409', code == 409, code)

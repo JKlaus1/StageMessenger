@@ -120,10 +120,12 @@ SRC_NAMES = {'LCL': 'Local', 'A': 'AES A', 'B': 'AES B', 'C': 'AES C', 'SC': 'St
 CAPS = {
     'wing': {'console': 'wing', 'model': 'WING', 'nch': N_CH, 'naux': N_AUX, 'nbus': N_BUS, 'nmtx': N_MTX,
              'nmg': 8, 'main2': 'Main 2', 'sheet': True, 'recorder': 'wlive', 'listen': True, 'spotify': True,
-             'alt': True},
+             'alt': True, 'gain': [-2.5, 45], 'lcf': [20, 2000], 'hc': True, 'spol': True,
+             'auxproc': ['eq', 'gate', 'dyn'], 'grdb': False},
     'x32':  {'console': 'x32', 'model': 'X32', 'nch': x32mod.N_CH, 'naux': x32mod.N_AUX, 'nbus': x32mod.N_BUS,
-             'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': False, 'recorder': None,
-             'listen': False, 'spotify': False, 'alt': False},
+             'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': True, 'recorder': None,
+             'listen': False, 'spotify': False, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
+             'lcf': list(x32mod.LCF_RANGE), 'hc': False, 'spol': False, 'auxproc': ['eq'], 'grdb': True},
 }
 
 
@@ -202,6 +204,8 @@ NODE_LOCKED = ('mdl',)          # model changes stay at the console for now
 
 
 def _node_ok(path):
+    if _mixer is not None and _mixer.x32:
+        return _mixer.wing._node_target(path) is not None
     m = NODE_PATH.match(path or '')
     return bool(m) and 1 <= int(m.group(2)) <= {'ch': N_CH, 'aux': N_AUX}[m.group(1)]
 
@@ -460,8 +464,15 @@ class Mixer:
                 srcs.add((g, i))
         return [f'/io/in/{g}/{i}/{leaf}' for g, i in sorted(srcs) for leaf in SRC_LEAVES]
 
+    def src_groups(self):
+        return x32mod.PICK_GROUPS if self.x32 else SRC_GROUPS
+
     def patch(self, kind, n, grp, idx):
         """Re-patch a channel/aux input. grp first, then in -- then read everything back."""
+        if self.x32:
+            ok = self.wing.patch_source(kind, n, grp, idx)
+            print(f'[mixer] patched {kind} {n} -> {grp} {idx} ({"ok" if ok else "NOT confirmed"})', flush=True)
+            return ok
         base = f'/{kind}/{n}/in/conn'
         self.wing.set(base + '/grp', grp); time.sleep(0.03)
         self.wing.set(base + '/in', idx); time.sleep(0.05)
@@ -478,12 +489,16 @@ class Mixer:
 
     # ── processing nodes (EQ / gate / dyn): driven by the console's own '#' description ──
     def node(self, path):
+        if self.x32:
+            return self.wing.node(path)
         params = parse_describe(self.wing.describe(path))
         if params:
             self.node_cache[path] = params
         return params
 
     def node_set(self, path, key, value):
+        if self.x32:
+            return self.wing.node_set(path, key, value)
         params = self.node_cache.get(path) or self.node(path)
         p = next((x for x in params if x['key'] == key), None)
         if not p or p['ro'] or key in NODE_LOCKED:
@@ -506,6 +521,8 @@ class Mixer:
         return v, None
 
     def source_names(self, grp):
+        if self.x32:
+            return self.wing.source_names(grp)
         n = SRC_COUNT[grp]
         got = self.wing.query_many([f'/io/in/{grp}/{i}/{leaf}' for i in range(1, n + 1) for leaf in ('name', 'mode')],
                                    timeout=1.5)
@@ -760,7 +777,7 @@ class Mixer:
             'nbus':   self.caps['nbus'],
             'caps':   self.caps,
             'meters': self.meters.levels is not None,
-            'srcgroups': SRC_GROUPS,
+            'srcgroups': self.src_groups(),
             'ovr':    sorted(self.overrides),
             'order':  self.order,
             'listen_target': self.cfg.get('listen_target_s', 0.8),
@@ -881,8 +898,9 @@ def api_patch():
         n, idx = int(d.get('n')), int(d.get('in'))
     except (TypeError, ValueError):
         return jsonify(ok=False, err='bad number'), 400
-    lim = {'ch': N_CH, 'aux': N_AUX}.get(kind)
-    if not lim or not 1 <= n <= lim or grp not in SRC_COUNT or not 1 <= idx <= SRC_COUNT[grp]:
+    lim = {'ch': _mixer.caps['nch'], 'aux': _mixer.caps['naux']}.get(kind)
+    counts = dict(_mixer.src_groups())
+    if not lim or not 1 <= n <= lim or grp not in counts or not 1 <= idx <= counts[grp]:
         return jsonify(ok=False, err='bad patch target'), 400
     return jsonify(ok=_mixer.patch(kind, n, grp, idx))
 
@@ -892,7 +910,7 @@ def api_srcnames():
     if _not_here('sheet'):
         return _not_here('sheet')
     grp = request.args.get('g', '')
-    if grp not in SRC_COUNT:
+    if grp not in dict(_mixer.src_groups()):
         return jsonify(ok=False, err='bad group'), 400
     return jsonify(ok=True, g=grp, inputs=_mixer.source_names(grp))
 

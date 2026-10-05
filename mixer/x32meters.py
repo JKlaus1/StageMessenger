@@ -101,7 +101,8 @@ class X32Meters:
 
     @property
     def levels(self):
-        """{'ch': [(in, out, gateKey, gateGR%, dynKey, dynGR%)...], 'aux', 'bus', 'main'} or None."""
+        """{'ch': [(in, out, gateKey, gateGR%, dynKey, dynGR%, gateGRdB, dynGRdB)...], 'aux', 'bus', 'main'}
+        or None. The two trailing dB values are X32-only (the page shows GR in dB when they're there)."""
         now = time.time()
         b0, b1, b2 = (self._banks.get(k) for k in BANKS)
         if not b0 or now - b0[0] > 2:
@@ -109,14 +110,15 @@ class X32Meters:
         m0 = b0[1]
         m1 = b1[1] if b1 and now - b1[0] < 2 and len(b1[1]) >= 96 else None
         m2 = b2[1] if b2 and now - b2[0] < 2 and len(b2[1]) >= 25 else None
-        gr = lambda g, fs: max(0, min(100, round(-_db(g) / fs * 100))) if g else 0
+        grdb = lambda g: max(0.0, min(99.0, round(-_db(g), 1))) if g else 0.0
+        gr = lambda d, fs: max(0, min(100, round(d / fs * 100)))
         ch = []
         for i in range(32):
             pre = round(_db(m1[i] if m1 else m0[i]))
-            gk = gg = dg = 0
+            gd = dd = 0.0
             if m1:
-                gg, dg = gr(m1[32 + i], GATE_FS), gr(m1[64 + i], DYN_FS)
-            ch.append((pre, round(self._post('ch', i + 1, pre)), pre, gg, pre, dg))
+                gd, dd = grdb(m1[32 + i]), grdb(m1[64 + i])
+            ch.append((pre, round(self._post('ch', i + 1, pre)), pre, gr(gd, GATE_FS), pre, gr(dd, DYN_FS), gd, dd))
         aux = []
         for i in range(8):
             pre = round(_db(m0[32 + i]))
