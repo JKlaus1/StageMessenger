@@ -247,6 +247,11 @@ class Mixer:
         except Exception as e:
             print(f'[mixer] discovery error: {e}', flush=True)
             return None
+        if len(f) > 1:                                # several consoles answered: keep the one used last
+            last = (self._state_raw.get('console_ip'), self._state_raw.get('console'))
+            f.sort(key=lambda x: (x['ip'] != last[0], x['kind'] != last[1]))
+            print(f"[mixer] {len(f)} consoles answered ({', '.join(x['model'] + ' ' + x['ip'] for x in f)}) "
+                  f"-- using {f[0]['model']} (last used)", flush=True)
         return f[0] if f else None
 
     def _attach(self, kind, ip, info, how):

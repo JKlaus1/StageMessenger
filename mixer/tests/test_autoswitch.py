@@ -94,6 +94,14 @@ def main():
         time.sleep(3)
         check('still WING @ .2 with an M32C also answering', mx.console == 'wing' and mx.ip == A and mx.wing.connected)
 
+        sr = dict(mx._state_raw)
+        check('both answer -> the one used last (WING @ .2)', (lambda f: f and (f['kind'], f['ip']) == ('wing', A))(mx._find(sweep=False)))
+        mx._state_raw.update({'console': 'x32', 'console_ip': B})
+        check('both answer, last used M32C @ .3 -> M32C', (lambda f: f and (f['kind'], f['ip']) == ('x32', B))(mx._find(sweep=False)))
+        mx._state_raw.update({'console': 'x32', 'console_ip': '10.9.9.9'})
+        check('last used type wins when its address changed', (lambda f: f and f['kind'] == 'x32')(mx._find(sweep=False)))
+        mx._state_raw = sr
+
         print('discovery')
         Finder = mixer.discover.Finder
         got = Finder('', [A, B], timeout=0.5).discover(sweep=False)
@@ -102,6 +110,8 @@ def main():
         g = Finder('', [A, B], timeout=0.5).discover(sweep=False, want='x32')
         check('mixer_type x32 filters out the WING', [x['ip'] for x in g] == [B], g)
         w = [x for x in got if x['kind'] == 'wing'][0]
+        check('WING model ids made readable', mixer.discover.parse_reply(b'WING,1.2.3.4,x,wing-rack,S,3.1', 2222)['model'] == 'WING Rack'
+              and mixer.discover.parse_reply(b'WING,1.2.3.4,x,ngc-full,S,3.1', 2222)['model'] == 'WING')
         check('WING reply parsed (name/model/fw)', w['name'] == 'Josephs-Wing' and w['model'] == 'WING' and w['fw'] == '3.1', w)
         check('unanswered address -> nothing (no error)', Finder('', ['127.0.0.9'], timeout=0.3).discover(sweep=False) == [])
         check('no interface address -> nothing', Finder('nonexistent0', [], timeout=0.2).discover() == [])

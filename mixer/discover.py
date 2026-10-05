@@ -24,6 +24,7 @@ from .wing import osc_msg
 
 WING_DISC_PORT = 2222
 X32_PORT = 10023
+WING_MODELS = {'ngc-full': 'WING', 'wing-rack': 'WING Rack', 'wing-compact': 'WING Compact'}   # discovery model ids
 SWEEP_MAX_PREFIX = 22          # sweep only subnets this size or smaller (<= 1022 hosts)
 
 
@@ -78,7 +79,8 @@ def _wing_reply(d):
     if not t.startswith('WING,'):
         return None
     f = t.split(',')
-    return {'kind': 'wing', 'name': f[2] if len(f) > 2 else '', 'model': (f[3] if len(f) > 3 else '') or 'WING',
+    model = f[3] if len(f) > 3 else ''
+    return {'kind': 'wing', 'name': f[2] if len(f) > 2 else '', 'model': WING_MODELS.get(model.lower(), model or 'WING'),
             'fw': f[5] if len(f) > 5 else ''}
 
 
