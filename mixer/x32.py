@@ -40,6 +40,16 @@ Protocol facts verified on an M32C fw 4.06-8 with an X-LIVE card (Oct 2026 probe
     ratio int (1.1 .. 100 list), knee 0..5, mgain 0..24, attack/hold/release as the gate, mix 0..100,
     mode/det/env/pos ints. Key filter: filter/on, filter/type int (LC6 LC12 HC6 HC12 1.0 2.0 3.0 5.0
     10.0), filter/f log 20..20k. Aux in strips have EQ only (no gate / dyn / low cut).
+  * X-LIVE (v3.2, probes 2+3): /-stat/xcardtype 10 = X-LIVE. /-stat/urec/state 0 STOP / 1 PAUSE (playback
+    only -- writing 1 while recording is ignored) / 2 PLAY / 3 REC; writable, pushed. etime (ms) pushed
+    ~12/s; rtime = remaining record time while recording. /-urec/sessionmax|sessionpos|sessionlen|
+    markermax|markerpos pushed; lists: /-urec/session/NNN/name ('2026/10/05 | 11:05:58'), /-urec/marker/
+    NNN/time (ms), 1-based in console order (oldest first). Actions (write int, the console echoes 0):
+    /-action/addmarker 1 (at the play head, recording or paused), selsession N, selmarker N (moves the
+    head), delmarker N, delsession N, setposition <int ms> (a float is ignored). No 'move marker'.
+    Card prefs: URECsdsel 0 SD1 / 1 SD2, sd1state|sd2state 1 READY / 0 none, sd1info '31 GB - 1h, 23m,
+    47s'. errorcode 6 'System error: 6' sat there through every normal operation -> treated as benign.
+    PLAY with URECrout AUTO flips routswitch to PLAY (inputs = playback) and STOP flips it back.
 """
 import socket
 import struct
@@ -100,6 +110,36 @@ NODE_SPECS = {
             _p('mix', 'dyn/mix', 'lin', 0, 100, '%', 21), _p('auto', 'dyn/auto', 'int', 0, 1)] + _key_filter('dyn'),
 }
 NODE_ON = {'ch': ('eq', 'gate', 'dyn'), 'aux': ('eq',)}
+
+# X-LIVE -> the WING-LIVE dialect the page / controller speak (card 1 only; the M32 records to one slot)
+REC_STATES = {0: 'STOP', 1: 'PPAUSE', 2: 'PLAY', 3: 'REC'}
+REC_CONTROL = {'STOP': 0, 'PPAUSE': 1, 'PLAY': 2, 'REC': 3}
+RB = '/cards/wlive/1/$stat/'
+BENIGN_REC_ERRORS = (0, 6)
+REC_RAW = ['/-stat/xcardtype', '/-stat/urec/state', '/-stat/urec/etime', '/-stat/urec/rtime', '/-prefs/card/URECsdsel',
+           '/-urec/sd1state', '/-urec/sd2state', '/-urec/sd1info', '/-urec/sd2info', '/-urec/sessionmax',
+           '/-urec/sessionpos', '/-urec/sessionlen', '/-urec/markermax', '/-urec/markerpos', '/-urec/errorcode',
+           '/-urec/errormessage']
+
+
+def sdinfo_ms(txt):
+    """'31 GB - 1h, 23m, 47s ' -> free record time in ms (None if not parseable)"""
+    import re
+    m = re.search(r'(\d+)h\D+(\d+)m\D+(\d+)s', str(txt or ''))
+    return ((int(m.group(1)) * 60 + int(m.group(2))) * 60 + int(m.group(3))) * 1000 if m else None
+
+
+def mark_text(ms):
+    """ms -> 'HH:MM:SS.cc' (the WING-LIVE marker text the page and controller already parse)"""
+    ms = max(0, int(ms or 0))
+    return f'{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms % 60000 / 1000:05.2f}'
+
+
+def session_text(name):
+    """'2026/10/05 | 11:05:58   ' -> '2026-10-05 11:05:58' (the page formats 'YYYY-MM-DD time')"""
+    import re
+    m = re.match(r'\s*(\d{4})/(\d\d)/(\d\d)\s*\|\s*(\S+)', str(name or ''))
+    return f'{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}' if m else str(name or '').strip()
 
 
 def spec_value(sp, n):
@@ -319,6 +359,8 @@ class X32:
             add(f'/headamp/{h:03d}/phantom', self._d_headamps)
         for g in range(1, N_MGRP + 1):
             add(f'/config/mute/{g}', lambda g=g: self._d_group(g))
+        for r in REC_RAW:
+            add(r, self._d_rec)
         # anything that changes where a channel's input comes from -> re-derive every source
         for blk in BLOCKS:
             add(f'/config/routing/IN/{blk}', self._d_all_sources)
@@ -344,6 +386,7 @@ class X32:
                 if kind == 'ch':
                     a += [f'{rb}/preamp/hpon', f'{rb}/preamp/hpf']
         a += [f'/headamp/{h:03d}/{k}' for h in range(128) for k in ('gain', 'phantom')]
+        a += REC_RAW
         for kind in ('ch', 'aux'):
             for n in range(1, KINDS[kind] + 1):
                 rb = raw_base(kind, n)
@@ -443,6 +486,47 @@ class X32:
             out += [(f'/io/in/{g}/{i}/g', round(gain * 72 - 12, 1) if on else None),
                     (f'/io/in/{g}/{i}/vph', (1 if ph else 0) if on else None)]
         return out
+
+    def _d_rec(self):
+        """X-LIVE -> WING-LIVE canonical (card 1)."""
+        r = self.raw.get
+        out = [('/cards/$type', 'WLIVE' if r('/-stat/xcardtype') == 10 else 'NONE')]
+        st = r('/-stat/urec/state')
+        state = REC_STATES.get(st, 'STOP')
+        sel = 2 if r('/-prefs/card/URECsdsel') == 1 else 1
+        sds = r(f'/-urec/sd{sel}state')
+        sdstate = 'READY' if sds == 1 else 'NONE' if sds in (0, None) else f'STATE {sds}'
+        free = r('/-stat/urec/rtime') if st == 3 else sdinfo_ms(r(f'/-urec/sd{sel}info'))
+        code = r('/-urec/errorcode')
+        err = '' if code in BENIGN_REC_ERRORS or code is None else str(r('/-urec/errormessage') or f'error {code}').strip()
+        out += [(RB + 'state', state), (RB + 'etime', r('/-stat/urec/etime') or 0), (RB + 'sdstate', sdstate),
+                (RB + 'sessions', r('/-urec/sessionmax') or 0), (RB + 'sessionpos', r('/-urec/sessionpos') or 0),
+                (RB + 'sessionlen', r('/-urec/sessionlen') or 0), (RB + 'markers', r('/-urec/markermax') or 0),
+                (RB + 'markerpos', r('/-urec/markerpos') or 0), (RB + 'errormessage', err),
+                ('/cards/wlive/1/$ctl/control', state)]
+        if isinstance(free, int):
+            out.append((RB + 'sdfree', free))
+        return out
+
+    def rec_lists(self):
+        """(marker texts, session texts) for the open session, read fresh from the console."""
+        got = self._query_raw(['/-urec/markermax', '/-urec/sessionmax'], timeout=0.6)
+        nm, ns = int(got.get('/-urec/markermax') or 0), int(got.get('/-urec/sessionmax') or 0)
+        addrs = [f'/-urec/marker/{i:03d}/time' for i in range(1, min(nm, 100) + 1)] \
+            + [f'/-urec/session/{i:03d}/name' for i in range(1, min(ns, 100) + 1)]
+        vals = self._query_raw(addrs, timeout=1.0) if addrs else {}
+        marks = [mark_text(vals.get(f'/-urec/marker/{i:03d}/time')) for i in range(1, min(nm, 100) + 1)
+                 if isinstance(vals.get(f'/-urec/marker/{i:03d}/time'), int)]
+        sess = [session_text(vals.get(f'/-urec/session/{i:03d}/name')) for i in range(1, min(ns, 100) + 1)]
+        return marks, sess
+
+    def seek(self, card, ms):
+        """X-LIVE: move the play head (int ms; verified paused)."""
+        if int(card) != 1:
+            return None
+        v = int(max(0, round(float(ms))))
+        self._send('/-action/setposition', v)
+        return v
 
     def _pick(self, kind, n):
         s = self.raw.get(raw_base(kind, n) + '/config/source')
@@ -582,6 +666,8 @@ class X32:
         if addr.startswith('/io/in/'):
             h = self._ha_of(addr)
             return [f'/headamp/{h:03d}/' + ('gain' if addr.endswith('/g') else 'phantom')] if h is not None else []
+        if addr.startswith('/cards/'):
+            return list(REC_RAW)
         sp = self._split(addr)
         if not sp:
             return []
@@ -624,6 +710,8 @@ class X32:
             v = 1 if int(value) else 0
             self._write('/config/routing/routswitch', v)
             return v
+        if addr.startswith('/cards/'):
+            return self._set_rec(addr, value)
         if addr.startswith('/io/in/'):
             h = self._ha_of(addr)
             if h is None or self.state.get(addr) is None:     # only headamps that are really there
@@ -689,6 +777,28 @@ class X32:
     def _write(self, raw_addr, value):
         self._send(raw_addr, value)
         self._apply(raw_addr, value, notify=self.loaded)      # the console doesn't echo our own writes
+
+    def _set_rec(self, addr, value):
+        """WING-LIVE control addresses (card 1) -> X-LIVE. One-shot actions return their value uncached."""
+        b = '/cards/wlive/1/$ctl/'
+        if not addr.startswith(b):
+            return None                                   # card 2 / auto_* / anything else: not on the M32
+        leaf = addr[len(b):]
+        if leaf == 'control':
+            v = str(value).upper()
+            if v not in REC_CONTROL:
+                return None
+            self._write('/-stat/urec/state', REC_CONTROL[v])
+            return v
+        acts = {'setmarker': 'addmarker', 'opensession': 'selsession', 'gotomarker': 'selmarker',
+                'deletemarker': 'delmarker'}
+        if leaf in acts:
+            v = 1 if leaf == 'setmarker' else int(value)
+            if not 1 <= v <= 100:
+                return None
+            self._send(f'/-action/{acts[leaf]}', v)
+            return v
+        return None                                       # editmarker (no move on the M32), stime (use seek)
 
     @staticmethod
     def _ha_of(addr):

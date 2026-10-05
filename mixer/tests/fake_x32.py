@@ -123,6 +123,12 @@ def seed():
     for h in range(128):
         st[f'/headamp/{h:03d}/gain'] = .381944 if h == 32 else .284722
         st[f'/headamp/{h:03d}/phantom'] = 1 if h == 32 else 0
+    # v3.2: X-LIVE with an SD card in slot 1 (probe 2/3 values); sessions/markers live in FakeX32.sessions
+    st.update({'/-stat/xcardtype': 10, '/-prefs/card/URECsdsel': 0, '/-urec/sd1state': 1, '/-urec/sd2state': 0,
+               '/-urec/sd1info': '31 GB - 1h, 23m, 47s ', '/-urec/sd2info': 'Insert SD Card.', '/-urec/errorcode': 6,
+               '/-urec/errormessage': 'System error: 6', '/-stat/urec/state': 0, '/-stat/urec/etime': 0,
+               '/-stat/urec/rtime': 9189, '/-urec/sessionmax': 2, '/-urec/sessionpos': 2, '/-urec/sessionlen': 17280,
+               '/-urec/markermax': 2, '/-urec/markerpos': 0})
     return st
 
 
@@ -133,6 +139,10 @@ class FakeX32:
         self.peers = {}                      # peer -> lease expiry
         self.drop = set(drop)                # addresses that never answer (UDP-loss test)
         self.meter_level = {0: 0.1, 48: 0.1}  # index in /meters/0 -> linear value (others floor)
+        self.sessions = [{'name': '2026/10/05 | 10:53:06   ', 'len': 9189, 'marks': [3970, 6050, 8450]},
+                         {'name': '2026/10/05 | 11:07:22   ', 'len': 17280, 'marks': [3655, 9495]}]
+        self.actions = []                    # (/-action/..., value) in order
+        self._rec_t0 = None
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.bind((host, port))
         self.s.settimeout(0.2)
@@ -141,6 +151,10 @@ class FakeX32:
         self.lock = threading.Lock()
 
     def start(self):
+        for i, sess in enumerate(self.sessions, 1):
+            self.st[f'/-urec/session/{i:03d}/name'] = sess['name']
+        for i, t in enumerate(self.sessions[1]['marks'], 1):
+            self.st[f'/-urec/marker/{i:03d}/time'] = t
         threading.Thread(target=self._loop, daemon=True).start()
         return self
 
@@ -179,6 +193,58 @@ class FakeX32:
 
     def console_set(self, addr, v):
         self._store(addr, v)
+
+    # ── X-LIVE ──
+    def _cur(self):
+        p = self.st['/-urec/sessionpos']
+        return self.sessions[p - 1] if 1 <= p <= len(self.sessions) else None
+
+    def _show(self, sess):
+        """Publish a session's length + marker list the way the M32 does (pushed to /xremote clients)."""
+        old = self.st['/-urec/markermax']
+        for i, t in enumerate(sess['marks'] if sess else [], 1):
+            self.st[f'/-urec/marker/{i:03d}/time'] = t; self._push(f'/-urec/marker/{i:03d}/time', t)
+        for i in range(len(sess['marks']) + 1 if sess else 1, old + 1):
+            self.st[f'/-urec/marker/{i:03d}/time'] = 0
+        self._store('/-urec/markermax', len(sess['marks']) if sess else 0)
+        self._store('/-urec/sessionlen', sess['len'] if sess else 0)
+
+    def _urec_state(self, v, src):
+        cur = self.st['/-stat/urec/state']
+        if cur == 3 and v == 1:                    # no record-pause: ignored, state re-pushed
+            self._push('/-stat/urec/state', 3); return
+        if v == 3 and cur != 3:
+            self._rec_t0 = time.time(); self.rec_marks = []
+            self._store('/-urec/sessionpos', 0); self._store('/-urec/sessionlen', 0)
+        if cur == 3 and v == 0:                    # STOP after REC: new session, opened
+            length = int((time.time() - (self._rec_t0 or time.time())) * 1000) + 1000
+            self.sessions.append({'name': time.strftime('%Y/%m/%d | %H:%M:%S   '), 'len': length, 'marks': list(self.rec_marks)})
+            n = len(self.sessions)
+            self.st[f'/-urec/session/{n:03d}/name'] = self.sessions[-1]['name']
+            self._push(f'/-urec/session/{n:03d}/name', self.sessions[-1]['name'])
+            self._store('/-urec/sessionmax', n); self._store('/-urec/sessionpos', n); self._show(self.sessions[-1])
+        if v == 0:
+            self._store('/-stat/urec/etime', 0)
+        self._store('/-stat/urec/state', v, src=src)
+
+    def _action(self, a, v):
+        self.actions.append((a, v))
+        name = a.rsplit('/', 1)[1]
+        if name == 'addmarker':
+            at = int((time.time() - self._rec_t0) * 1000) if self.st['/-stat/urec/state'] == 3 else self.st['/-stat/urec/etime']
+            if self.st['/-stat/urec/state'] == 3:
+                self.rec_marks.append(at); self._store('/-urec/markermax', len(self.rec_marks))
+            elif self._cur():
+                self._cur()['marks'] = sorted(self._cur()['marks'] + [at]); self._show(self._cur())
+        elif name == 'selsession' and 1 <= v <= len(self.sessions):
+            self._store('/-urec/sessionpos', v); self._show(self.sessions[v - 1])
+        elif name == 'selmarker' and self._cur() and 1 <= v <= len(self._cur()['marks']):
+            self._store('/-urec/markerpos', v); self._store('/-stat/urec/etime', self._cur()['marks'][v - 1])
+        elif name == 'delmarker' and self._cur() and 1 <= v <= len(self._cur()['marks']):
+            del self._cur()['marks'][v - 1]; self._show(self._cur())
+        elif name == 'setposition' and isinstance(v, int) and v >= 0:     # a float is ignored, like the M32
+            self._store('/-stat/urec/etime', v)
+        self._push(a, 0)                           # the console echoes the action reset to 0
 
     def _meters(self, bank, peer):
         n = {'/meters/0': 70, '/meters/1': 96, '/meters/2': 49}.get(bank)
@@ -219,6 +285,12 @@ class FakeX32:
                 for k in range(1, 81):
                     if self.st[f'/-stat/solosw/{k:02d}']:
                         self._store(f'/-stat/solosw/{k:02d}', 0)
+            elif a.startswith('/-action/') and args:
+                self.writes.append((a, args[0]))
+                self._action(a, args[0])
+            elif a == '/-stat/urec/state' and args:
+                self.writes.append((a, args[0]))
+                self._urec_state(int(args[0]), peer)
             elif args:
                 self.writes.append((a, args[0]))
                 if a in self.st:

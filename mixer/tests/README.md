@@ -6,7 +6,7 @@ copy of the package (no `mixer_config.json` / `mixer_state.json` is written into
 
 | Suite | What | Command |
 |---|---|---|
-| X32 API | fake M32C (`fake_x32.py`) on udp 10023 + Flask test client: detection, caps, canonical values, writes, M32 mute-group semantics, console pushes, meters, channel sheet (input stage, headamps appearing / going with a stagebox, EQ / gate / dyn scalings both ways, source picker), X32-off features, page CAPS injection, per-console channel order | `python3 -m mixer.tests.test_x32_api` |
+| X32 API | fake M32C (`fake_x32.py`) on udp 10023 + Flask test client: detection, caps, canonical values, writes, M32 mute-group semantics, console pushes, meters, channel sheet (input stage, headamps appearing / going with a stagebox, EQ / gate / dyn scalings both ways, source picker), X-LIVE recorder (record, markers, sessions, playback, seek, SD / error states), X32-off features, page CAPS injection, per-console channel order | `python3 -m mixer.tests.test_x32_api` |
 | WING regression | minimal fake WING on udp 2223: WING driver, 40/8/16 strips, USB patch, own mute, float fader writes, WING order key | `python3 -m mixer.tests.test_wing_regression` |
 | Page (jsdom) | the page as served (CAPS injected) + a live snapshot -> DOM; clicks -> requests; X32 channel sheet driven by real driver answers (`x32_api.json`); WING defaults | `python3 -m mixer.tests.gen_page_fixtures /tmp/fx && node mixer/tests/test_page.js /tmp/fx` |
 

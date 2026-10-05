@@ -121,11 +121,12 @@ CAPS = {
     'wing': {'console': 'wing', 'model': 'WING', 'nch': N_CH, 'naux': N_AUX, 'nbus': N_BUS, 'nmtx': N_MTX,
              'nmg': 8, 'main2': 'Main 2', 'sheet': True, 'recorder': 'wlive', 'listen': True, 'spotify': True,
              'alt': True, 'gain': [-2.5, 45], 'lcf': [20, 2000], 'hc': True, 'spol': True,
-             'auxproc': ['eq', 'gate', 'dyn'], 'grdb': False},
+             'auxproc': ['eq', 'gate', 'dyn'], 'grdb': False, 'sd': N_SD, 'movemark': True, 'recauto': True},
     'x32':  {'console': 'x32', 'model': 'X32', 'nch': x32mod.N_CH, 'naux': x32mod.N_AUX, 'nbus': x32mod.N_BUS,
-             'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': True, 'recorder': None,
+             'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': True, 'recorder': 'xlive',
              'listen': False, 'spotify': False, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
-             'lcf': list(x32mod.LCF_RANGE), 'hc': False, 'spol': False, 'auxproc': ['eq'], 'grdb': True},
+             'lcf': list(x32mod.LCF_RANGE), 'hc': False, 'spol': False, 'auxproc': ['eq'], 'grdb': True,
+             'sd': 1, 'movemark': False, 'recauto': False},
 }
 
 
@@ -237,8 +238,9 @@ class Mixer:
         rtc = cfg.get('rtc', {})
         self.rtc_enabled = bool(rtc.get('enabled'))
         self._turn, self._turn_exp, self._turn_lock = None, 0.0, threading.Lock()
-        self.rec_markers = {n: [] for n in range(1, N_SD + 1)}   # card -> marker times (current session)
-        self.rec_sessions = {n: [] for n in range(1, N_SD + 1)}  # card -> session list (newest first)
+        self.n_sd = self.caps['sd']
+        self.rec_markers = {n: [] for n in range(1, self.n_sd + 1)}   # card -> marker times (current session)
+        self.rec_sessions = {n: [] for n in range(1, self.n_sd + 1)}  # card -> session list (WING newest first, X32 console order)
         self._rec_pub = {}                                        # throttle for 10 Hz etime / sdfree pushes
         self._rec_tail = set()                                    # throttled addrs awaiting a trailing publish
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
@@ -544,9 +546,6 @@ class Mixer:
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
-        if self.x32:
-            self.hub.publish({'t': 'upd', 'a': addr, 'v': v})
-            return
         if addr.startswith('/cards/wlive/'):
             if addr.endswith(('/etime', '/sdfree')):      # pushed 7-10x/s while recording / playing
                 now = time.time()
@@ -560,8 +559,8 @@ class Mixer:
             elif addr.endswith(('/markers', '/sessions', '/state', '/sessionpos')) and self.wing.loaded:
                 self.refresh_markers(int(addr.split('/')[3]), delay=0.3)
         self.hub.publish({'t': 'upd', 'a': addr, 'v': v})
-        if not self.wing.loaded:
-            return                                   # initial load: one snapshot at the end
+        if self.x32 or not self.wing.loaded:
+            return                                   # initial load: one snapshot at the end (X32: nothing more to do)
         follow = (self.cfg.get('ambient') or {}).get('follow_channel')
         if addr.startswith('/io/out/USB/') or (follow and addr.startswith(f'/ch/{follow}/in/conn/')):
             threading.Thread(target=self.ensure_patch, daemon=True).start()
@@ -580,6 +579,8 @@ class Mixer:
         if self.x32:
             st = self.wing.snapshot()
             print(f"[mixer] {self.caps['model']} loaded: {len(st)} values", flush=True)
+            if st.get('/cards/$type') == 'WLIVE':
+                self.refresh_markers(1, publish=False)
             self.hub.publish({'t': 'snap', **self.snapshot()})
             return
         self.wing.query_many(self._source_addrs(), timeout=1.5)     # physical-input settings
@@ -587,7 +588,7 @@ class Mixer:
             self.wing.query_many([b + '/tags' for b in self.overrides]
                                  + [f'/mgrp/{g}/mute' for g in range(1, 9)], timeout=1.0)
             self.check_overrides()
-        for n in range(1, N_SD + 1):
+        for n in range(1, self.n_sd + 1):
             self.refresh_markers(n, publish=False)
         self.hub.publish({'t': 'snap', **self.snapshot()})
         self.ensure_patch(force=True)
@@ -683,6 +684,10 @@ class Mixer:
         def go():
             if delay:
                 time.sleep(delay)
+            if self.x32:
+                marks, sess = self.wing.rec_lists()
+                self._set_lists(card, marks, sess, publish)
+                return
             txt = self.wing.describe(f'/cards/wlive/{card}/$stat')
             if txt is None:
                 return
@@ -701,6 +706,16 @@ class Mixer:
             threading.Thread(target=go, daemon=True).start()
         else:
             go()
+
+    def _set_lists(self, card, marks, sess, publish):
+        if marks != self.rec_markers.get(card):
+            self.rec_markers[card] = marks
+            if publish:
+                self.hub.publish({'t': 'recm', 'c': card, 'v': marks})
+        if sess != self.rec_sessions.get(card):
+            self.rec_sessions[card] = sess
+            if publish:
+                self.hub.publish({'t': 'recs', 'c': card, 'v': sess})
 
     def rec_state(self, card):
         return self.wing.get(f'/cards/wlive/{card}/$stat/state')
@@ -1014,9 +1029,9 @@ def api_rec():
     action, card = str(d.get('action', '')), d.get('card')
     playback = False
     if card == 'all' and action == 'marker':
-        cards = [n for n in range(1, N_SD + 1) if _mixer.rec_state(n) == 'REC']
+        cards = [n for n in range(1, _mixer.n_sd + 1) if _mixer.rec_state(n) == 'REC']
         if not cards:
-            cards = [n for n in range(1, N_SD + 1) if _mixer.rec_state(n) in ('PLAY', 'PPAUSE')
+            cards = [n for n in range(1, _mixer.n_sd + 1) if _mixer.rec_state(n) in ('PLAY', 'PPAUSE')
                      and _mixer.wing.get(f'/cards/wlive/{n}/$stat/sdstate') == 'READY']
             playback = True
         if not cards:
@@ -1026,12 +1041,12 @@ def api_rec():
             cards = [int(card)]
         except (TypeError, ValueError):
             return jsonify(ok=False, err='bad card'), 400
-        if not 1 <= cards[0] <= N_SD:
+        if not 1 <= cards[0] <= _mixer.n_sd:
             return jsonify(ok=False, err='bad card'), 400
     if action not in ('rec', 'stop', 'marker'):
         return jsonify(ok=False, err='bad action'), 400
     if not _mixer.wing.connected:
-        return jsonify(ok=False, err='WING offline'), 503
+        return jsonify(ok=False, err=f"{_mixer.caps['model']} offline"), 503
     for n in cards:
         base = f'/cards/wlive/{n}'
         if action == 'rec':
@@ -1088,10 +1103,12 @@ def api_play():
         card = int(d.get('card'))
     except (TypeError, ValueError):
         return jsonify(ok=False, err='bad card'), 400
-    if not 1 <= card <= N_SD:
+    if not 1 <= card <= _mixer.n_sd:
         return jsonify(ok=False, err='bad card'), 400
     if action not in PLAY_ACTIONS:
         return jsonify(ok=False, err='bad action'), 400
+    if action == 'movemark' and not _mixer.caps.get('movemark'):
+        return jsonify(ok=False, err=f"the {_mixer.caps['model']} can't move a marker (delete it and add a new one)"), 409
     n = None
     if action in ('open', 'goto', 'movemark', 'delmark'):
         try:
@@ -1106,7 +1123,7 @@ def api_play():
         if n != n:                                         # NaN
             return jsonify(ok=False, err='bad time'), 400
     if not _mixer.wing.connected:
-        return jsonify(ok=False, err='WING offline'), 503
+        return jsonify(ok=False, err=f"{_mixer.caps['model']} offline"), 503
     w, base, L = _mixer.wing, f'/cards/wlive/{card}', 'AB'[card - 1]
     st = _mixer.rec_state(card) or 'STOP'
     if st == 'REC':

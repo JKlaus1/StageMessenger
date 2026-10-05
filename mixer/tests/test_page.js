@@ -170,6 +170,34 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   check('aux sheet: no low cut', !vis('row-lcf'));
   check('aux sheet did not fetch gate/dyn', !P.posts.some(p => /path=%2Faux%2F1%2F(gate|dyn)/.test(p.url)));
   d.getElementById('sh-close').click(); await tick();
+  // ── v3.2 X-LIVE recorder ──
+  console.log('X32 recorder (X-LIVE)');
+  const rc = d.getElementById('rec-card');
+  check('recorder card shown', !rc.classList.contains('none'));
+  check('one SD row (A)', d.querySelectorAll('#rec-rows .rec-row').length === 1
+        && d.querySelector('#rec-rows .rec-id b').textContent === 'A');
+  check('free time from the SD info', /1 h 23 m free/.test(d.querySelector('#rec-rows .rec-info').textContent),
+        d.querySelector('#rec-rows .rec-info').textContent);
+  check('card auto selectors hidden', d.querySelector('.auto-row').style.display === 'none');
+  check('routing switch reads LIVE / PLAYBACK', Array.from(d.querySelectorAll('#alt-seg button')).map(x => x.textContent).join() === 'LIVE,PLAYBACK');
+  const opts = Array.from(d.querySelectorAll('#rec-rows .pb-sess option')).map(o => o.textContent);
+  check('session picker in console order', opts.length === 2 && opts[0] === '#1  5 Oct 2026 · 10:53:06' && opts[1].startsWith('#2'), opts);
+  check('open session #2 selected', d.querySelector('#rec-rows .pb-sess').value === '2');
+  check('marker chips of the open session', Array.from(d.querySelectorAll('#rec-rows .pb-marks button')).map(x => x.textContent).join() === '◆1 0:03,◆2 0:09');
+  check('move-marker button hidden', d.querySelector('#rec-rows .pb-medit .mv').style.display === 'none');
+  check('hint does not offer "move"', !/move or/.test(d.querySelector('#rec-rows .pb-hint').textContent));
+  P.posts.length = 0;
+  d.querySelector('#rec-rows .rec-go').click(); await tick();
+  const rp = P.posts.find(p => p.url === '/mixer/api/rec');
+  check('REC posts /api/rec card 1', rp && rp.body.action === 'rec' && rp.body.card === 1, P.posts);
+  P.posts.length = 0;
+  d.querySelector('#rec-rows .pb-marks button').click(); await tick();
+  const gp2 = P.posts.find(p => p.url === '/mixer/api/play');
+  check('marker chip posts goto 1', gp2 && gp2.body.action === 'goto' && gp2.body.n === 1, P.posts);
+  P.push({ t: 'upd', a: '/cards/wlive/1/$stat/state', v: 'PLAY' }); await tick();
+  check('PLAY badge + pause button', d.querySelector('#rec-rows .rec-badge').textContent === 'PLAY'
+        && d.querySelector('#rec-rows .pb-play').textContent.includes('PAUSE'));
+  P.push({ t: 'upd', a: '/cards/wlive/1/$stat/state', v: 'STOP' }); await tick();
   check('no script errors (X32)', P.errors.length === 0, P.errors);
 
   // caps mismatch -> one reload attempt (guarded)
@@ -193,6 +221,8 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   check('WING main 2 label', W.d.querySelectorAll('#master-card .strip')[1].querySelector('.nm i').textContent.includes('MAIN 2'));
   rowOf(W.d, 'ch/1').querySelector('.nm').click(); await tick();
   check('WING name tap opens the sheet', W.d.getElementById('sheet').classList.contains('open'));
+  check('WING recorder hidden without a WING-LIVE card', W.d.getElementById('rec-card').classList.contains('none'));
+  check('WING auto selectors kept', W.d.querySelector('.auto-row').style.display !== 'none');
   check('WING high cut + source polarity shown', W.d.getElementById('row-hcf').style.display !== 'none' && W.d.getElementById('sh-spol').style.display !== 'none');
   check('WING all tabs on aux', (() => { W.d.getElementById('sh-close').click(); rowOf(W.d, 'aux/1').querySelector('.nm').click();
     return ['eq', 'gate', 'dyn'].every(t => W.d.querySelector(`#sh-tabs .tab[data-tab="${t}"]`).style.display !== 'none'); })());

@@ -690,7 +690,8 @@
   const CAPS = null; /*CAPS*/
   const CAP = Object.assign({ console: 'wing', model: 'WING', nch: 40, naux: 8, nbus: 16, nmg: 8, main2: 'Main 2',
                               sheet: true, listen: true, alt: true, gain: [-2.5, 45], lcf: [20, 2000], hc: true,
-                              spol: true, auxproc: ['eq', 'gate', 'dyn'], grdb: false }, CAPS || {});
+                              spol: true, auxproc: ['eq', 'gate', 'dyn'], grdb: false, sd: 2, movemark: true,
+                              recauto: true }, CAPS || {});
   const X32 = CAP.console === 'x32';
   const NBUS = CAP.nbus, NCH = CAP.nch, NAUX = CAP.naux;
   const ALT_TAG = X32 ? 'PLAY' : 'ALT';      // X32: routing REC/PLAY switch plays the WING's MAIN/ALT role
@@ -1042,7 +1043,7 @@
   // State comes from the console's own pushes. Elapsed time arrives ~2x/s (server-throttled), so
   // the clock is extrapolated locally between updates. STOP needs a 1 s hold; MARKER marks every
   // card that is recording.
-  const NSD = 2, RB = n => `/cards/wlive/${n}`;
+  const NSD = CAP.sd || 2, RB = n => `/cards/wlive/${n}`;   // X32 / X-LIVE: one slot (the selected SD)
   let recM = {};                                   // card -> marker times of the current session
   let recS = {};                                   // card -> session list ('2026-09-26 20:11:54  10'), newest first
   const recSeen = {};                              // card -> [etime ms, local ms when received]
@@ -1310,12 +1311,13 @@
     [...r.chips.children].forEach((c, i) => { c.disabled = !piLink; c.classList.toggle('cur', i + 1 === mp); c.classList.toggle('sel', i + 1 === r.sel); });
     if (r.sel && r.sel > ml.length) r.sel = null;
     r.medit.classList.toggle('show', !!r.sel && piLink);
+    r.mv.style.display = CAP.movemark ? '' : 'none';             // X-LIVE has no "move marker"
     if (r.sel) { r.mv.textContent = `Move ◆${r.sel} to ${clk(pos)}`; r.del.textContent = `Delete ◆${r.sel}`; }
     const nm = S[b + '/$stat/markers'] || 0;
     r.addm.disabled = !len || !piLink || nm >= 100;
     r.addm.textContent = `◆ ADD MARKER @ ${clk(pos)}`;
     r.hint.textContent = (playing ? 'Live: moves are heard immediately. ' : '')
-      + (ml.length ? 'Drag the bar, nudge, or tap a marker. Hold a marker to move or delete it.'
+      + (ml.length ? `Drag the bar, nudge, or tap a marker. Hold a marker to ${CAP.movemark ? 'move or ' : ''}delete it.`
                    : 'Drag the bar or nudge. No markers in this session.');
   }
   setInterval(() => { if (recRows.some(r => ['REC', 'PLAY'].includes(recState(r.n)))) paintRec(); }, 250);
@@ -1328,7 +1330,9 @@
   document.querySelectorAll('#alt-seg button').forEach(b => b.addEventListener('click', () => {
     const v = +b.dataset.v;
     if ((S['/io/altsw'] ? 1 : 0) === v) return;
-    if (!confirm(v ? 'Switch ALL channels to their ALT inputs?\nLive inputs go silent until you switch back to MAIN.'
+    if (!confirm(X32 ? (v ? 'Switch the input routing to PLAYBACK (card)?\nLive inputs go silent until you switch back to LIVE.'
+                          : 'Switch the input routing back to LIVE inputs?')
+                   : v ? 'Switch ALL channels to their ALT inputs?\nLive inputs go silent until you switch back to MAIN.'
                    : 'Switch all channels back to their MAIN inputs?')) return;
     // not postSet: that hides the echo for 500 ms, and the console's push IS the confirmation here
     postJSON('/mixer/api/set', { a: '/io/altsw', v });
@@ -2731,7 +2735,14 @@
   // console-specific chrome
   $('title').textContent = CAP.model + ' Mixer';
   if (!CAP.listen) { $('listen-card').classList.add('none'); $('patch-foot').classList.add('none'); }
-  if (X32) $('alt-badge').textContent = 'INPUTS ON PLAYBACK';
+  if (X32) {
+    $('alt-badge').textContent = 'INPUTS ON PLAYBACK';
+    const seg = document.querySelectorAll('#alt-seg button'); seg[0].textContent = 'LIVE'; seg[1].textContent = 'PLAYBACK';
+  }
+  if (!CAP.recauto) {                     // X-LIVE: the console's own REC/PLAY/AUTO routing pref, not per action
+    const ar = document.querySelector('.auto-row'); ar.style.display = 'none';
+    if (ar.nextElementSibling) ar.nextElementSibling.style.display = 'none';
+  }
 
   buildRec(); buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll(); connect();
 })();

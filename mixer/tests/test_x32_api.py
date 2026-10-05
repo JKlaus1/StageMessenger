@@ -189,6 +189,80 @@ def sheet_suite(c, mx, fake):
     check('bad patch -> 400', all(x == 400 for x in bad), bad)
 
 
+def rec_suite(c, mx, fake):
+    """v3.2 X-LIVE recorder through the WING-LIVE routes (card 1)."""
+    print('recorder: state')
+    g = mx.wing.get
+    B = '/cards/wlive/1/$stat/'
+    check('card type WLIVE (X-LIVE)', g('/cards/$type') == 'WLIVE')
+    check('STOP, SD READY, 1h23m47s free', g(B + 'state') == 'STOP' and g(B + 'sdstate') == 'READY' and g(B + 'sdfree') == 5027000,
+          (g(B + 'state'), g(B + 'sdstate'), g(B + 'sdfree')))
+    check('benign "System error: 6" hidden', g(B + 'errormessage') == '')
+    check('2 sessions, #2 open, 2 markers', g(B + 'sessions') == 2 and g(B + 'sessionpos') == 2 and g(B + 'markers') == 2)
+    st = c.get('/mixer/api/state').get_json()
+    check('caps sd 1, no move-marker, no auto selectors', st['caps']['sd'] == 1 and not st['caps']['movemark'] and not st['caps']['recauto'])
+    check('session list in console order, WING-LIVE text format',
+          st['recs'].get('1') == ['2026-10-05 10:53:06', '2026-10-05 11:07:22'], st['recs'])
+    check('marker list of the open session', st['recm'].get('1') == ['00:00:03.65', '00:00:09.49'], st['recm'])
+
+    def rec(action, card=1):
+        r = c.post('/mixer/api/rec', json={'action': action, 'card': card})
+        return r.status_code, r.get_json()
+
+    def play(action, card=1, **kw):
+        r = c.post('/mixer/api/play', json={'card': card, 'action': action, **kw})
+        return r.status_code, r.get_json()
+
+    print('recorder: record')
+    check('card 2 -> 400', rec('rec', 2)[0] == 400 and play('play', card=2)[0] == 400)
+    code, r = rec('rec')
+    check('REC -> state 3', code == 200 and F(fake, '/-stat/urec/state', lambda v: v == 3) and g(B + 'state') == 'REC', (code, r))
+    code, r = rec('marker', 'all')
+    check('marker while recording -> addmarker', code == 200 and r['cards'] == [1] and not r['playback']
+          and wait_for(lambda: ('/-action/addmarker', 1) in fake.actions), r)
+    check('play while recording -> 409', play('play')[0] == 409)
+    time.sleep(0.3)
+    code, r = rec('stop')
+    check('STOP -> new session #3 opened', code == 200 and wait_for(lambda: g(B + 'sessions') == 3 and g(B + 'sessionpos') == 3),
+          (g(B + 'sessions'), g(B + 'sessionpos')))
+    check('session list refreshed (3)', wait_for(lambda: len(mx.rec_sessions.get(1) or []) == 3, 3), mx.rec_sessions)
+    check('new session has the marker', wait_for(lambda: len(mx.rec_markers.get(1) or []) == 1, 3), mx.rec_markers)
+
+    print('recorder: playback')
+    code, r = play('open', n=1)
+    check('open #1 -> selsession 1', code == 200 and wait_for(lambda: ('/-action/selsession', 1) in fake.actions)
+          and wait_for(lambda: g(B + 'sessionpos') == 1))
+    check('markers of #1 listed', wait_for(lambda: mx.rec_markers.get(1) == ['00:00:03.97', '00:00:06.05', '00:00:08.45'], 4),
+          mx.rec_markers.get(1))
+    check('open #9 -> 409', play('open', n=9)[0] == 409)
+    code, r = play('play')
+    check('PLAY -> state 2', code == 200 and F(fake, '/-stat/urec/state', lambda v: v == 2) and g(B + 'state') == 'PLAY')
+    check('REC while playing -> 409', rec('rec')[0] == 409)
+    code, r = play('pause')
+    check('PAUSE -> state 1', code == 200 and F(fake, '/-stat/urec/state', lambda v: v == 1) and g(B + 'state') == 'PPAUSE')
+    code, r = play('seek', ms=5000.7)
+    check('seek -> setposition int 5001', code == 200 and wait_for(lambda: ('/-action/setposition', 5001) in fake.actions), fake.actions[-3:])
+    code, r = play('goto', n=2)
+    check('goto marker 2 (paused) -> selmarker 2', code == 200 and wait_for(lambda: ('/-action/selmarker', 2) in fake.actions))
+    code, r = play('mark')
+    check('add marker in playback', code == 200 and wait_for(lambda: len(mx.rec_markers.get(1) or []) == 4, 4), mx.rec_markers.get(1))
+    code, r = play('delmark', n=4)
+    check('delete marker 4 -> delmarker 4', code == 200 and wait_for(lambda: ('/-action/delmarker', 4) in fake.actions)
+          and wait_for(lambda: len(mx.rec_markers.get(1) or []) == 3, 4))
+    code, r = play('movemark', n=1)
+    check('move marker -> 409 (not on the M32)', code == 409 and 'move' in r['err'], r)
+    code, r = play('stop')
+    check('STOP -> state 0', code == 200 and F(fake, '/-stat/urec/state', lambda v: v == 0) and g(B + 'state') == 'STOP')
+    check('auto_* write refused', c.post('/mixer/api/set', json={'a': '/cards/wlive/auto_play', 'v': 'ALT'}).status_code == 400)
+    fake.console_set('/-urec/sd1state', 0)
+    check('SD pulled -> sdstate NONE, REC refused', wait_for(lambda: g(B + 'sdstate') == 'NONE') and rec('rec')[0] == 409)
+    fake.console_set('/-urec/sd1state', 1)
+    fake.console_set('/-urec/errorcode', 3)
+    fake.console_set('/-urec/errormessage', 'Card full')
+    check('real error shown', wait_for(lambda: g(B + 'errormessage') == 'Card full'))
+    fake.console_set('/-urec/errorcode', 6)
+
+
 def main():
     sys.path.insert(0, os.path.dirname(PKG))
     from mixer.tests.fake_x32 import FakeX32
@@ -338,14 +412,11 @@ def main():
         mx.hub.unsubscribe(mq)
 
         sheet_suite(c, mx, fake)
+        rec_suite(c, mx, fake)
 
         print('x32-off features')
         for path, meth in (('/mixer/stream.mp3', 'get'), ('/mixer/api/repatch', 'post')):
             code = getattr(c, meth)(path).status_code
-            check(f'{path} -> 409', code == 409, code)
-        for path, body in (('/mixer/api/rec', {'action': 'rec', 'card': 1}),
-                           ('/mixer/api/play', {'action': 'play', 'card': 1})):
-            code = c.post(path, json=body).status_code
             check(f'{path} -> 409', code == 409, code)
         check('whep -> 404 on x32', c.post('/mixer/api/rtc/whep', data='v=0').status_code == 404)
 
