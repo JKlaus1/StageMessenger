@@ -8,13 +8,16 @@ device_name: Stage Rig
 device_type: speaker
 log_level: info
 
-# Audio: stereo -> WING USB in 1/2 (AUX 1) through the shared dmix in /etc/asound.conf.
+# Audio: stereo -> the connected console's USB in 1/2 through /etc/asound.conf's "spotify_out"
+# (WING: wing_pi -> USB 1/2 -> AUX 1.  X32/M32: xlive_pi -> Card 1/2).  Which one is picked by the
+# STAGE_RIG_PCM variable in ~/.config/go-librespot/console.env, written by mixer/spotify.py for the
+# console /mixer is on (the unit loads it; the mixer restarts go-librespot when it changes).
 audio_backend: alsa
-audio_device: wing_pi
+audio_device: spotify_out
 bitrate: 320
 
 # Fixed volume: full scale always; the Spotify app's slider does not scale the audio.
-# The WING AUX 1 fader is the only level control.
+# The console fader (WING AUX 1 / X32 wherever Card 1/2 is returned) is the only level control.
 external_volume: true
 volume_steps: 100
 initial_volume: 100

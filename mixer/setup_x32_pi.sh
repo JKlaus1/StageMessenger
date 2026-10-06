@@ -58,7 +58,7 @@ c = json.load(open(p)) if os.path.exists(p) else {}
 c['mixer_type'] = 'auto'           # whichever console answers on eth0 (WING or X32/M32); hot-swaps
 c.pop('mixer_ip', None)            # let auto-detect do it
 c['remote_enabled'] = True         # internet access via the tunnel (Cloudflare Access gates it)
-c.setdefault('spotify', {})['enabled'] = False   # WING-only feature
+c.setdefault('spotify', {})['enabled'] = False   # off until mixer/setup_pi_playback.sh + setup_spotify.sh are run (v4.1: X32 supported)
 kid, tok = os.environ.get('TURN_KEY_ID', '').strip(), os.environ.get('TURN_API_TOKEN', '').strip()
 if kid and tok:
     c.setdefault('rtc', {}).update(turn_key_id=kid, turn_api_token=tok)

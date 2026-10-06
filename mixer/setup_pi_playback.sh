@@ -1,8 +1,8 @@
 #!/bin/bash
-# Stage Messenger v2.4 step A -- Pi -> WING playback, OS side. Idempotent; safe to re-run.
-#   1. /etc/asound.conf      <- mixer/asound.conf     (wing_dmix + wing_pi: stereo -> WING USB 1/2)
-#   2. WirePlumber rule      <- mixer/51-wing-ignore.conf (kiosk PipeWire keeps off the WING)
-#   3. tone test through the system-wide wing_pi (-30 dBFS, 2 players at once)
+# Stage Messenger v2.4 / v4.1 step A -- Pi -> console USB playback, OS side. Idempotent; safe to re-run.
+#   1. /etc/asound.conf      <- mixer/asound.conf     (wing_pi -> WING USB 1/2, xlive_pi -> X32 Card 1/2, spotify_out)
+#   2. WirePlumber rule      <- mixer/51-wing-ignore.conf (kiosk PipeWire keeps off the WING / X-LIVE)
+#   3. tone test through the system-wide <console>_pi of whichever console's USB is plugged in (-30 dBFS, 2 players)
 #   4. go-librespot binary   -> ~/go-librespot/ (downloaded, NOT configured or started yet)
 # Run from the laptop with a TTY (sudo asks for the pi password once):
 #   ssh -t pi@lights.local "bash ~/stage-messenger/mixer/setup_pi_playback.sh"
@@ -49,7 +49,16 @@ else
   echo "  wireplumber not running in this session -- the rule applies at the next desktop login"
 fi
 
-say "3. tone test through /etc/asound.conf wing_pi (-30 dBFS; AUX 1 fader is at -oo, so expect silence)"
+if [ -d /proc/asound/WING ]; then PCM=wing_pi; WHERE="WING USB 1/2 (AUX 1)"
+elif [ -d /proc/asound/XLIVE ]; then PCM=xlive_pi; WHERE="X32 Card in 1/2"
+else PCM=""; fi
+if [ "$PCM" = "xlive_pi" ]; then
+  RATES=$(grep -h 'Rates:' /proc/asound/XLIVE/stream0 2>/dev/null | sort -u | tr -s ' ' | sed 's/^ //')
+  echo "  X-LIVE reports: ${RATES:-rates unknown}"
+  case "$RATES" in *48000*) ok "48 kHz available (asound.conf xlive_dmix uses 48000)";;
+    "") ;; *) bad "X-LIVE is not at 48 kHz -- set the console clock to 48 kHz, or change xlive_dmix rate in mixer/asound.conf";; esac
+fi
+say "3. tone test through /etc/asound.conf ${PCM:-?} -> ${WHERE:-no console USB found} (-30 dBFS; the return fader is at -oo, so expect silence)"
 tone() { python3 -c "
 import sys, math, struct
 f, n = float(sys.argv[1]), int(48000 * float(sys.argv[2])); a = 0.0316 * 32767
@@ -57,12 +66,18 @@ b = bytearray()
 for i in range(n):
     v = int(a * math.sin(2 * math.pi * f * i / 48000)); b += struct.pack('<hh', v, v)
 sys.stdout.buffer.write(b)" "$1" "$2"; }
-play() { tone "$1" "$2" | timeout 10 aplay -q -D wing_pi -t raw -f S16_LE -c 2 -r 48000; echo "${PIPESTATUS[1]}"; }
-R1=$(mktemp); play 440 3 > "$R1" &
-P1=$!; sleep 0.8
-R2=$(play 660 1.5)
-wait "$P1"; T=$R1; R1=$(cat "$T"); rm -f "$T"
-[ "$R1" = "0" ] && [ "$R2" = "0" ] && ok "two players at once (exit $R1 / $R2)" || bad "players exit $R1 / $R2 (0 = ok, 124 = blocked)"
+play() { tone "$1" "$2" | timeout 10 aplay -q -D "$PCM" -t raw -f S16_LE -c 2 -r 48000; echo "${PIPESTATUS[1]}"; }
+if [ -n "$PCM" ]; then
+  R1=$(mktemp); play 440 3 > "$R1" &
+  P1=$!; sleep 0.8
+  R2=$(play 660 1.5)
+  wait "$P1"; T=$R1; R1=$(cat "$T"); rm -f "$T"
+  [ "$R1" = "0" ] && [ "$R2" = "0" ] && ok "two players at once on $PCM (exit $R1 / $R2)" || bad "players exit $R1 / $R2 (0 = ok, 124 = blocked)"
+  R3=$(STAGE_RIG_PCM=$PCM bash -c "$(declare -f tone play); PCM=spotify_out; play 550 1")
+  [ "$R3" = "0" ] && ok "spotify_out follows STAGE_RIG_PCM=$PCM (what go-librespot uses)" || bad "spotify_out with STAGE_RIG_PCM=$PCM exit $R3"
+else
+  bad "neither /proc/asound/WING nor /proc/asound/XLIVE exists -- plug the console's USB into the Pi and re-run"
+fi
 
 say "4. go-librespot (download only -- not configured, not started)"
 mkdir -p "$GL/releases"

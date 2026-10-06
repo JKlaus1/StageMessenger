@@ -1,5 +1,5 @@
 #!/bin/bash
-# Stage Messenger v2.4 step B -- go-librespot running, signed in, playing to WING AUX 1. Idempotent.
+# Stage Messenger v2.4 / v4.1 step B -- go-librespot running, signed in, playing to the console USB (WING AUX 1 / X32 Card 1/2). Idempotent.
 #   1. ~/.config/go-librespot/config.yml -> mixer/go-librespot.yml
 #   2. systemd unit go-librespot (enabled, started) + sudoers rule for the /mixer kill switch
 #   3. sign-in: shows the spotify.com pairing link + code and waits for you to approve (first run only)
@@ -103,7 +103,7 @@ fi
 say "4. playback check"
 if [ "$(code_of /status)" = "200" ]; then
   echo "  Open the Spotify app -> devices (speaker icon) -> pick \"Stage Rig\" -> play something."
-  echo "  The WING AUX 1 fader is at -oo: raise AUX 1 on /mixer (or the console) to hear it."
+  echo "  WING: raise AUX 1 (USB 1/2).  X32: it is on Card in 1/2 -- return it to Aux In 1/2 (Routing > Aux In Remap = Card 1-4) or a channel, then raise that fader."
   echo "  waiting up to 3 min for playback..."
   PLAYING=""
   for i in $(seq 1 60); do
@@ -121,8 +121,10 @@ s = json.load(sys.stdin); t = s.get('track') or {}
 print('  OK   playing:', t.get('name', '?'), '--', ', '.join(t.get('artist_names') or []), '|', t.get('album_name', ''))
 print('       device:', s.get('device_name'), '| volume', s.get('volume'), '/', s.get('volume_steps'), '(fixed: not applied to audio)')"
     sleep 1
-    if grep -q 'RUNNING' /proc/asound/WING/pcm0p/sub0/status 2>/dev/null; then ok "WING USB playback stream RUNNING"
-    else bad "WING USB playback stream not running:"; cat /proc/asound/WING/pcm0p/sub0/status 2>&1 | head -5; fi
+    CARD=WING; [ -d /proc/asound/XLIVE ] && [ ! -d /proc/asound/WING ] && CARD=XLIVE
+    if grep -q 'RUNNING' /proc/asound/$CARD/pcm0p/sub0/status 2>/dev/null; then ok "$CARD USB playback stream RUNNING"
+    else bad "$CARD USB playback stream not running:"; cat /proc/asound/$CARD/pcm0p/sub0/status 2>&1 | head -5; fi
+    echo "  output: $(grep STAGE_RIG_PCM "$CFG/console.env" 2>/dev/null || echo 'STAGE_RIG_PCM unset -> wing_pi (default)')"
   else
     echo "  (nothing played within 3 min -- fine; it is set up. Re-run this script any time to check.)"
   fi

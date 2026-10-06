@@ -1,5 +1,8 @@
 """
 Spotify card (v2.4; "Pi playback" until v2.5.1): go-librespot ("Stage Rig", Spotify Connect) -> WING USB 1/2 -> AUX 1.
+v4.1: also on the X32 / M32 -> Card in 1/2. go-librespot plays to the ALSA pcm "spotify_out" (/etc/asound.conf),
+which follows the STAGE_RIG_PCM variable in ~/.config/go-librespot/console.env (wing_pi | xlive_pi). set_console()
+writes that file for the connected console and restarts go-librespot when it changes (sudoers rule).
 
 go-librespot runs as its own service (mixer/go-librespot.service) with a local control API on
 127.0.0.1:3678 (mixer/go-librespot.yml). This module polls it and relays state to /mixer pages over
@@ -55,6 +58,12 @@ import urllib.parse
 import urllib.request
 
 UNIT = 'go-librespot.service'
+ENV_FILE = 'console.env'              # in config_dir; loaded by mixer/go-librespot.service (EnvironmentFile=)
+PCM = {'wing': 'wing_pi', 'x32': 'xlive_pi'}                 # /etc/asound.conf pcm per console
+STRIP = {'wing': 'aux/1', 'x32': 'aux/1'}                    # console strip the card pins as its level control
+HINT = {'wing': 'Spotify arrives on WING USB 1/2 (AUX 1).',
+        'x32':  'Spotify arrives on Card 1/2. Return it on the console: Routing \u203a Aux In Remap = Card 1-4 '
+                '(lands on Aux In 1/2), or route an input block / user-in to Card 1-2 for a channel.'}
 SYSTEMCTL = '/usr/bin/systemctl'      # must match mixer/stage-messenger-spotify.sudoers
 ID = r'[A-Za-z0-9]{10,40}'
 CONTEXT_URI = re.compile(rf'^(spotify:(playlist|album|artist|show):{ID}|spotify:collection:tracks)$')
@@ -75,7 +84,14 @@ class Spotify:
         self.cfg_path = cfg_path          # mixer_config.json -- written only by set_search_creds / stamping
         self.api = cfg.get('api', 'http://127.0.0.1:3678').rstrip('/')
         self.config_dir = cfg.get('config_dir', '/home/pi/.config/go-librespot')
-        self.aux = int(cfg.get('aux', 1))
+        self.pcm_map = dict(PCM, **(cfg.get('pcm') or {}))
+        strips = dict(STRIP, **(cfg.get('strip') or {}))
+        if 'aux' in cfg and 'strip' not in cfg:          # pre-v4.1 config: spotify.aux = WING aux number
+            strips['wing'] = f"aux/{int(cfg['aux'])}"
+        self.strips = strips
+        self.console = 'wing'
+        self.kind, self.aux = 'aux', 1
+        self._apply_strip()
         # search: the user's own Spotify developer app (client credentials) -- optional
         self.search_id = (cfg.get('search_client_id') or '').strip()
         self.search_secret = (cfg.get('search_client_secret') or '').strip()
@@ -90,7 +106,8 @@ class Spotify:
         self._pl_cache, self._pl_at = None, 0.0
         self.publish = publish            # fn(dict) -> SSE to every /mixer page
         self.wanted = wanted              # fn() -> True while a page is open
-        self.state = {'api': False, 'svc': '?', 'status': None, 'auth': None, 'at': 0, 'aux': self.aux,
+        self.state = {'api': False, 'svc': '?', 'status': None, 'auth': None, 'at': 0, 'aux': self.aux, 'kind': self.kind,
+                      'console': self.console, 'hint': HINT.get(self.console, ''),
                       'note': '', 'search': bool(self.search_id and self.search_secret), 'skey': None}
         self._key = None
         self._lock = threading.Lock()
@@ -101,6 +118,54 @@ class Spotify:
     def start(self):
         self._stamp_if_missing()
         threading.Thread(target=self._loop, daemon=True, name='spotify-poll').start()
+
+    # ── which console (v4.1): pinned strip + ALSA output ──
+    def _apply_strip(self):
+        v = str(self.strips.get(self.console) or 'aux/1')
+        kind, _, n = v.partition('/')
+        self.kind = kind if kind in ('ch', 'aux') else 'aux'
+        try:
+            self.aux = max(1, int(n))
+        except ValueError:
+            self.aux = 1
+
+    def set_console(self, console):
+        """Point go-librespot at this console's USB (STAGE_RIG_PCM in console.env) and pin its strip.
+        Restarts go-librespot only when the pcm actually changes (playback stops; the login is kept)."""
+        console = console if console in self.pcm_map else 'wing'
+        self.console = console
+        self._apply_strip()
+        pcm = self.pcm_map[console]
+        path = os.path.join(self.config_dir, ENV_FILE)
+        try:
+            with open(path) as f:
+                cur = f.read()
+        except FileNotFoundError:
+            cur = ''
+        had = None
+        for line in cur.splitlines():
+            if line.startswith('STAGE_RIG_PCM='):
+                had = line.split('=', 1)[1].strip()
+        if had == pcm:
+            return
+        try:
+            os.makedirs(self.config_dir, exist_ok=True)
+            tmp = path + '.tmp'
+            with open(tmp, 'w') as f:
+                f.write(f'# written by mixer/spotify.py for the connected console -- do not edit\nSTAGE_RIG_PCM={pcm}\n')
+            os.replace(tmp, path)
+        except Exception as e:
+            print(f'[mixer] spotify: could not write {path}: {e}', flush=True)
+            return
+        if had is None and pcm == PCM['wing']:
+            print(f'[mixer] spotify: output {pcm} ({console}) -- {ENV_FILE} created, go-librespot default already matches', flush=True)
+            return                                    # first run on a WING: the asound.conf default is wing_pi anyway
+        print(f'[mixer] spotify: output -> {pcm} ({console}, was {had or "default"}) -- restarting go-librespot', flush=True)
+        try:
+            self._systemctl('restart')
+            self._note(f'Stage Rig now plays to the {console.upper()}')
+        except Exception as e:
+            print(f'[mixer] spotify: go-librespot restart failed: {e} (run mixer/setup_spotify.sh for the sudoers rule)', flush=True)
 
     # ── search key lifecycle (v2.5.1) ──
     def _persist(self, updates):
@@ -219,7 +284,8 @@ class Spotify:
 
     def poll(self, force_svc=False):
         code, _ = self._req('/', timeout=1.5)
-        st = {'api': code == 200, 'status': None, 'auth': None, 'aux': self.aux,
+        st = {'api': code == 200, 'status': None, 'auth': None, 'aux': self.aux, 'kind': self.kind,
+              'console': self.console, 'hint': HINT.get(self.console, ''),
               'search': bool(self.search_id and self.search_secret), 'skey': self.key_info()}
         if code == 200:
             c, s = self._req('/status')

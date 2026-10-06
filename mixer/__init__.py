@@ -95,11 +95,12 @@ DEFAULTS = {
         'feed':          'main1',    # console feed whose audio goes with the picture
         'delay_ms':      0,          # audio delay to line sound up with the (later) video
     },
-    # Spotify card (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 (see mixer/spotify.py)
+    # Spotify card (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1; v4.1 also X32 -> Card 1/2 (mixer/spotify.py)
     'spotify': {
         'enabled':    True,
         'api':        'http://127.0.0.1:3678',
-        'aux':        1,                              # the WING aux strip USB 1/2 feeds
+        'strip':      {'wing': 'aux/1', 'x32': 'aux/1'},   # strip the card pins as its level fader, per console
+        'pcm':        {'wing': 'wing_pi', 'x32': 'xlive_pi'},   # /etc/asound.conf output per console
         'config_dir': '/home/pi/.config/go-librespot',
         # search (v2.5): your own Spotify developer app, client-credentials (app-only, never your
         # account). Set with mixer/set_spotify_search.sh -- secrets live only in mixer_config.json.
@@ -189,7 +190,7 @@ CAPS = {
              'nmain': N_MAIN, 'ndca': N_DCA, 'mtxsrc': ['ch', 'aux', 'bus', 'main'], 'mainsof': True, 'nfxr': 0},
     'x32':  {'console': 'x32', 'model': 'X32', 'nch': x32mod.N_CH, 'naux': x32mod.N_AUX, 'nbus': x32mod.N_BUS,
              'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': True, 'recorder': 'xlive',
-             'listen': True, 'spotify': False, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
+             'listen': True, 'spotify': True, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
              'lcf': list(x32mod.LCF_RANGE), 'hc': False, 'spol': False, 'auxproc': ['eq'], 'grdb': True,
              'sd': 1, 'movemark': False, 'recauto': False,
              'nmain': x32mod.N_MAIN, 'ndca': x32mod.N_DCA, 'mtxsrc': ['bus', 'main'], 'mainsof': False,
@@ -328,6 +329,7 @@ class Mixer:
             self.cam.start_probe()                    # Wi-Fi cameras online / offline, auto-rotate (v3.8)
         self.spotify = None                           # the Spotify card is optional: never blocks the mixer
         self._ensure_spotify()
+        self._spotify_console()
 
     # ── listen capture per console (v3.9) ──
     def _capture(self):
@@ -440,6 +442,18 @@ class Mixer:
             print(f'[mixer] Spotify disabled: {e}', flush=True)
             self.spotify = None
 
+    def _spotify_console(self):
+        """v4.1: go-librespot's USB output + the pinned strip follow the connected console."""
+        if not self.spotify:
+            return
+        sp, console = self.spotify, self.console
+        def run():
+            try:
+                sp.set_console(console)                # may restart go-librespot: keep it off the swap path
+            except Exception as e:
+                print(f'[mixer] spotify: set_console failed: {e}', flush=True)
+        threading.Thread(target=run, daemon=True, name='spotify-console').start()
+
     def _watch(self):
         """While no console is connected, look for one every watch_s; a different console (type or
         address) replaces the driver. A connected console is never second-guessed."""
@@ -475,6 +489,7 @@ class Mixer:
             old_drv.stop(); old_m.stop()
             self._attach(info['kind'], info['ip'], info, f'switched from {old}')
             self._ensure_spotify()
+            self._spotify_console()
             self.wing.start(); self.meters.start()
             self.patch_note = ''
             self.listener.set_capture(*self._capture())

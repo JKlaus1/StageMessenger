@@ -983,7 +983,7 @@
       <div id="sp-kill"><button id="sp-disc"><i></i><span>&#9167; HOLD TO DISCONNECT</span></button><button id="sp-more" title="More">&#8943;</button></div>
       <div id="sp-menu"><button id="sp-restart">Restart Stage Rig</button><button id="sp-repair">Sign out &amp; re-pair</button></div>
       <div class="note" id="sp-note"></div>
-      <div class="note small">Browse and pick music in the Spotify app (device: Stage Rig). Volume is fixed &mdash; use the AUX fader above.</div>
+      <div class="note small" id="sp-foot">Browse and pick music in the Spotify app (device: Stage Rig). Volume is fixed &mdash; use the fader above.</div>
     </div>
   </section>
 
@@ -1909,12 +1909,15 @@
     return x ? x.json().catch(() => null) : null;
   }
   function spBuildStrip() {
-    const aux = (SP && SP.aux) || 1;
-    if (spRow && spRow.n === aux) return;
+    const aux = (SP && SP.aux) || 1, kind = (SP && SP.kind) || 'aux';     // v4.1: per-console strip (X32: Card 1/2 return)
+    if (spRow && spRow.n === aux && spRow.kind === kind) return;
     $('sp-strip').innerHTML = '';
-    spRow = { kind: 'aux', n: aux, pi: true };
+    spRow = { kind, n: aux, pi: true };
     buildRow(spRow, $('sp-strip'));
     paintRow(spRow);
+    const lbl = (kind === 'ch' ? 'CH ' : 'AUX ') + aux;
+    $('sp-foot').textContent = `Browse and pick music in the Spotify app (device: Stage Rig). Volume is fixed — use the ${lbl} fader above.`
+      + (SP && SP.hint ? ' ' + SP.hint : '');
   }
   function applySp(v) {
     const prevUri = spTr() && spTr().uri;

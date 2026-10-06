@@ -305,20 +305,27 @@ def main():
     from mixer.tests.fake_x32 import FakeX32
     sys.path.pop(0)
     fake = FakeX32().start()
+    spdir = tempfile.mkdtemp(prefix='sp-cfg-')
     cfg = {'mixer_ip': '127.0.0.1', 'mixer_type': 'auto', 'remote_enabled': False,
-           'spotify': {'enabled': True}, 'rtc': {'enabled': True}}
+           'spotify': {'enabled': True, 'config_dir': spdir, 'strip': {'x32': 'ch/31'}}, 'rtc': {'enabled': True}}
     tmp, mixer, mx, c = setup(cfg, state={'order': ['ch/40', 'ch/2', 'aux/1']})
     try:
         print('detect / caps')
         check('auto detect -> x32', mx.console == 'x32' and mx.x32)
         check('caps model from /xinfo', mx.caps['model'] == 'M32C' and mx.caps['fw'] == '4.06-8', mx.caps)
-        check('spotify not started on x32', mx.spotify is None)
+        # v4.1: the Spotify card is on the X32 too -> Card in 1/2; go-librespot's output follows the console
+        check('spotify started on x32 (v4.1)', mx.spotify is not None and mx.spotify.console == 'x32')
+        check('spotify strip from config (ch/31)', (mx.spotify.kind, mx.spotify.aux) == ('ch', 31))
+        env = os.path.join(spdir, 'console.env')
+        check('console.env -> xlive_pi', wait_for(lambda: os.path.exists(env), 5)
+              and 'STAGE_RIG_PCM=xlive_pi' in open(env).read(), open(env).read() if os.path.exists(env) else 'missing')
         check('driver connected + loaded', wait_for(lambda: mx.wing.loaded, 8))
         st = c.get('/mixer/api/state').get_json()
         check('snapshot caps', st['caps']['nch'] == 32 and st['caps']['nmg'] == 6 and st['caps']['sheet']
               and st['caps']['gain'] == [-12.0, 60.0] and st['caps']['lcf'] == [20.0, 400.0] and not st['caps']['hc'])
         check('snapshot srcgroups = picker groups', [g for g, _ in st['srcgroups']] == ['IN', 'AUX', 'USB', 'FX', 'BUS'])
-        check('snapshot sp None, X32 listen feeds (v3.9)', st['sp'] is None
+        check('snapshot sp on x32 (kind/aux/hint), X32 listen feeds (v3.9)',
+              st['sp'] and st['sp']['kind'] == 'ch' and st['sp']['aux'] == 31 and 'Card 1/2' in st['sp']['hint']
               and [(f['id'], f['usb']) for f in st['feeds']] == [('main1', [31, 32]), ('main2', [28, 28]),
                                                                  ('mon1', [29, 30]), ('ambient', [27, 27])], st['feeds'])
         s = st['state']
