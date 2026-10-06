@@ -78,19 +78,41 @@
     body.pipwin { margin: 0; padding: .4rem; max-width: none; min-height: 0; height: 100vh; box-sizing: border-box;
       display: flex; flex-direction: column; overflow: hidden; }
     body.pipwin #cam-pop { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-    body.pipwin #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; }
+    body.pipwin #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; max-height: none; }
+    body.pipwin .cam-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     #cam-pop:fullscreen { display: flex; flex-direction: column; min-height: 0; }
-    #cam-pop:fullscreen #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; }
+    #cam-pop:fullscreen #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; max-height: none; }
+    #cam-pop:fullscreen .cam-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     #cam-pop:fullscreen { background: #000; padding: .5rem; box-sizing: border-box; }
     #cam-pop:-webkit-full-screen { display: flex; flex-direction: column; width: 100%; height: 100%; background: #000; padding: .5rem; box-sizing: border-box; }
-    #cam-pop:-webkit-full-screen #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; }
+    #cam-pop:-webkit-full-screen #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; max-height: none; }
+    #cam-pop:-webkit-full-screen .cam-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     .cam-opts .toggle { flex: none; padding: .3rem .6rem; font-size: .62rem; }
     .vol-row { display: flex; align-items: center; gap: .5rem; margin-top: .45rem; font-size: .68rem; color: var(--muted); }
     .vol-row input[type=range] { flex: 1 1 auto; min-width: 0; }
     .vol-row .vv { flex: none; min-width: 3rem; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
     .vol-row .vv.boost { color: var(--amber); }
-    #cam-video { display: none; width: 100%; aspect-ratio: 16 / 9; margin-top: .6rem; border-radius: 10px; background: #000; object-fit: contain; }
+    #cam-video { display: none; width: 100%; aspect-ratio: var(--ar, 16 / 9); max-height: 75vh; margin-top: .6rem; border-radius: 10px; background: #000; object-fit: contain; }
     #cam-video.on { display: block; }
+    /* v3.8: controls on the picture (card, fullscreen, pop-out window); they fade after a few seconds */
+    .cam-stage { position: relative; }
+    .cam-ovl { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: .45rem; padding: .5rem;
+      border-radius: 0 0 10px 10px; background: linear-gradient(transparent, rgba(0,0,0,.65)); transition: opacity .3s; }
+    #cam-video:not(.on) + .cam-ovl { display: none; }
+    .cam-stage.idle .cam-ovl { opacity: 0; pointer-events: none; }
+    .cam-stage.idle { cursor: none; }
+    .cam-ovl .sp { flex: 1; }
+    .ovb { flex: none; width: 2.6rem; height: 2.3rem; border: none; border-radius: 8px; background: rgba(0,0,0,.5);
+      color: #fff; font-size: 1.05rem; line-height: 1; padding: 0; }
+    .ovb.on { background: rgba(0,200,120,.55); }
+    #cam-add { margin-top: .5rem; padding: .6rem; border: 1px solid var(--border); border-radius: 10px; }
+    .cam-add-row { display: flex; gap: .45rem; align-items: center; margin-bottom: .45rem; }
+    .cam-add-row input { flex: 1 1 8rem; min-width: 0; background: #0f0f22; color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: .45rem .5rem; font-size: .78rem; user-select: text; -webkit-user-select: text; }
+    .cam-add-row .sp { flex: 1; }
+    #cam-found .found { display: flex; align-items: center; gap: .5rem; font-size: .72rem; margin: .25rem 0; }
+    #cam-found .found span { flex: 1; }
+    #cam-add-msg { font-size: .68rem; color: var(--muted); min-height: 1em; }
     .cam-sync { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; font-size: .68rem; color: var(--muted); }
     .cam-sync input[type=range] { flex: 1 1 auto; min-width: 0; }
     .cam-sync .nudge { flex: none; width: 2rem; padding: .3rem 0; border-radius: 8px; border: 1px solid var(--border);
@@ -541,26 +563,48 @@
     <div class="label">Video</div>
     <div class="listen-row">
       <button id="cam-btn">&#9654; Watch</button>
-      <select id="cam-feed" title="Console feed whose sound goes with the picture"></select>
+      <select id="cam-src" title="Camera"></select>
       <select id="cam-q" title="Picture quality"></select>
     </div>
     <div class="cam-opts">
+      <select id="cam-feed" title="Sound that goes with the picture: a console feed or the camera's own mic"></select>
       <select id="cam-ab" title="Bitrate of the sound that comes with the video"></select>
+      <select id="cam-rot" title="Turn the picture (Auto follows an IP Webcam phone)"></select>
       <span class="sp"></span>
-      <button class="toggle" id="cam-pause" title="Freeze the picture; Live jumps back to now">&#10074;&#10074; Pause</button>
-      <button class="toggle" id="cam-fs" title="Fullscreen (or double-tap the picture)">&#9974; Full</button>
-      <button class="toggle" id="cam-pip" title="Pop the video out into a floating window">&#10697; Pop out</button>
+      <button class="toggle" id="cam-add-btn" title="Add or find a Wi-Fi camera">+ Camera</button>
+    </div>
+    <div id="cam-add" hidden>
+      <div class="cam-add-row">
+        <input id="cam-add-name" placeholder="Name (e.g. Phone)" maxlength="30" autocomplete="off">
+        <input id="cam-add-url" placeholder="http://192.168.1.50:8080/video" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="toggle" id="cam-add-go">Add</button>
+      </div>
+      <div class="cam-add-row">
+        <button class="toggle" id="cam-find" title="Look for phones running IP Webcam or DroidCam on the Pi's networks">Find cameras</button>
+        <span class="sp"></span>
+        <button class="toggle" id="cam-del" title="Remove the chosen Wi-Fi camera">Remove this camera</button>
+      </div>
+      <div id="cam-found"></div>
+      <div id="cam-add-msg"></div>
     </div>
     <div id="cam-pip-ph">Video is in the floating window</div>
     <div id="cam-pop">
-    <video id="cam-video" playsinline muted autopictureinpicture></video>
+    <div class="cam-stage" id="cam-stage">
+      <video id="cam-video" playsinline muted autopictureinpicture></video>
+      <div class="cam-ovl" id="cam-ovl">
+        <button class="ovb" id="cam-pause" title="Pause" aria-label="Pause">&#10074;&#10074;</button>
+        <button class="ovb" id="cam-snd" title="Sound off" aria-label="Sound">&#128263;</button>
+        <span class="sp"></span>
+        <button class="ovb" id="cam-fs" title="Fullscreen (or double-tap the picture)" aria-label="Fullscreen">&#9974;</button>
+        <button class="ovb" id="cam-pip" title="Pop out" aria-label="Pop out">&#10697;</button>
+      </div>
+    </div>
     <div class="cam-sync">
       <span>A/V sync</span>
       <button class="nudge" id="cam-dn" title="Audio 10 ms earlier">&minus;</button>
       <input type="range" id="cam-delay" min="0" max="1500" step="10" value="0" title="Delay the sound so it lines up with the (later) picture">
       <button class="nudge" id="cam-up" title="Audio 10 ms later">+</button>
       <span id="cam-delay-val">0 ms</span>
-      <button class="toggle" id="cam-snd" title="Sound from the video">Sound off</button>
     </div>
     <div class="vol-row"><span>Volume</span><input type="range" id="cam-vol" min="0" max="400" step="5" value="100" title="Video sound volume on this device (over 100% boosts it)"><span class="vv" id="cam-vol-val">100%</span></div>
     </div>
@@ -2190,6 +2234,7 @@
   // Picture-in-Picture (iPad: floats over other apps and keeps playing); Chrome desktop gets a small
   // window that also carries the sync controls (Document Picture-in-Picture).
   let listenResume = false, pipWin = null;
+  let cEpoch = 0;                                         // encoder epoch this connection belongs to (v3.8)
   let camSt = null, camWant = false, cpc = null, cSession = null, cStream = null, cGen = 0, cTimer = null;
   let cDrops = 0, cBytes = 0, cAt = 0, camSound = false, camDelayAt = 0, camDelayT = null, camOptSig = '';
   const camVideo = $('cam-video');
@@ -2202,17 +2247,40 @@
     camSt = st;
     $('cam-card').hidden = !st.available;
     if (!st.available) { if (camWant) stopCam(); return; }
-    const sig = JSON.stringify([st.audio, st.qualities, st.audio_rates, feeds.map(f => f.id + f.label)]);
+    const srcs = st.sources || [];
+    const act = srcs.find(x => x.id === st.active);
+    const sig = JSON.stringify([st.audio, st.qualities, st.audio_rates, feeds.map(f => f.id + f.label), st.mic_ok || st.feed === 'mic',
+                                srcs.map(x => [x.id, x.name, x.online]), act && act.auto]);
     if (sig !== camOptSig) {                              // rebuild only when the lists change
       camOptSig = sig;
       const fs = $('cam-feed'); fs.innerHTML = '';
       feeds.forEach(f => { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label; fs.appendChild(o); });
+      if (st.mic_ok || st.feed === 'mic') {               // v3.8: the camera's own mic
+        const o = document.createElement('option'); o.value = 'mic'; o.textContent = 'Camera mic' + (st.mic_ok ? '' : ' (not on this camera)'); fs.appendChild(o);
+      }
+      const ss = $('cam-src'); ss.innerHTML = '';
+      srcs.forEach(x => {
+        const o = document.createElement('option'); o.value = x.id;
+        o.textContent = (x.kind === 'net' ? '📶 ' : '') + x.name + (x.kind === 'net' ? (x.online === false ? ' · offline' : x.online ? ' · online' : '') : '');
+        ss.appendChild(o);
+      });
+      const rs = $('cam-rot'); rs.innerHTML = '';
+      (act && act.auto ? [['auto', '⟳ Auto']] : []).concat([['0', '⟳ 0°'], ['90', '⟳ 90°'], ['180', '⟳ 180°'], ['270', '⟳ 270°']])
+        .forEach(([v, t]) => { const o = document.createElement('option'); o.value = v; o.textContent = t; rs.appendChild(o); });
       const qs = $('cam-q'); qs.innerHTML = '';
       (st.qualities || []).forEach(q => { const o = document.createElement('option'); o.value = q.id; o.textContent = q.label; qs.appendChild(o); });
       const as = $('cam-ab'); as.innerHTML = '';
       (st.audio_rates || []).forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = 'Sound · ' + r; as.appendChild(o); });
     }
-    $('cam-feed').style.display = feeds.length ? '' : 'none';      // no console audio (e.g. X32 for now): picture only
+    $('cam-feed').style.display = $('cam-feed').options.length ? '' : 'none';   // no console audio, no mic: picture only
+    $('cam-src').style.display = srcs.length > 1 ? '' : 'none';
+    if (document.activeElement !== $('cam-src') && st.choice) $('cam-src').value = st.choice;
+    if (document.activeElement !== $('cam-rot')) $('cam-rot').value = st.rotate_mode || '0';
+    const chosen = srcs.find(x => x.id === st.choice);
+    $('cam-del').style.display = chosen && chosen.kind === 'net' && !chosen.fixed ? '' : 'none';
+    // the Pi restarted the encoder (camera / quality / rotation / phone turned): rejoin the new stream
+    if (camWant && cpc && cpc.connectionState === 'connected' && !cEpoch) cEpoch = st.epoch || 0;     // first epoch seen on this connection
+    else if (camWant && !camPaused && cpc && cEpoch && st.epoch && st.epoch !== cEpoch) { cEpoch = st.epoch; setTimeout(() => camWant && !camPaused && startCam(), 300); }
     $('cam-snd').style.display = st.audio ? '' : 'none';
     $('cam-ab').style.display = st.audio && st.audio_rates ? '' : 'none';
     if (document.activeElement !== $('cam-ab') && st.audio_bitrate) $('cam-ab').value = st.audio_bitrate;
@@ -2225,6 +2293,9 @@
     }
     if (st.error && camWant && !cpc) camNote(st.error);
     else if (!camWant) camNote(st.running ? `Camera live · ${st.viewers} viewer${st.viewers === 1 ? '' : 's'}${st.audio_issue ? ' · picture only: ' + st.audio_issue : ''}` : '');
+    const warn = [st.fallback && chosen && act ? `${chosen.name} is offline · showing ${act.name}` : '', st.auto_note || ''].filter(Boolean).join(' · ');
+    $('cam-add-msg').dataset.warn = warn;
+    if (warn && !camWant) camNote(warn);
   }
   function setCamDelay(ms, now) {
     ms = Math.max(0, Math.min(+$('cam-delay').max || 3000, Math.round(ms)));
@@ -2237,19 +2308,67 @@
   $('cam-dn').addEventListener('click', () => setCamDelay(+$('cam-delay').value - 10, true));
   $('cam-up').addEventListener('click', () => setCamDelay(+$('cam-delay').value + 10, true));
   $('cam-feed').addEventListener('change', e => camPost({ feed: e.target.value }));
-  $('cam-q').addEventListener('change', async e => {
-    await camPost({ quality: e.target.value });
-    if (camWant) startCam();                              // the encoder restarted: reconnect to the new stream
+  // quality / sound bitrate / camera / rotation restart the Pi's encoder; the page rejoins when the new
+  // stream's epoch arrives (paintCam), so nothing reconnects here
+  $('cam-q').addEventListener('change', e => camPost({ quality: e.target.value }));
+  $('cam-ab').addEventListener('change', e => camPost({ audio_bitrate: e.target.value }));
+  $('cam-src').addEventListener('change', e => camPost({ source: e.target.value }));
+  $('cam-rot').addEventListener('change', e => camPost({ rotate: e.target.value }));
+
+  // ── Wi-Fi cameras (v3.8): add by address, find on the network, remove ──
+  const addMsg = t => { $('cam-add-msg').textContent = t || ''; };
+  $('cam-add-btn').addEventListener('click', () => {
+    $('cam-add').hidden = !$('cam-add').hidden;
+    $('cam-add-btn').classList.toggle('on', !$('cam-add').hidden);
+    addMsg('');
   });
-  $('cam-ab').addEventListener('change', async e => {
-    await camPost({ audio_bitrate: e.target.value });
-    if (camWant) startCam();                              // same: new encoder, new stream
+  async function addCam(name, url) {
+    addMsg('Adding…');
+    try {
+      const r = await fetch('/mixer/api/cam/add', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, url, select: true }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) { addMsg(j.err || 'could not add that camera'); return false; }
+      if (j.cam) paintCam(j.cam);
+      addMsg('Added · it shows as online once the Pi can reach it');
+      return true;
+    } catch (e) { addMsg('could not add: ' + (e.message || e)); return false; }
+  }
+  $('cam-add-go').addEventListener('click', async () => {
+    const url = $('cam-add-url').value.trim();
+    if (!url) { addMsg('Type the camera address, e.g. http://192.168.1.50:8080/video (IP Webcam)'); return; }
+    if (await addCam($('cam-add-name').value.trim(), url)) { $('cam-add-url').value = ''; $('cam-add-name').value = ''; }
+  });
+  $('cam-find').addEventListener('click', async () => {
+    const box = $('cam-found'); box.innerHTML = '';
+    addMsg('Looking for IP Webcam / DroidCam phones…');
+    let j = null;
+    try { const r = await fetch('/mixer/api/cam/find', { method: 'POST', redirect: 'manual' }); j = await r.json(); } catch (e) {}
+    if (!j || !j.ok) { addMsg((j && j.err) || 'search failed'); return; }
+    if (!j.found.length) { addMsg('Nothing new found · is the camera app running on the same Wi-Fi?'); return; }
+    addMsg('');
+    j.found.forEach(f => {
+      const row = document.createElement('div'); row.className = 'found';
+      const t = document.createElement('span'); t.textContent = f.name;
+      const b = document.createElement('button'); b.className = 'toggle'; b.textContent = 'Add';
+      b.addEventListener('click', async () => { if (await addCam(f.name, f.url)) row.remove(); });
+      row.append(t, b); box.appendChild(row);
+    });
+  });
+  $('cam-del').addEventListener('click', async () => {
+    const id = camSt && camSt.choice, src = camSt && (camSt.sources || []).find(x => x.id === id);
+    if (!src || src.kind !== 'net' || !confirm(`Remove ${src.name}?`)) return;
+    const r = await fetch('/mixer/api/cam/remove', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }) }).catch(() => null);
+    const j = r ? await r.json().catch(() => null) : null;
+    if (j && j.cam) paintCam(j.cam);
   });
   // The video's own sound on/off (a plain mute). Listen and the video never run together (v3.7):
   // Watch stops Listen (it comes back when the video stops), Listen closes the video.
   function setCamSound(on) {
     camSound = !!on;
-    $('cam-snd').textContent = camSound ? 'Sound on' : 'Sound off'; $('cam-snd').classList.toggle('on', camSound);
+    $('cam-snd').innerHTML = camSound ? '&#128266;' : '&#128263;'; $('cam-snd').title = camSound ? 'Sound on' : 'Sound off';
+    $('cam-snd').classList.toggle('on', camSound);
     applyVol('cam');
     if (camSound) camVideo.play().catch(() => {});
   }
@@ -2264,8 +2383,10 @@
 
   // ── pause / live (v3.7): freeze the last frame, drop the connection; Live reconnects at now ──
   let camPaused = false;
+  let camSoftPause = false;                                // paused inside the iPad's floating window: connection kept
   function paintPause() {
-    $('cam-pause').innerHTML = camPaused ? '&#9654; Live' : '&#10074;&#10074; Pause';
+    $('cam-pause').innerHTML = camPaused ? '&#9654;' : '&#10074;&#10074;';
+    $('cam-pause').title = camPaused ? 'Live (jump back to now)' : 'Pause';
     $('cam-pause').classList.toggle('on', camPaused);
   }
   function freezeFrame() {
@@ -2279,7 +2400,9 @@
   }
   $('cam-pause').addEventListener('click', () => {
     if (!camWant) { camNote('Start the video first'); return; }
+    if (camPaused && camSoftPause) { camVideo.play().catch(() => {}); return; }
     if (camPaused) { startCam(); return; }               // back to live (inside the tap: sound may start)
+    if (nativePip()) { camVideo.pause(); return; }       // the floating window keeps its stream (see below)
     freezeFrame();
     closeCam();
     camPaused = true; paintPause();
@@ -2290,7 +2413,7 @@
   const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
   function toggleFs() {
     if (!camWant) { camNote('Start the video first'); return; }
-    if (pipWin) return;                                   // the pop-out window has its own maximise
+    if (pipWin) { popIn(); setTimeout(toggleFs, 200); return; }   // the pop-out window can't go fullscreen: back to the page
     if (fsEl()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} return; }
     const pop = $('cam-pop');
     const native = () => { if (camVideo.webkitEnterFullscreen) try { camVideo.webkitEnterFullscreen(); } catch (e) {} };
@@ -2320,7 +2443,7 @@
   function paintPip() {
     const on = pipActive();
     $('cam-pip').classList.toggle('on', on);
-    $('cam-pip').innerHTML = on ? '&#10697; Pop in' : '&#10697; Pop out';
+    $('cam-pip').title = on ? 'Pop in' : 'Pop out';
     $('cam-pip-ph').classList.toggle('on', !!pipWin);
   }
   async function popOut() {
@@ -2363,6 +2486,37 @@
   });
   ['enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged'].forEach(ev => camVideo.addEventListener(ev, paintPip));
 
+  // v3.8: the iPad's / Chrome's own floating window has a play/pause button: pausing there keeps the
+  // connection (frames just aren't shown) and play shows live again -- WebRTC never plays a backlog.
+  const nativePip = () => !pipWin && (document.pictureInPictureElement === camVideo || camVideo.webkitPresentationMode === 'picture-in-picture');
+  camVideo.addEventListener('pause', () => {
+    if (!camWant || camPaused || !camVideo.srcObject || !nativePip()) return;
+    camPaused = camSoftPause = true; paintPause();
+  });
+  camVideo.addEventListener('play', () => {
+    if (!camSoftPause) return;
+    camPaused = camSoftPause = false; paintPause();
+  });
+  try {
+    if (navigator.mediaSession) {
+      navigator.mediaSession.setActionHandler('pause', () => { if (camWant && !camPaused) $('cam-pause').click(); });
+      navigator.mediaSession.setActionHandler('play', () => { if (camWant && camPaused) $('cam-pause').click(); });
+    }
+  } catch (e) {}
+  // the picture's own shape (a turned phone is portrait): the card follows it, pop-out / fullscreen fill
+  camVideo.addEventListener('resize', () => {
+    if (camVideo.videoWidth && camVideo.videoHeight) camVideo.style.setProperty('--ar', camVideo.videoWidth + ' / ' + camVideo.videoHeight);
+  });
+  // controls on the picture: shown on touch / mouse movement, faded after 3 s (kept while paused)
+  let ovlT = null;
+  function ovlWake() {
+    const stage = camVideo.parentNode;
+    stage.classList.remove('idle');
+    clearTimeout(ovlT);
+    ovlT = setTimeout(() => { if (!camPaused) stage.classList.add('idle'); }, 3000);
+  }
+  ['pointermove', 'pointerdown', 'touchstart'].forEach(ev => $('cam-stage').addEventListener(ev, ovlWake, { passive: true }));
+
   function closeCam() {
     cGen++;
     clearTimeout(cTimer);
@@ -2373,7 +2527,7 @@
     applyVol('cam');
   }
   function camReset() {                                   // after stop / failure: no pause, no fullscreen
-    camPaused = false; paintPause(); camVideo.removeAttribute('poster');
+    camPaused = camSoftPause = false; paintPause(); camVideo.removeAttribute('poster');
     if (fsEl()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} }
   }
   function stopCam(user) {
@@ -2395,7 +2549,8 @@
     closeCam();
     const gen = cGen;
     cStream = new MediaStream();
-    if (camPaused) { camPaused = false; paintPause(); }
+    if (camPaused) { camPaused = camSoftPause = false; paintPause(); }
+    cEpoch = 0; ovlWake();
     camVideo.srcObject = cStream; camVideo.classList.add('on');
     applyVol('cam');
     camVideo.play().catch(() => {});                      // inside the tap: allowed to start
@@ -2435,7 +2590,7 @@
   function camState(p, gen) {
     if (gen !== cGen || p !== cpc) return;
     const st = p.connectionState;
-    if (st === 'connected') { clearTimeout(cTimer); cDrops = 0; }
+    if (st === 'connected') { clearTimeout(cTimer); cDrops = 0; cEpoch = (camSt && camSt.epoch) || 0; }
     else if (st === 'failed') camReconnect('connection failed');
     else if (st === 'disconnected') {
       clearTimeout(cTimer);

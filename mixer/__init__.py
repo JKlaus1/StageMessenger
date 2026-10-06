@@ -255,7 +255,7 @@ class Mixer:
         self._cam_ctl = os.path.join(shm, f'wing_cam_{os.getpid()}')
         cam_cfg = dict(cfg.get('cam') or {})
         cam_cfg.update({k: v for k, v in (self._state_raw.get('cam') or {}).items()
-                        if k in ('quality', 'feed', 'delay_ms', 'audio_bitrate')})
+                        if k in ('quality', 'feed', 'delay_ms', 'audio_bitrate', 'source', 'rot', 'cams')})
         cam_cfg['enabled'] = bool(cam_cfg.get('enabled', True)) and self.rtc_enabled
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
                                  rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
@@ -267,6 +267,8 @@ class Mixer:
         self.cam = Cam(cam_cfg, self.listener, self.feeds, self.cam_probe, self._cam_ctl,
                        on_status=lambda st: self.hub.publish({'t': 'cam', 's': st}),
                        save=self._save_cam, out_url=cam_cfg.get('rtsp', 'rtsp://127.0.0.1:8554/cam'))
+        if self.cam.enabled and cam_cfg.get('probe', True):
+            self.cam.start_probe()                    # Wi-Fi cameras online / offline, auto-rotate (v3.8)
         self.spotify = None                           # the Spotify card is optional: never blocks the mixer
         self._ensure_spotify()
 
@@ -1490,7 +1492,39 @@ def api_cam_set():
         return jsonify(ok=False, err='unknown quality'), 400
     if 'audio_bitrate' in d and not cam.set_audio_bitrate(str(d['audio_bitrate'])):
         return jsonify(ok=False, err='unknown audio bitrate'), 400
+    if 'source' in d and not cam.set_source(str(d['source'])):
+        return jsonify(ok=False, err='unknown camera'), 400
+    if 'rotate' in d and not cam.set_rotate(str(d['rotate']), str(d.get('rotate_source') or '')):
+        return jsonify(ok=False, err='bad rotation'), 400
     return jsonify(ok=True, cam=cam.status())
+
+
+@bp.route('/api/cam/add', methods=['POST'])
+def api_cam_add():
+    """Add a Wi-Fi camera (v3.8). The URL stays on the Pi; the page only ever sees the name."""
+    d = request.get_json(silent=True) or {}
+    cid = _mixer.cam.add_camera(str(d.get('name') or ''), str(d.get('url') or ''))
+    if not cid:
+        return jsonify(ok=False, err='the address must start with http://, https:// or rtsp:// (max 12 cameras)'), 400
+    if d.get('select'):
+        _mixer.cam.set_source(cid)
+    return jsonify(ok=True, id=cid, cam=_mixer.cam.status())
+
+
+@bp.route('/api/cam/remove', methods=['POST'])
+def api_cam_remove():
+    d = request.get_json(silent=True) or {}
+    if not _mixer.cam.remove_camera(str(d.get('id') or '')):
+        return jsonify(ok=False, err='unknown camera'), 400
+    return jsonify(ok=True, cam=_mixer.cam.status())
+
+
+@bp.route('/api/cam/find', methods=['POST'])
+def api_cam_find():
+    """Scan the Pi's networks for IP Webcam / DroidCam phones (a few seconds)."""
+    if not _mixer.cam.enabled:
+        return jsonify(ok=False, err='video is off'), 404
+    return jsonify(ok=True, found=_mixer.cam.find_cameras())
 
 
 @bp.route('/api/listen/set', methods=['POST'])

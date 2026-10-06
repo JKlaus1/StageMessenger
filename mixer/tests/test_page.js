@@ -282,11 +282,41 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   el('cam-btn').click(); await tick(30);
   check('no WebRTC in the browser -> says so, resets the button', el('cam-note').textContent.includes('no WebRTC') && !el('cam-btn').classList.contains('on') && !el('cam-video').classList.contains('on'), el('cam-note').textContent);
   el('cam-snd').click();
-  check('Sound toggle', el('cam-snd').textContent === 'Sound on' && el('cam-video').muted === false);
+  check('Sound toggle', el('cam-snd').title === 'Sound on' && el('cam-video').muted === false);
   el('cam-snd').click();
-  check('Sound toggle back off', el('cam-snd').textContent === 'Sound off' && el('cam-video').muted === true);
+  check('Sound toggle back off', el('cam-snd').title === 'Sound off' && el('cam-video').muted === true);
   V.push({ t: 'cam', s: { ...camBase, available: false } }); await tick(20);
   check('camera unplugged -> card hides again', el('cam-card').hidden === true);
+  // v3.8: camera list, rotation, camera mic, Wi-Fi cameras
+  const srcs = [{ id: 'usb:nexigo', name: 'NexiGo N930E FHD Webcam', kind: 'usb', online: null, mic: true, auto: false, rotate: '0', fixed: false },
+                { id: 'nabc123', name: 'Phone', kind: 'net', online: true, mic: true, auto: true, rotate: 'auto', fixed: false },
+                { id: 'net0', name: 'Cfg cam', kind: 'net', online: false, mic: true, auto: false, rotate: '0', fixed: true }];
+  const cam8 = { ...camBase, sources: srcs, choice: 'nabc123', active: 'nabc123', fallback: false, rotate: '90', rotate_mode: 'auto', mic_ok: true, epoch: 3, auto_note: '' };
+  V.push({ t: 'cam', s: cam8 }); await tick(20);
+  const so = [...el('cam-src').options].map(o => o.textContent);
+  check('camera selector: USB + Wi-Fi cameras with online state, chosen one selected',
+        so.length === 3 && so[0] === 'NexiGo N930E FHD Webcam' && so[1].includes('Phone · online') && so[2].includes('offline') && el('cam-src').value === 'nabc123', so);
+  check('rotation choices include Auto for an IP Webcam, saved mode shown', [...el('cam-rot').options].map(o => o.value).join() === 'auto,0,90,180,270' && el('cam-rot').value === 'auto');
+  check('camera mic offered as a sound source', [...el('cam-feed').options].some(o => o.value === 'mic' && o.textContent === 'Camera mic'));
+  check('remove button shown for an added Wi-Fi camera', el('cam-del').style.display === '');
+  el('cam-src').value = 'usb:nexigo'; el('cam-src').dispatchEvent(new V.w.Event('change', { bubbles: true })); await tick(20);
+  check('choosing a camera posts it', V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.source === 'usb:nexigo'));
+  el('cam-rot').value = '180'; el('cam-rot').dispatchEvent(new V.w.Event('change', { bubbles: true })); await tick(20);
+  check('rotation change posts it', V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.rotate === '180'));
+  V.push({ t: 'cam', s: { ...cam8, choice: 'net0', active: 'usb:nexigo', fallback: true, rotate_mode: '0', mic_ok: false, feed: 'mic' } }); await tick(20);
+  check('chosen camera offline -> says what is shown instead; no Auto for a USB camera; mic marked missing',
+        el('cam-note').textContent.includes('Cfg cam is offline · showing NexiGo') && ![...el('cam-rot').options].some(o => o.value === 'auto')
+        && [...el('cam-feed').options].some(o => o.value === 'mic' && o.textContent.includes('not on this camera')) && el('cam-del').style.display === 'none', el('cam-note').textContent);
+  V.push({ t: 'cam', s: { ...cam8, sources: [srcs[0]], choice: 'usb:nexigo', active: 'usb:nexigo' } }); await tick(20);
+  check('only one camera -> no camera selector', el('cam-src').style.display === 'none');
+  el('cam-add-btn').click();
+  check('+ Camera opens the add panel', el('cam-add').hidden === false);
+  el('cam-add-go').click(); await tick(10);
+  check('Add with no address explains the format', el('cam-add-msg').textContent.includes('8080/video'));
+  el('cam-add-name').value = 'Phone 2'; el('cam-add-url').value = 'http://192.168.1.77:8080/video';
+  el('cam-add-go').click(); await tick(30);
+  check('Add posts name + address + select', V.posts.some(p => p.url === '/mixer/api/cam/add' && p.body && p.body.name === 'Phone 2' && p.body.url === 'http://192.168.1.77:8080/video' && p.body.select === true));
+
   check('no script errors (video card)', V.errors.length === 0, V.errors);
 
   // a stubbed WebRTC handshake: video + audio recvonly, offer goes to the cam endpoint, DELETE on stop
@@ -322,7 +352,7 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   hel('listen-btn').click(); await tick(40);
   check('listening before the video', hel('listen-btn').classList.contains('on'));
   hel('cam-btn').click(); await tick(60);
-  check('Watch stops Listen and turns the video sound on', !hel('listen-btn').classList.contains('on') && hel('cam-snd').textContent === 'Sound on' && hel('cam-video').muted === false);
+  check('Watch stops Listen and turns the video sound on', !hel('listen-btn').classList.contains('on') && hel('cam-snd').title === 'Sound on' && hel('cam-video').muted === false);
   hel('cam-snd').click(); await tick(40);
   check('video Sound off is a plain mute (Listen stays off)', !hel('listen-btn').classList.contains('on') && hel('cam-video').muted === true && hel('cam-btn').classList.contains('on'));
   hel('cam-snd').click(); await tick(40);
@@ -334,7 +364,7 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   hel('listen-btn').click(); await tick(40);
   hel('cam-btn').click(); await tick(60);
   hel('cam-btn').click(); await tick(40);
-  check('Stop video when Listen was off before -> stays quiet', !hel('listen-btn').classList.contains('on') && hel('cam-snd').textContent === 'Sound off');
+  check('Stop video when Listen was off before -> stays quiet', !hel('listen-btn').classList.contains('on') && hel('cam-snd').title === 'Sound off');
   hel('listen-btn').click(); await tick(40);
   hel('cam-btn').click(); await tick(60);
   hel('cam-btn').click(); await tick(40);
@@ -347,13 +377,13 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   hel('cam-pause').click(); await tick(30);
   check('Pause: connection closed, picture kept on screen, button says Live',
         calls.filter(c => c[0] === 'close').length > 0 && hel('cam-btn').classList.contains('on') && hel('cam-video').classList.contains('on')
-        && hel('cam-pause').textContent.includes('Live') && hel('cam-note').textContent.startsWith('Paused'), hel('cam-pause').textContent);
+        && hel('cam-pause').title.includes('Live') && hel('cam-note').textContent.startsWith('Paused'), hel('cam-pause').title);
   hel('cam-pause').click(); await tick(60);
   check('Live: a fresh connection (now, not a backlog), button back to Pause',
-        calls.filter(c => c[0] === 'answer').length === before + 1 && hel('cam-pause').textContent.includes('Pause'));
+        calls.filter(c => c[0] === 'answer').length === before + 1 && hel('cam-pause').title.includes('Pause'));
   hel('cam-pause').click(); await tick(30);
   hel('cam-btn').click(); await tick(40);
-  check('Stop while paused resets Pause', hel('cam-pause').textContent.includes('Pause') && !hel('cam-video').classList.contains('on'));
+  check('Stop while paused resets Pause', hel('cam-pause').title.includes('Pause') && !hel('cam-video').classList.contains('on'));
 
   // fullscreen: the picture + controls block goes fullscreen; stopping leaves it
   let fsReq = 0, fsExit = 0;
@@ -421,9 +451,9 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   hel('cam-btn').click(); await tick(60);
   check('pop-out button offered once PiP is available', hel('cam-pip').style.display === '', [hel('cam-pip').style.display, H.w.document.pictureInPictureEnabled, hel('cam-btn').className, typeof hel('cam-video').requestPictureInPicture]);
   hel('cam-pip').click(); await tick(30);
-  check('Pop out -> Picture-in-Picture requested, button says Pop in', pipCalls === 1 && hel('cam-pip').textContent.includes('Pop in'), hel('cam-pip').textContent);
+  check('Pop out -> Picture-in-Picture requested, button says Pop in', pipCalls === 1 && hel('cam-pip').title.includes('Pop in'), hel('cam-pip').title);
   hel('cam-btn').click(); await tick(160);
-  check('stopping the video leaves Picture-in-Picture', !H.w.document.pictureInPictureElement && hel('cam-pip').textContent.includes('Pop out'), hel('cam-pip').textContent);
+  check('stopping the video leaves Picture-in-Picture', !H.w.document.pictureInPictureElement && hel('cam-pip').title.includes('Pop out'), hel('cam-pip').title);
   // pop out in Chrome desktop: Document Picture-in-Picture -- the player AND the sync controls move
   const PW = new JSDOM('<!doctype html><html><head></head><body></body></html>');
   let pwHide = null;
@@ -443,6 +473,32 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   hel('cam-btn').click(); await tick(60);
   check('stop: the player goes back into the card, window closed', !!hd.getElementById('cam-pop') && !pdoc.getElementById('cam-pop') && !hel('cam-pip-ph').classList.contains('on'));
   delete H.w.documentPictureInPicture;
+  // v3.8: the Pi restarted the encoder (new epoch) -> the page rejoins by itself; old epoch -> nothing
+  hel('cam-btn').click(); await tick(60);
+  H.push({ t: 'cam', s: { ...camBase, running: true, epoch: 5 } }); await tick(20);
+  const answers0 = calls.filter(c => c[0] === 'answer').length;
+  H.push({ t: 'cam', s: { ...camBase, running: true, epoch: 6 } }); await tick(400);
+  check('encoder restarted on the Pi (epoch changed) -> reconnects once', calls.filter(c => c[0] === 'answer').length === answers0 + 1);
+  H.push({ t: 'cam', s: { ...camBase, running: true, epoch: 6 } }); await tick(400);
+  check('same epoch again -> no extra reconnect', calls.filter(c => c[0] === 'answer').length === answers0 + 1);
+  // controls on the picture fade after 3 s, come back on touch
+  const stage = hel('cam-stage');
+  check('overlay controls live on the picture', stage.contains(hel('cam-pause')) && stage.contains(hel('cam-fs')) && stage.contains(hel('cam-pip')) && stage.contains(hel('cam-snd')));
+  await tick(3200);
+  check('overlay fades after 3 s', stage.classList.contains('idle'));
+  stage.dispatchEvent(new H.w.Event('pointerdown', { bubbles: true }));
+  check('touch brings the overlay back', !stage.classList.contains('idle'));
+  // the floating window's own pause / play: connection kept, play = live
+  const closes0 = calls.filter(c => c[0] === 'close').length;
+  Object.defineProperty(H.w.document, 'pictureInPictureElement', { value: hel('cam-video'), configurable: true });
+  hel('cam-video').srcObject = hel('cam-video').srcObject || {};
+  hel('cam-video').dispatchEvent(new H.w.Event('pause')); await tick(10);
+  check('pause from the floating window: shown as paused, connection kept', hel('cam-pause').title.includes('Live') && calls.filter(c => c[0] === 'close').length === closes0);
+  hel('cam-video').dispatchEvent(new H.w.Event('play')); await tick(10);
+  check('play from the floating window -> live again', hel('cam-pause').title === 'Pause');
+  Object.defineProperty(H.w.document, 'pictureInPictureElement', { value: null, configurable: true });
+  hel('cam-btn').click(); await tick(40);
+
   check('no script errors (video handshake)', H.errors.length === 0, H.errors);
 
   // picture only: no console feeds (X32 for now)

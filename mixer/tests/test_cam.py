@@ -8,7 +8,9 @@ frame can be traced back to where it came from.
 
     cd ~/stage-messenger && python3 -m mixer.tests.test_cam
 """
+import json
 import os
+import re
 import select
 import subprocess
 import sys
@@ -350,16 +352,40 @@ def test_cam_failure():
 
 # A stand-in for a phone running IP Webcam: multipart MJPEG at /video, 800x600 (4:3, so the pad path runs).
 class FakePhone:
-    def __init__(self, size='800x600', rate=15, user=None):
+    def __init__(self, size='800x600', rate=15, user=None, ipw=False, port=0, orientation='landscape'):
         import http.server, socketserver
         outer = self
         self.size, self.rate, self.hits, self.procs = size, rate, 0, []
+        self.ipw, self.orientation, self.status_hits, self.audio_hits = ipw, orientation, 0, 0
 
         class H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
             def do_GET(self):
+                if outer.ipw and self.path == '/status.json':        # IP Webcam's status (v3.8 probe)
+                    outer.status_hits += 1
+                    body = json.dumps({'curvals': {'orientation': outer.orientation, 'video_size': '1280x720'}}).encode()
+                    self.send_response(200); self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+                    return
+                if outer.ipw and self.path == '/audio.wav':          # IP Webcam's mic: 44.1 kHz mono wav stream
+                    outer.audio_hits += 1
+                    self.send_response(200); self.send_header('Content-Type', 'audio/x-wav'); self.end_headers()
+                    p = subprocess.Popen(['ffmpeg', '-v', 'error', '-re', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100',
+                                          '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', '-'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    outer.procs.append(p)
+                    try:
+                        while True:
+                            b = p.stdout.read(4096)
+                            if not b:
+                                break
+                            self.wfile.write(b)
+                    except OSError:
+                        pass
+                    finally:
+                        p.kill()
+                    return
                 if self.path != '/video':
                     self.send_error(404); return
                 outer.hits += 1
@@ -385,7 +411,7 @@ class FakePhone:
         class S(socketserver.ThreadingMixIn, http.server.HTTPServer):
             daemon_threads = True
             allow_reuse_address = True
-        self.srv = S(('127.0.0.1', 0), H)
+        self.srv = S(('127.0.0.1', port), H)
         self.port = self.srv.server_address[1]
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 
@@ -526,7 +552,33 @@ def test_cam_api():
         c.post('/mixer/api/cam/set', json={'delay_ms': 320})
         with open(os.path.join(tmp, 'mixer_state.json')) as f:
             sf = json.load(f)
-        check('settings saved in mixer_state.json', sf.get('cam') == {'feed': 'bus2', 'delay_ms': 320, 'quality': 'low', 'audio_bitrate': '160k'}, sf.get('cam'))
+        check('settings saved in mixer_state.json', sf.get('cam') == {'feed': 'bus2', 'delay_ms': 320, 'quality': 'low', 'audio_bitrate': '160k',
+                                                                     'source': '', 'rot': {}, 'cams': []}, sf.get('cam'))
+        # v3.8: Wi-Fi cameras added on the page, chosen, rotated, removed -- the URL never comes back
+        r = c.post('/mixer/api/cam/add', json={'name': 'Phone', 'url': 'ftp://10.9.9.9/x'})
+        check('add: only http(s) / rtsp addresses', r.status_code == 400)
+        r = c.post('/mixer/api/cam/add', json={'name': 'Phone', 'url': 'http://user:pw@10.9.9.9:8080/video', 'select': True}).get_json()
+        cid = r.get('id', '')
+        st2 = r.get('cam') or {}
+        check('add + select: listed, chosen, available', r.get('ok') and any(x['id'] == cid and x['name'] == 'Phone' and x['kind'] == 'net' and x['mic'] and x['auto']
+              for x in st2.get('sources', [])) and st2.get('choice') == cid and st2.get('available') is True, st2)
+        check('the address / password never reach the page', '10.9.9.9' not in json.dumps(st2) and 'pw' not in json.dumps(st2.get('sources')), st2.get('sources'))
+        r = c.post('/mixer/api/cam/set', json={'rotate': '90'}).get_json()
+        check('rotate the chosen camera', r.get('ok') and r['cam']['rotate'] == '90' and r['cam']['rotate_mode'] == '90', r.get('cam', {}).get('rotate'))
+        check('auto-rotate accepted for an IP Webcam', c.post('/mixer/api/cam/set', json={'rotate': 'auto'}).status_code == 200)
+        check('bad rotation rejected', c.post('/mixer/api/cam/set', json={'rotate': '45'}).status_code == 400)
+        check('unknown camera rejected', c.post('/mixer/api/cam/set', json={'source': 'n000000'}).status_code == 400)
+        with open(os.path.join(tmp, 'mixer_state.json')) as f:
+            sc = json.load(f).get('cam') or {}
+        check('cameras + choice + rotation saved on the Pi', sc.get('source') == cid and sc.get('rot') == {cid: 'auto'}
+              and sc.get('cams') == [{'id': cid, 'name': 'Phone', 'url': 'http://user:pw@10.9.9.9:8080/video'}], sc)
+        r = c.post('/mixer/api/cam/set', json={'feed': 'mic'}).get_json()
+        check('sound from the camera mic can be chosen', r.get('ok') and r['cam']['feed'] == 'mic' and r['cam']['audio_kind'] == 'mic', r.get('cam', {}).get('audio_kind'))
+        c.post('/mixer/api/cam/set', json={'feed': 'bus2'})
+        r = c.post('/mixer/api/cam/remove', json={'id': cid}).get_json()
+        check('remove: gone, choice back to automatic', r.get('ok') and not any(x['id'] == cid for x in r['cam']['sources']) and mx.cam.choice == '', r.get('cam', {}).get('choice'))
+        check('remove unknown -> 400', c.post('/mixer/api/cam/remove', json={'id': 'nope'}).status_code == 400)
+        c.post('/mixer/api/cam/set', json={'delay_ms': 320})
         check('Listen bitrate saved in mixer_state.json', sf.get('listen') == {'opus_bitrate': '64k'}, sf.get('listen'))
         check('listen feed untouched by cam feed change', mx.feed_id == 'main1', mx.feed_id)
         r = c.delete('/mixer/api/cam/session/not-a-session')
@@ -614,6 +666,170 @@ def test_cam_pitch_steady():
         check('pitch steady at 1 kHz in every 200 ms window (no +-2 % warble)', not bad, (min(freqs or [0]), max(freqs or [0]), len(bad)))
 
 
+def test_cam_helpers():
+    print('cam (v3.8): camera names, built-in mic lookup, IP Webcam urls, rotation from gravity')
+    from mixer.cam import usb_name, usb_mic, ipw_base, host_port, phys_rotation
+    check('USB name without vendor / serial', usb_name('/dev/v4l/by-id/usb-Nexight_Inc_NexiGo_N930E_FHD_Webcam_AN202312190001-video-index0') == 'NexiGo N930E FHD Webcam',
+          usb_name('/dev/v4l/by-id/usb-Nexight_Inc_NexiGo_N930E_FHD_Webcam_AN202312190001-video-index0'))
+    check('USB name: plain one kept', usb_name('/dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920_ABCD1234-video-index0') == '046d HD Pro Webcam C920')
+    with tempfile.TemporaryDirectory() as t:                  # a fake sysfs: webcam 3-1 (video + mic), WING 1-2
+        dev = os.path.join(t, 'devices')
+        for d in ('3-1/3-1:1.0', '3-1/3-1:1.2', '1-2/1-2:1.0'):
+            os.makedirs(os.path.join(dev, d))
+        os.makedirs(os.path.join(t, 'sys/class/video4linux/video0'))
+        os.symlink(os.path.join(dev, '3-1/3-1:1.0'), os.path.join(t, 'sys/class/video4linux/video0/device'))
+        for n, (path, cid) in enumerate((('1-2/1-2:1.0', 'WING'), ('3-1/3-1:1.2', 'Webcam'))):
+            cd = os.path.join(t, f'sys/class/sound/card{n}')
+            os.makedirs(cd)
+            os.symlink(os.path.join(dev, path), os.path.join(cd, 'device'))
+            open(os.path.join(cd, 'id'), 'w').write(cid + '\n')
+        os.makedirs(os.path.join(t, 'dev/v4l/by-id'))
+        open(os.path.join(t, 'dev/video0'), 'w').close()
+        link = os.path.join(t, 'dev/v4l/by-id/usb-x-video-index0')
+        os.symlink(os.path.join(t, 'dev/video0'), link)
+        check('webcam mic = the sound card on the same USB device (not the WING)', usb_mic(link, os.path.join(t, 'sys')) == 'hw:CARD=Webcam',
+              usb_mic(link, os.path.join(t, 'sys')))
+        check('no sysfs -> no mic', usb_mic(link, os.path.join(t, 'nothing')) == '')
+    check('IP Webcam base from /video url (keeps the login)', ipw_base('http://u:p@192.168.1.195:8080/video') == 'http://u:p@192.168.1.195:8080'
+          and ipw_base('rtsp://h/x') == '' and ipw_base('http://h/cam.mjpg') == '')
+    check('host / port with defaults', host_port('http://h/x') == ('h', 80) and host_port('rtsp://u:p@h/x') == ('h', 554) and host_port('http://h:8080/v') == ('h', 8080))
+    check('gravity -> rotation', (phys_rotation(9.8, 0.3), phys_rotation(0.2, 9.7), phys_rotation(-9.6, 1), phys_rotation(0.5, -9.8))
+          == ('0', '90', '180', '270'))
+    check('flat or diagonal -> keep (None)', phys_rotation(0.3, 0.4) is None and phys_rotation(6.5, 6.0) is None)
+
+
+def test_cam_sources():
+    print('cam (v3.8): camera list -- USB first, chosen Wi-Fi camera while online, fall back, follow, rotate, mic')
+    phone = FakePhone(ipw=True)
+    online = {'v': None}
+
+    def fake_probe(url, timeout=1.5):
+        return (online['v'] if online['v'] is not None else True), ({'ipw': True, 'orientation': 'landscape'} if online['v'] else {})
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctl = os.path.join(tmp, 'cam.ctl')
+            out = os.path.join(tmp, 's.mkv')
+            lst = Listener(capture_cmd=['false'], bitrate='64k', cam_ctl=ctl)
+            purl = f'http://127.0.0.1:{phone.port}/video'
+            saved = []
+            c = Cam({'enabled': True, 'idle_s': 30, 'video_url': 'rtsp://10.1.1.1/x', 'video_name': 'Cfg cam',
+                     'cams': [{'id': 'nabc123', 'name': 'Phone', 'url': purl}, {'id': 'bad', 'url': purl}, {'id': 'n000001', 'url': 'file:///x'}]},
+                    lst, lambda: [], probe=lambda: (False, False, 0), ctl_path=ctl, video_input=LAVFI,
+                    output=['-y', '-f', 'matroska', out], net_probe=fake_probe, save=saved.append)
+            ids = [x['id'] for x in c.sources()]
+            check('sources: built-in camera first, config camera, saved phone (bad entries dropped)', ids == ['test', 'net0', 'nabc123'], ids)
+            check('default = the built-in (USB-like) camera even with a Wi-Fi one configured', c.active_source()['id'] == 'test' and c.url == '')
+            check('IP Webcam url -> its mic + auto-rotate; rtsp camera -> sound rides in the stream',
+                  c.sources()[2]['mic'] == f'http://127.0.0.1:{phone.port}/audio.wav' and c.sources()[2]['ipw'] and c.sources()[1]['mic'] == 'same')
+            c.hold(60)
+            time.sleep(1.0)
+            e0 = c.epoch
+            check('running on the built-in camera', c.running and c._active['id'] == 'test' and e0 >= 1, c.status())
+            check('choose the phone', c.set_source('nabc123'))
+            time.sleep(1.5)
+            check('encoder moved to the phone (new epoch)', c.running and c._active['id'] == 'nabc123' and c.epoch > e0 and phone.hits >= 1, (c._active, c.epoch, phone.hits))
+            online['v'] = False
+            c.probe_once()
+            time.sleep(1.0)
+            st = c.status()
+            check('phone offline -> back on the built-in camera, says it is a fallback', c._active['id'] == 'test' and st['fallback'] and st['choice'] == 'nabc123'
+                  and next(x for x in st['sources'] if x['id'] == 'nabc123')['online'] is False, (c._active['id'], st['fallback']))
+            online['v'] = True
+            c.probe_once()
+            time.sleep(1.0)
+            check('phone back online -> goes back to it by itself', c._active['id'] == 'nabc123' and not c.status()['fallback'], c._active['id'])
+            check('rotate 90 -> encoder restarts turned, portrait 720x1280', c.set_rotate('90') and c._eff_rot(c._active) == '90')
+            cmd = c._cmd(False, c._active)
+            vf = cmd[cmd.index('-vf') + 1]
+            check('rotation filter + portrait fit', 'transpose=1' in vf and 'scale=720:1280' in vf and 'pad=720:1280' in vf, vf)
+            check('auto only for IP Webcam', not c.set_rotate('auto', 'net0') and c.set_rotate('auto', 'nabc123'))
+            # auto-rotate from the accelerometer: portrait held 1.5 s -> 90
+            restarts = []
+            c._restart = lambda why: restarts.append(why)
+            c._accel = lambda base: None
+            c._auto_step()
+            check('no sensor data -> tells you to turn it on', 'sensor' in c.status()['auto_note'], c.status()['auto_note'])
+            c._accel = lambda base: (0.3, 9.7, 0.5)
+            c._auto_step()
+            check('first portrait reading only arms it', not restarts and c._auto_cand and c._auto_cand[0] == '90')
+            c._auto_cand = ('90', time.time() - 2)
+            c._auto_step()
+            check('held portrait -> picture turned 90 and the encoder restarted', restarts == ['phone rotated'] and c._eff_rot(c._active) == '90', (restarts, c._auto))
+            c._info['nabc123'] = {'ipw': True, 'orientation': 'portrait'}
+            c._auto_cand = ('0', time.time() - 2)
+            c._accel = lambda base: (0.3, 9.7, 0.5)
+            restarts.clear(); c._auto_step()
+            check('app already streaming portrait -> held portrait needs no turn (0)', c._auto['nabc123'] == '0' and restarts == ['phone rotated'], c._auto)
+            del c._restart
+            # camera mic
+            c.feed = 'mic'
+            check('mic chosen + camera has one -> mic sound', c._audio_plan(c._active) == 'mic')
+            c.delay_ms = 150
+            cmd = c._cmd('mic', c._active)
+            check('mic: phone audio.wav as 2nd input, delayed, stereo', f'http://127.0.0.1:{phone.port}/audio.wav' in cmd and cmd[cmd.index('-map', cmd.index('-map') + 1) + 1] == '1:a:0'
+                  and cmd[cmd.index('-af') + 1].startswith('adelay=150:all=1,') and cmd[cmd.index('-ac', cmd.index('-c:a')) + 1] == '2', cmd)
+            usb = {'id': 'usb:x', 'kind': 'usb', 'dev': '/dev/video0', 'mic': 'hw:CARD=Webcam', 'name': 'x'}
+            cmd = c._cmd('mic', usb)
+            check('USB webcam mic: ALSA card input', '-f' in cmd and 'alsa' in cmd and 'hw:CARD=Webcam' in cmd, cmd)
+            rt = {'id': 'net0', 'kind': 'net', 'url': 'rtsp://10.1.1.1/x', 'mic': 'same', 'name': 'x'}
+            cmd = c._cmd('mic', rt)
+            check('rtsp camera mic: optional audio from the same input', '0:a:0?' in cmd and cmd.count('-i') == 1, cmd)
+            check('mic chosen but the built-in camera has none -> no console here -> picture only', c._audio_plan(c.sources()[0]) == '')
+            c._stop('test')
+            c.delay_ms = 0
+            check('settings saved with cameras, choice and rotation', saved and saved[-1]['source'] == 'nabc123' and saved[-1]['rot'].get('nabc123') == 'auto'
+                  and [x['id'] for x in saved[-1]['cams']] == ['nabc123'], saved[-1] if saved else None)
+            # add / remove
+            check('add rejects other schemes', c.add_camera('x', 'file:///etc/passwd') is None)
+            nid = c.add_camera('  Back of room camera that has a long name  ', 'http://10.0.0.7:4747/video')
+            src = next(x for x in c.sources() if x['id'] == nid)
+            check('add: id + trimmed name (30 max); DroidCam port -> no mic / no auto', bool(re.match(r'^n[0-9a-f]{6}$', nid))
+                  and src['name'].startswith('Back of room') and len(src['name']) <= 30 and not src['mic'] and not src['ipw'], src)
+            check('remove', c.remove_camera(nid) and not any(x['id'] == nid for x in c.sources()))
+            check('status never carries addresses', '127.0.0.1' not in json.dumps(c.status()) and '10.1.1.1' not in json.dumps(c.status()))
+            lst._teardown()
+    finally:
+        phone.stop()
+
+
+def test_cam_mic_end_to_end():
+    print('cam (v3.8): sound from the phone mic (IP Webcam /audio.wav) ends up in the stream')
+    phone = FakePhone(ipw=True)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, 'mic.mkv')
+            lst, c = net_cam(tmp, f'http://127.0.0.1:{phone.port}/video', out, feed='mic', idle_s=30)
+            c.hold(60)
+            time.sleep(4.5)
+            check('running with the camera mic', c.running and c.audio_kind == 'mic' and phone.audio_hits == 1, (c.status(), phone.audio_hits))
+            c._stop('test')
+            lst._teardown()
+            raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', out, '-map', '0:a:0', '-f', 's16le', '-ac', '1', '-ar', '48000', '-'],
+                                 capture_output=True).stdout
+            smp = [int.from_bytes(raw[i:i + 2], 'little', signed=True) for i in range(0, len(raw) - 1, 2)]
+            seg = smp[-48000:]
+            z = sum(1 for i in range(1, len(seg)) if (seg[i - 1] < 0) != (seg[i] < 0)) / 2 if seg else 0
+            check('the phone\'s 440 Hz tone is in the encoded sound', abs(z - 440) < 8 and len(smp) > 2 * 48000, (z, len(smp)))
+    finally:
+        phone.stop()
+
+
+def test_wait_fifo_open():
+    print('cam (v3.8): console sound is switched on only once ffmpeg really has the fifo open')
+    with tempfile.TemporaryDirectory() as tmp:
+        lst = Listener(capture_cmd=['false'], bitrate='64k', cam_ctl=os.path.join(tmp, 'c'))
+        c = Cam({'enabled': True}, lst, lambda: [], probe=lambda: (False, False, 0), ctl_path=os.path.join(tmp, 'c'), video_input=LAVFI)
+        c._fifo = os.path.join(tmp, 'f.pcm')
+        os.mkfifo(c._fifo)
+        holder = os.open(c._fifo, os.O_RDWR | os.O_NONBLOCK)
+        p = subprocess.Popen([sys.executable, '-c', f'import time, os; time.sleep(1.2); f = open({c._fifo!r}, "rb"); time.sleep(2)'])
+        t0 = time.time()
+        ok = c._wait_fifo_open(p, c._gen, timeout=5)
+        dt = time.time() - t0
+        check('waited for the reader to open the fifo (~1.2 s), not a fixed 0.4 s', ok and 1.1 <= dt <= 2.0, (ok, dt))
+        p.kill(); os.close(holder)
+
+
 def test_cam_tiers():
     print('cam: picture tiers (v3.5) -- frame rate, size, preset, bitrate really end up in the stream')
     from mixer.cam import QUALITIES
@@ -673,6 +889,10 @@ def main():
     test_cam_failure()
     test_cam_net_source_setup()
     test_cam_net_pipeline()
+    test_cam_helpers()
+    test_cam_sources()
+    test_cam_mic_end_to_end()
+    test_wait_fifo_open()
     test_cam_pitch_steady()
     test_cam_tiers()
     test_cam_api()
