@@ -21,6 +21,7 @@ import logging
 import os
 import queue
 import re
+import tempfile
 import threading
 import time
 import urllib.error
@@ -30,6 +31,7 @@ from flask import Blueprint, Response, jsonify, request, send_from_directory, ab
 
 from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, N_SD, SRC_GROUPS, SRC_LEAVES, parse_describe, osc_msg, osc_parse
 from .listen import Listener
+from .cam import Cam
 from .meters import Meters
 from . import x32 as x32mod
 from .discover import Finder
@@ -65,6 +67,23 @@ DEFAULTS = {
         'turn_key_id':    '',        # Cloudflare Realtime TURN key -- set these in mixer_config.json,
         'turn_api_token': '',        # never in git
         'turn_ttl':       86400,
+    },
+    # video feed (v3.4): a USB webcam + a console feed as one WebRTC stream on MediaMTX's "cam" path.
+    # Separate from listen-back; runs only while someone watches. Needs rtc.enabled (MediaMTX).
+    'cam': {
+        'enabled':       True,
+        'device':        '',         # '' = first USB camera under /dev/v4l/by-id
+        'rtsp':          'rtsp://127.0.0.1:8554/cam',
+        'whep':          'http://127.0.0.1:8889/cam/whep',
+        'audio_bitrate': '96k',
+        'idle_s':        15,         # stop the encoder this long after the last viewer leaves
+        'nice':          15,         # ffmpeg priority (listen-back and the DMX engine keep theirs)
+        'threads':       2,          # x264 threads
+        'gop_s':         2,          # keyframe interval, seconds (YouTube wants <= 4)
+        # starting values; changes made on the page are saved in mixer_state.json and win
+        'quality':       '720p30',   # 720p30 | 720p20 | 480p30
+        'feed':          'main1',    # console feed whose audio goes with the picture
+        'delay_ms':      0,          # audio delay to line sound up with the (later) video
     },
     # Spotify card (v2.4): go-librespot "Stage Rig" -> WING USB 1/2 -> AUX 1 (see mixer/spotify.py)
     'spotify': {
@@ -228,11 +247,21 @@ class Mixer:
         rtc = cfg.get('rtc', {})
         self.rtc_enabled = bool(rtc.get('enabled'))
         self._turn, self._turn_exp, self._turn_lock = None, 0.0, threading.Lock()
+        shm = '/dev/shm' if os.path.isdir('/dev/shm') else tempfile.gettempdir()
+        self._cam_ctl = os.path.join(shm, f'wing_cam_{os.getpid()}')
+        cam_cfg = dict(cfg.get('cam') or {})
+        cam_cfg.update({k: v for k, v in (self._state_raw.get('cam') or {}).items()
+                        if k in ('quality', 'feed', 'delay_ms')})
+        cam_cfg['enabled'] = bool(cam_cfg.get('enabled', True)) and self.rtc_enabled
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
                                  rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
                                  opus_bitrate=rtc.get('opus_bitrate', '96k'), rtc_probe=self.rtc_probe,
                                  cushion_s=cfg.get('cushion_s', 0.5), max_queue_s=cfg.get('max_queue_s', 1.0),
-                                 on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}))
+                                 on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}),
+                                 cam_ctl=self._cam_ctl if cam_cfg['enabled'] else '')
+        self.cam = Cam(cam_cfg, self.listener, self.feeds, self.cam_probe, self._cam_ctl,
+                       on_status=lambda st: self.hub.publish({'t': 'cam', 's': st}),
+                       save=self._save_cam, out_url=cam_cfg.get('rtsp', 'rtsp://127.0.0.1:8554/cam'))
         self.spotify = None                           # the Spotify card is optional: never blocks the mixer
         self._ensure_spotify()
 
@@ -343,6 +372,7 @@ class Mixer:
             self.patch_note = ''
             if self.caps['listen']:
                 self.select_feed(self.feed_id if any(f['id'] == self.feed_id for f in self.feeds()) else 'main1')
+        self.cam.console_changed()                    # its audio feed may have appeared or gone with the console
         self.hub.publish({'t': 'conn', 'ok': False})
         self.hub.publish({'t': 'snap', **self.snapshot()})
 
@@ -826,6 +856,23 @@ class Mixer:
         except Exception:
             return False, False, 0
 
+    def cam_probe(self):
+        """(api_ok, stream_ready, reader_count) for the MediaMTX 'cam' path."""
+        try:
+            with urllib.request.urlopen(self.cfg['rtc']['api'] + '/v3/paths/get/cam', timeout=0.6) as r:
+                p = json.load(r)
+            return True, bool(p.get('ready')), len(p.get('readers') or [])
+        except urllib.error.HTTPError:
+            return True, False, 0
+        except Exception:
+            return False, False, 0
+
+    def _save_cam(self, d):
+        """Page-made video settings (audio feed, delay, quality) survive restarts."""
+        with self._ovr_lock:
+            self._state_raw = {**self._state_raw, 'cam': dict(d)}
+            self._write_state()
+
     def ice_servers(self):
         """ICE servers for browsers: Cloudflare TURN (cached short-lived credentials) when a key is
         configured, else STUN only (fine on the same network, usually not across the internet)."""
@@ -873,6 +920,7 @@ class Mixer:
             'feeds':  self.feeds(),
             'feed':   self.feed_id,
             'listen': self.listener.status(),
+            'cam':    self.cam.status(),
             'patch':  self.patch_note,
             'nbus':   self.caps['nbus'],
             'caps':   self.caps,
@@ -1415,6 +1463,64 @@ def api_rtc_session(sid):
     return jsonify(ok=True)
 
 
+# ── Video feed (v3.4): same pattern as listen-back, on MediaMTX's 'cam' path ──
+@bp.route('/api/cam/set', methods=['POST'])
+def api_cam_set():
+    d = request.get_json(silent=True) or {}
+    cam = _mixer.cam
+    if 'feed' in d and not cam.set_feed(str(d['feed'])):
+        return jsonify(ok=False, err='unknown feed'), 400
+    if 'delay_ms' in d:
+        try:
+            cam.set_delay(float(d['delay_ms']))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, err='bad delay'), 400
+    if 'quality' in d and not cam.set_quality(str(d['quality'])):
+        return jsonify(ok=False, err='unknown quality'), 400
+    return jsonify(ok=True, cam=cam.status())
+
+
+@bp.route('/api/cam/whep', methods=['POST'])
+def api_cam_whep():
+    cam = _mixer.cam
+    if not cam.available():
+        return Response('no camera available', 404, mimetype='text/plain')
+    if (request.content_length or 0) > 65536:
+        return Response('offer too large', 413, mimetype='text/plain')
+    offer = request.get_data(cache=False)
+    if not offer.startswith(b'v=0'):
+        return Response('expected an SDP offer', 400, mimetype='text/plain')
+    cam.hold(25)                                # starts the encoder; MediaMTX refuses readers until it publishes
+    if not cam.wait_ready(12):
+        return Response((cam.error or 'video stream not ready')[:200], 503, mimetype='text/plain')
+    req = urllib.request.Request(_mixer.cfg['cam']['whep'], data=offer, method='POST',
+                                 headers={'Content-Type': 'application/sdp'})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            answer, loc = r.read(), r.headers.get('Location', '')
+    except urllib.error.HTTPError as e:
+        return Response(e.read()[:300], e.code, mimetype='text/plain')
+    except Exception as e:
+        return Response(f'MediaMTX unreachable: {e}', 502, mimetype='text/plain')
+    resp = Response(answer, 201, mimetype='application/sdp')
+    m = re.search(r'/whep/([0-9a-fA-F-]{36})', loc)
+    if m:
+        resp.headers['Location'] = '/mixer/api/cam/session/' + m.group(1)
+    return resp
+
+
+@bp.route('/api/cam/session/<sid>', methods=['DELETE'])
+def api_cam_session(sid):
+    if not _SESSION_ID.match(sid):
+        return Response('bad session', 400, mimetype='text/plain')
+    try:
+        urllib.request.urlopen(urllib.request.Request(_mixer.cfg['cam']['whep'] + '/' + sid, method='DELETE'),
+                               timeout=3).close()
+    except Exception:
+        pass
+    return jsonify(ok=True)
+
+
 @bp.route('/api/listenpos')
 def api_listenpos():
     # Polled ~1/s by a playing page to measure how far behind live it is.
@@ -1432,6 +1538,7 @@ def init_mixer(app):
     # A fader drag is ~20 POSTs/s: keep the successful ones (and the meter/event plumbing) out of
     # the journal. Anything that was NOT 2xx still gets logged, so rejected control is visible.
     noisy = ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed', '/mixer/api/node', '/mixer/api/mute',
+             '/mixer/api/cam/set',
              '/mixer/api/listenpos', '/mixer/api/sp/tracks', '/mixer/api/sp/playlists', '/mixer/api/sp/search')
     ansi, status = re.compile(r'\x1b\[[0-9;]*m'), re.compile(r'HTTP/[\d.]+" (\d{3}) ')
 

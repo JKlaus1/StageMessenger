@@ -62,6 +62,20 @@
     #lag-note b { color: var(--text); }
     #lag-note b.hi { color: var(--amber); }
 
+    /* video (v3.4) */
+    #cam-btn { flex: 0 0 auto; min-width: 6.2rem; padding: .7rem .8rem; border-radius: 10px; border: 1px solid var(--green);
+      background: transparent; color: var(--green); font-weight: 900; font-size: .8rem; letter-spacing: .1em; text-transform: uppercase; }
+    #cam-btn.on { background: var(--green); color: #001a0d; }
+    #cam-q { flex: 0 1 8.5rem; }
+    #cam-video { display: none; width: 100%; aspect-ratio: 16 / 9; margin-top: .6rem; border-radius: 10px; background: #000; object-fit: contain; }
+    #cam-video.on { display: block; }
+    .cam-sync { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; font-size: .68rem; color: var(--muted); }
+    .cam-sync input[type=range] { flex: 1 1 auto; min-width: 0; }
+    .cam-sync .nudge { flex: none; width: 2rem; padding: .3rem 0; border-radius: 8px; border: 1px solid var(--border);
+      background: transparent; color: var(--text); font-weight: 900; font-size: .85rem; }
+    #cam-delay-val { flex: none; min-width: 3.6rem; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+    #cam-note { margin-top: .45rem; font-size: .68rem; color: var(--muted); min-height: 1em; font-variant-numeric: tabular-nums; }
+
     /* mix selector: collapsed = current mix, open = grid of every mix */
     #mix-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: .5rem;
       background: transparent; border: 0; color: var(--text); padding: .1rem 0; }
@@ -498,6 +512,25 @@
     <div id="listen-note"></div>
     <div class="listen-foot"><div id="lag-note"></div><button class="toggle" id="mode-btn" title="Low-latency WebRTC audio, falling back to MP3">Low latency</button></div>
     <audio id="player" preload="none"></audio>
+  </section>
+
+  <section class="card" id="cam-card" hidden>
+    <div class="label">Video</div>
+    <div class="listen-row">
+      <button id="cam-btn">&#9654; Watch</button>
+      <select id="cam-feed" title="Console feed whose sound goes with the picture"></select>
+      <select id="cam-q" title="Picture quality"></select>
+    </div>
+    <video id="cam-video" playsinline muted></video>
+    <div class="cam-sync">
+      <span>A/V sync</span>
+      <button class="nudge" id="cam-dn" title="Audio 10 ms earlier">&minus;</button>
+      <input type="range" id="cam-delay" min="0" max="1500" step="10" value="0" title="Delay the sound so it lines up with the (later) picture">
+      <button class="nudge" id="cam-up" title="Audio 10 ms later">+</button>
+      <span id="cam-delay-val">0 ms</span>
+      <button class="toggle" id="cam-snd" title="Sound from the video">Sound off</button>
+    </div>
+    <div id="cam-note"></div>
   </section>
 
   <section class="card master" id="master-card">
@@ -2098,6 +2131,174 @@
   }
   setInterval(pollRTC, 1000);
 
+  // ── Video (v3.4): the webcam + a console feed as a second WebRTC stream (MediaMTX "cam" path).
+  // Separate from the listen-back above: own peer connection, own player, only runs while watched.
+  // The A/V sync control delays the SOUND at the Pi (the picture is the later one), so it applies to
+  // every viewer and survives restarts. Nothing here touches the listen-back connection.
+  let camSt = null, camWant = false, cpc = null, cSession = null, cStream = null, cGen = 0, cTimer = null;
+  let cDrops = 0, cBytes = 0, cAt = 0, camSound = false, camDelayAt = 0, camDelayT = null, camOptSig = '';
+  const camVideo = $('cam-video');
+  const camNote = t => { $('cam-note').textContent = t || ''; };
+  const camPost = body => fetch('/mixer/api/cam/set', { method: 'POST', redirect: 'manual',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+  function paintCam(st) {
+    if (!st) return;
+    camSt = st;
+    $('cam-card').hidden = !st.available;
+    if (!st.available) { if (camWant) stopCam(); return; }
+    const sig = JSON.stringify([st.audio, st.qualities, feeds.map(f => f.id + f.label)]);
+    if (sig !== camOptSig) {                              // rebuild only when the lists change
+      camOptSig = sig;
+      const fs = $('cam-feed'); fs.innerHTML = '';
+      feeds.forEach(f => { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label; fs.appendChild(o); });
+      const qs = $('cam-q'); qs.innerHTML = '';
+      (st.qualities || []).forEach(q => { const o = document.createElement('option'); o.value = q.id; o.textContent = q.label; qs.appendChild(o); });
+    }
+    $('cam-feed').style.display = feeds.length ? '' : 'none';      // no console audio (e.g. X32 for now): picture only
+    $('cam-snd').style.display = st.audio ? '' : 'none';
+    if (document.activeElement !== $('cam-feed')) $('cam-feed').value = st.feed;
+    if (document.activeElement !== $('cam-q')) $('cam-q').value = st.quality;
+    $('cam-delay').max = st.max_delay || 3000;
+    if (Date.now() - camDelayAt > 1200) {                 // don't fight a drag in progress
+      $('cam-delay').value = st.delay_ms; $('cam-delay-val').textContent = st.delay_ms + ' ms';
+    }
+    if (st.error && camWant && !cpc) camNote(st.error);
+    else if (!camWant) camNote(st.running ? `Camera live · ${st.viewers} viewer${st.viewers === 1 ? '' : 's'}${st.audio_issue ? ' · picture only: ' + st.audio_issue : ''}` : '');
+  }
+  function setCamDelay(ms, now) {
+    ms = Math.max(0, Math.min(+$('cam-delay').max || 3000, Math.round(ms)));
+    $('cam-delay').value = ms; $('cam-delay-val').textContent = ms + ' ms';
+    camDelayAt = Date.now();
+    clearTimeout(camDelayT);
+    camDelayT = setTimeout(() => camPost({ delay_ms: ms }), now ? 0 : 150);
+  }
+  $('cam-delay').addEventListener('input', e => setCamDelay(+e.target.value));
+  $('cam-dn').addEventListener('click', () => setCamDelay(+$('cam-delay').value - 10, true));
+  $('cam-up').addEventListener('click', () => setCamDelay(+$('cam-delay').value + 10, true));
+  $('cam-feed').addEventListener('change', e => camPost({ feed: e.target.value }));
+  $('cam-q').addEventListener('change', async e => {
+    await camPost({ quality: e.target.value });
+    if (camWant) startCam();                              // the encoder restarted: reconnect to the new stream
+  });
+  $('cam-snd').addEventListener('click', () => {
+    camSound = !camSound; camVideo.muted = !camSound;
+    $('cam-snd').textContent = camSound ? 'Sound on' : 'Sound off'; $('cam-snd').classList.toggle('on', camSound);
+    if (camSound) camVideo.play().catch(() => {});
+  });
+  $('cam-btn').addEventListener('click', () => camWant ? stopCam() : startCam());
+  window.addEventListener('pagehide', () => closeCam());
+
+  function closeCam() {
+    cGen++;
+    clearTimeout(cTimer);
+    if (cpc) { try { cpc.close(); } catch (e) {} cpc = null; }
+    if (cSession) { fetch(cSession, { method: 'DELETE', keepalive: true }).catch(() => {}); cSession = null; }
+    if (cStream) { cStream.getTracks().forEach(t => t.stop()); cStream = null; }
+    if (camVideo.srcObject) camVideo.srcObject = null;
+  }
+  function stopCam() {
+    camWant = false; cDrops = 0;
+    closeCam();
+    camVideo.classList.remove('on');
+    $('cam-btn').classList.remove('on'); $('cam-btn').innerHTML = '&#9654; Watch';
+    camNote(camSt && camSt.running ? `Camera live · ${camSt.viewers} viewer${camSt.viewers === 1 ? '' : 's'}` : '');
+  }
+  async function startCam() {
+    camWant = true;
+    $('cam-btn').classList.add('on'); $('cam-btn').innerHTML = '&#9632; Stop';
+    if (!window.RTCPeerConnection || !window.MediaStream) { camFail('this browser has no WebRTC'); return; }
+    closeCam();
+    const gen = cGen;
+    cStream = new MediaStream();
+    camVideo.srcObject = cStream; camVideo.muted = !camSound; camVideo.classList.add('on');
+    camVideo.play().catch(() => {});                      // inside the tap: allowed to start
+    camNote('Starting camera…');
+    try {
+      const cr = await fetch('/mixer/api/rtc/config', { cache: 'no-store', redirect: 'manual' });
+      const cfg = cr.ok ? await cr.json() : { enabled: false, why: 'HTTP ' + cr.status };
+      if (!cfg.enabled) throw new Error(cfg.why || 'unavailable');
+      if (gen !== cGen) return;
+      const p = cpc = new RTCPeerConnection({ iceServers: cfg.iceServers || [] });
+      p.addTransceiver('video', { direction: 'recvonly' });
+      p.addTransceiver('audio', { direction: 'recvonly' });
+      p.ontrack = e => {
+        if (gen !== cGen) return;
+        cStream.addTrack(e.track);
+        camVideo.play().catch(() => {});
+      };
+      p.onconnectionstatechange = () => camState(p, gen);
+      await p.setLocalDescription(await p.createOffer());
+      await iceDone(p, 3000);                             // complete offer (includes the TURN relay candidate)
+      if (gen !== cGen) return;
+      const r = await fetch('/mixer/api/cam/whep', { method: 'POST', redirect: 'manual',
+        headers: { 'Content-Type': 'application/sdp' }, body: p.localDescription.sdp });
+      const body = await r.text();
+      if (r.status !== 201) throw new Error(body.slice(0, 80) || 'HTTP ' + r.status);
+      if (gen !== cGen) return;
+      cSession = r.headers.get('Location');
+      await p.setRemoteDescription({ type: 'answer', sdp: body });
+      clearTimeout(cTimer);
+      cTimer = setTimeout(() => { if (gen === cGen && cpc && cpc.connectionState !== 'connected') camFail('could not connect'); }, 15000);
+    } catch (e) {
+      if (gen === cGen) camFail(e.message || String(e));
+    }
+  }
+  function camState(p, gen) {
+    if (gen !== cGen || p !== cpc) return;
+    const st = p.connectionState;
+    if (st === 'connected') { clearTimeout(cTimer); cDrops = 0; }
+    else if (st === 'failed') camReconnect('connection failed');
+    else if (st === 'disconnected') {
+      clearTimeout(cTimer);
+      cTimer = setTimeout(() => { if (gen === cGen && cpc && cpc.connectionState !== 'connected') camReconnect('connection lost'); }, 4000);
+    }
+  }
+  function camReconnect(why) {
+    if (!camWant) return;
+    if (++cDrops > 2) { camFail(why); return; }
+    camNote('Reconnecting video…');
+    startCam();
+  }
+  function camFail(why) {
+    closeCam();
+    camWant = false;
+    camVideo.classList.remove('on');
+    $('cam-btn').classList.remove('on'); $('cam-btn').innerHTML = '&#9654; Watch';
+    camNote('Video unavailable: ' + why);
+  }
+  async function pollCam() {                              // readout: size, fps, bitrate, route, loss
+    if (!camWant || !cpc || cpc.connectionState !== 'connected') return;
+    const p = cpc;
+    let w = 0, h = 0, fps = 0, bytes = 0, lost = 0, recv = 0, route = '', pairId = null;
+    try {
+      const stats = await p.getStats();
+      stats.forEach(r => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video') {
+          w = r.frameWidth || 0; h = r.frameHeight || 0; fps = r.framesPerSecond || 0;
+          bytes = r.bytesReceived || 0; lost = r.packetsLost || 0; recv = r.packetsReceived || 0;
+        }
+        if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+      });
+      stats.forEach(r => {
+        const sel = pairId ? r.id === pairId : (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded');
+        if (r.type === 'candidate-pair' && sel) {
+          const lc = stats.get(r.localCandidateId);
+          if (lc) route = lc.candidateType === 'relay' ? 'via Cloudflare relay' : 'direct';
+        }
+      });
+    } catch (e) { return; }
+    if (p !== cpc) return;
+    const now = Date.now(); let mbps = 0;
+    if (cAt && bytes >= cBytes && now > cAt) mbps = (bytes - cBytes) * 8 / ((now - cAt) / 1000) / 1e6;
+    cBytes = bytes; cAt = now;
+    camNote(w ? `${h}p · ${Math.round(fps)} fps · ${mbps.toFixed(1)} Mbps` + (route ? ' · ' + route : '')
+      + (recv && lost / (recv + lost) > 0.01 ? ` · ${(100 * lost / (recv + lost)).toFixed(1)}% lost` : '')
+      + (camSt && camSt.viewers > 1 ? ` · ${camSt.viewers} viewers` : '')
+      + (camSt && camSt.audio_issue ? ` · no sound: ${camSt.audio_issue}` : '') : 'Waiting for picture…');
+  }
+  setInterval(pollCam, 1000);
+
   // ── MP3 fallback (v1.10 latency control). Each stream gets an id so the Pi can say where it
   // started; the page measures how far behind live it plays, keeps only listenTarget seconds
   // buffered (plays 5% fast or jumps ahead to shed the rest), and reconnects if audio piles up
@@ -2675,6 +2876,7 @@
     S = m.state || {}; feeds = m.feeds || []; feedId = m.feed || feedId; srcGroups = m.srcgroups || srcGroups;
     paintSheet();
     setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
+    if ('cam' in m) paintCam(m.cam);
     soloCount = countSolos(); $('solo-clear').classList.toggle('show', soloCount > 0);
     OVR = new Set(m.ovr || []); eachRow(paintRow);
     $('patch-note').textContent = m.patch || '';
@@ -2717,6 +2919,7 @@
       else if (m.t === 'upd') onUpd(m.a, m.v);
       else if (m.t === 'conn') setStatus(m.ok, false);
       else if (m.t === 'listen') paintListen(m.s);
+      else if (m.t === 'cam') paintCam(m.s);
       else if (m.t === 'feeds') { feeds = m.feeds; paintFeeds(); }
       else if (m.t === 'feed') { feedId = m.id; $('feed-sel').value = feedId; }
       else if (m.t === 'patch') $('patch-note').textContent = m.note;

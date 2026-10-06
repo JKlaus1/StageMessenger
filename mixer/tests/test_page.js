@@ -240,6 +240,83 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
     return ['eq', 'gate', 'dyn'].every(t => W.d.querySelector(`#sh-tabs .tab[data-tab="${t}"]`).style.display !== 'none'); })());
   check('no script errors (WING)', W.errors.length === 0, W.errors);
 
+  // ── Video card (v3.4) ──
+  console.log('Video card');
+  check('no camera -> Video card hidden', W.d.getElementById('cam-card').hidden === true);
+  const camBase = { enabled: true, available: true, running: false, viewers: 0, audio: true, feed: 'bus1', delay_ms: 240,
+                    quality: '720p20', max_delay: 3000, error: '', restarts: 0,
+                    qualities: [{ id: '720p30', label: '720p · 30 fps' }, { id: '720p20', label: '720p · 20 fps' }, { id: '480p30', label: '480p · 30 fps' }] };
+  const vsnap = { ...wsnap, feeds: [{ id: 'main1', label: 'Main LR', usb: [1, 2] }, { id: 'bus1', label: 'Bus 1', usb: [3, 4] }], cam: camBase };
+  const V = load(fs.readFileSync(path.join(FX, 'wing.html'), 'utf8'), vsnap);
+  await tick(80);
+  const vd = V.d, el = id => vd.getElementById(id);
+  check('camera present -> Video card shown', el('cam-card').hidden === false);
+  check('3 quality choices, saved one selected', el('cam-q').options.length === 3 && el('cam-q').value === '720p20', el('cam-q').value);
+  check('audio feed choices follow the listen feeds, saved one selected', el('cam-feed').options.length === 2 && el('cam-feed').value === 'bus1', el('cam-feed').value);
+  check('sync slider shows the saved delay and the max', el('cam-delay').value === '240' && el('cam-delay').max === '3000' && el('cam-delay-val').textContent === '240 ms', el('cam-delay-val').textContent);
+  el('cam-up').click(); await tick(30);
+  check('+ nudge: 250 ms, posted', el('cam-delay-val').textContent === '250 ms' && V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.delay_ms === 250), V.posts.slice(-2));
+  el('cam-dn').click(); el('cam-dn').click(); await tick(30);
+  check('- nudge twice: 230 ms', el('cam-delay-val').textContent === '230 ms', el('cam-delay-val').textContent);
+  el('cam-delay').value = '300'; el('cam-delay').dispatchEvent(new V.w.Event('input', { bubbles: true }));
+  check('slider drag updates the readout at once', el('cam-delay-val').textContent === '300 ms');
+  await tick(260);
+  check('slider drag posts the delay (debounced)', V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.delay_ms === 300));
+  el('cam-feed').value = 'main1'; el('cam-feed').dispatchEvent(new V.w.Event('change', { bubbles: true })); await tick(20);
+  check('feed change posts the feed', V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.feed === 'main1'));
+  V.push({ t: 'cam', s: { ...camBase, feed: 'main1', quality: '480p30', running: true, viewers: 2 } }); await tick(20);
+  check('live status: feed + quality follow the Pi', el('cam-feed').value === 'main1' && el('cam-q').value === '480p30');
+  check('live status: viewers shown while not watching', el('cam-note').textContent === 'Camera live · 2 viewers', el('cam-note').textContent);
+  el('cam-btn').click(); await tick(30);
+  check('no WebRTC in the browser -> says so, resets the button', el('cam-note').textContent.includes('no WebRTC') && !el('cam-btn').classList.contains('on') && !el('cam-video').classList.contains('on'), el('cam-note').textContent);
+  el('cam-snd').click();
+  check('Sound toggle', el('cam-snd').textContent === 'Sound on' && el('cam-video').muted === false);
+  el('cam-snd').click();
+  check('Sound toggle back off', el('cam-snd').textContent === 'Sound off' && el('cam-video').muted === true);
+  V.push({ t: 'cam', s: { ...camBase, available: false } }); await tick(20);
+  check('camera unplugged -> card hides again', el('cam-card').hidden === true);
+  check('no script errors (video card)', V.errors.length === 0, V.errors);
+
+  // a stubbed WebRTC handshake: video + audio recvonly, offer goes to the cam endpoint, DELETE on stop
+  console.log('Video card: handshake (stubbed WebRTC)');
+  const H = load(fs.readFileSync(path.join(FX, 'wing.html'), 'utf8'), vsnap);
+  await tick(80);
+  const hd = H.d, hel = id => hd.getElementById(id), calls = [], seen = [];
+  H.w.MediaStream = class { constructor() { this.t = []; } addTrack(t) { this.t.push(t); } getTracks() { return this.t; } };
+  H.w.RTCPeerConnection = class {
+    constructor(cfg) { this.cfg = cfg; this.iceGatheringState = 'complete'; this.connectionState = 'new'; }
+    addTransceiver(kind, o) { calls.push([kind, o.direction]); }
+    async createOffer() { return { type: 'offer', sdp: 'v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\n' }; }
+    async setLocalDescription(d) { this.localDescription = d; }
+    async setRemoteDescription(d) { calls.push(['answer', d.sdp.slice(0, 3)]); this.connectionState = 'connected'; this.onconnectionstatechange && this.onconnectionstatechange(); }
+    async getStats() { return new Map(); }
+    close() { calls.push(['close']); }
+  };
+  H.w.fetch = async (url, opts = {}) => {
+    seen.push([url, opts.method || 'GET', opts.body]);
+    if (url.includes('/api/rtc/config')) return { ok: true, status: 200, json: async () => ({ enabled: true, iceServers: [] }) };
+    if (url.includes('/api/cam/whep')) return { ok: true, status: 201, text: async () => 'v=0 answer', headers: { get: () => '/mixer/api/cam/session/0123456789abcdef0123456789abcdef0123' } };
+    return { ok: true, status: 200, json: async () => ({ ok: true }), headers: { get: () => null } };
+  };
+  hel('cam-btn').click(); await tick(60);
+  check('offers video AND audio, receive only', calls.some(c => c[0] === 'video' && c[1] === 'recvonly') && calls.some(c => c[0] === 'audio' && c[1] === 'recvonly'), calls);
+  check('offer posted to /mixer/api/cam/whep as SDP', seen.some(c => c[0] === '/mixer/api/cam/whep' && c[1] === 'POST' && String(c[2]).startsWith('v=0')), seen);
+  check('answer applied; watching state', calls.some(c => c[0] === 'answer') && hel('cam-btn').classList.contains('on') && hel('cam-video').classList.contains('on'));
+  check('the listen-back endpoints were not touched', !seen.some(c => c[0].includes('/api/rtc/whep') || c[0].includes('stream.mp3')));
+  hel('cam-btn').click(); await tick(30);
+  check('stop closes the connection and deletes the cam session', calls.some(c => c[0] === 'close') && seen.some(c => c[1] === 'DELETE' && c[0] === '/mixer/api/cam/session/0123456789abcdef0123456789abcdef0123'), seen.slice(-2));
+  check('stop resets the button + hides the picture', !hel('cam-btn').classList.contains('on') && !hel('cam-video').classList.contains('on'));
+  check('no script errors (video handshake)', H.errors.length === 0, H.errors);
+
+  // picture only: no console feeds (X32 for now)
+  console.log('Video card: picture only (no console audio)');
+  const N = load(fs.readFileSync(path.join(FX, 'wing.html'), 'utf8'), { ...wsnap, feeds: [], cam: { ...camBase, audio: false } });
+  await tick(80);
+  check('no feeds -> audio feed choice and Sound toggle hidden', N.d.getElementById('cam-feed').style.display === 'none' && N.d.getElementById('cam-snd').style.display === 'none');
+  check('card still shown (video works without console audio)', N.d.getElementById('cam-card').hidden === false);
+  N.push({ t: 'cam', s: { ...camBase, audio: false, running: true, viewers: 1, audio_issue: 'capture ended' } }); await tick(20);
+  check('picture-only after a capture failure says why', N.d.getElementById('cam-note').textContent === 'Camera live · 1 viewer · picture only: capture ended', N.d.getElementById('cam-note').textContent);
+
   console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
   process.exit(fails ? 1 : 0);
 })();

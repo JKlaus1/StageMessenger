@@ -20,6 +20,11 @@ MediaMTX over RTSP (ffmpeg tee muxer, onfail=ignore -- if MediaMTX is down the M
 on). WebRTC listeners live in MediaMTX, so rtc_probe() (the MediaMTX API) tells the watchdog how
 many there are: capture keeps running while anyone listens either way. hold_rtc() starts capture
 ahead of a WebRTC handshake, because MediaMTX refuses a reader until the stream is publishing.
+
+Cam feed (v3.4): the video feed's audio is a second pair sliced out of this same capture (arecord on
+hw:WING allows one opener). picker.py does that when cam_ctl names its control file; cam.py owns that
+file and tells this class, through `keepalive`, that capture must keep running while video is active.
+Nothing on the listen path changes.
 """
 import collections
 import os
@@ -102,7 +107,7 @@ _RATES = [44100, 48000, 32000]
 
 class Listener:
     def __init__(self, capture_cmd=None, bitrate='128k', on_status=None, cushion_s=0.5, max_queue_s=1.0,
-                 rtc_url='', opus_bitrate='96k', rtc_probe=None):
+                 rtc_url='', opus_bitrate='96k', rtc_probe=None, cam_ctl=''):
         self.capture_cmd = capture_cmd or [
             'arecord', '-D', 'hw:WING', '-c', str(CHANNELS),
             '-f', 'S24_3LE', '-r', '48000', '-t', 'raw', '--buffer-time=500000',
@@ -113,6 +118,8 @@ class Listener:
         self.max_queue_bytes = int(self.bps * max(0.25, float(max_queue_s)))
         self._pos = 0                        # bytes encoded since the pipeline started
         self.rtc_url = rtc_url or ''
+        self.cam_ctl = cam_ctl or ''          # picker's cam control file ('' = no cam output)
+        self.keepalive = lambda: False        # cam.py: True while video needs the capture running
         self.opus_bitrate = opus_bitrate
         self.rtc_probe = rtc_probe or (lambda: (False, False, 0))   # -> (api_ok, ready, readers)
         self.rtc_readers = 0
@@ -191,6 +198,13 @@ class Listener:
         if need_start:
             self._start()
 
+    def ensure_capture(self):
+        """Start capture if idle (the video feed needs the audio pipeline up)."""
+        with self.lock:
+            need_start = not self.running
+        if need_start:
+            self._start()
+
     def wait_rtc_ready(self, timeout=6.0):
         end = time.time() + timeout
         while time.time() < end:
@@ -242,9 +256,13 @@ class Listener:
             out = ['-c:a', 'libmp3lame', '-b:a', self.bitrate, '-reservoir', '0',
                    '-flush_packets', '1', '-f', 'mp3', 'pipe:1']
         try:
+            env = dict(os.environ)
+            env.pop('PICKER_CAM_CTL', None)
+            if self.cam_ctl:
+                env['PICKER_CAM_CTL'] = self.cam_ctl
             pick = subprocess.Popen([sys.executable, os.path.join(HERE, 'picker.py'), self.ctl]
                                     + self.capture_cmd,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, env=env)
             enc = subprocess.Popen(
                 ['ffmpeg', '-hide_banner', '-loglevel', 'error',
                  '-f', 's24le', '-ar', '48000', '-ac', '2', '-i', 'pipe:0'] + out,
@@ -349,7 +367,11 @@ class Listener:
                     not_ready_since = None
             with self.lock:
                 busy = bool(self.clients)
-            if busy or self.rtc_readers > 0 or now < self._hold_until:
+            try:
+                cam_busy = bool(self.keepalive())
+            except Exception:
+                cam_busy = False
+            if busy or cam_busy or self.rtc_readers > 0 or now < self._hold_until:
                 idle_since = None
             else:
                 idle_since = idle_since or now
