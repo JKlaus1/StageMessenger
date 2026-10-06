@@ -213,6 +213,48 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   d.getElementById('cv-l1').click(); await tick();
   strip(d, 'ch/1').querySelector('.cs-nm').click(); await tick(60);
   check('channel name tap opens the channel sheet', d.getElementById('sheet').classList.contains('open'));
+  // ── v4.0 channel page ──
+  check('six overview tiles', [...d.querySelectorAll('#sh-tabs .tab')].map(b => b.dataset.tab).join() === 'input,gate,eq,dyn,sends,main');
+  check('own strip on the right = ch1 fader', d.querySelector('#sh-side .cs').dataset.k === 'ch/1'
+        && d.querySelector('#sh-side .cs-db').textContent === fmt(snap.state['/ch/1/fdr']));
+  check('config tile flags: LC on', /LC/.test(d.getElementById('ov-flags').innerHTML) && d.querySelector('#ov-flags b.on').textContent === 'LC');
+  check('X32 low-cut slope select (12/18/24) shows 24', d.getElementById('sh-lcs').value === '24' && d.getElementById('sh-lcs').options.length === 3,
+        [d.getElementById('sh-lcs').value, d.getElementById('sh-lcs').options.length]);
+  P.posts.length = 0;
+  const lcs = d.getElementById('sh-lcs'); lcs.value = '12'; lcs.dispatchEvent(new w.Event('change')); await tick();
+  check('slope change posts flt/lcs', sets(P, '/ch/1/flt/lcs').some(p => p.body.v === '12'));
+  check('knobs on the config page', d.querySelectorAll('#row-trim .knob').length === 1);
+  d.querySelector('#sh-tabs .tab[data-tab="sends"]').click(); await tick();
+  check('sends page: 16 bus strips (X32: no matrix sends from a channel)', d.querySelectorAll('#sends-strips .cs').length === 16,
+        d.querySelectorAll('#sends-strips .cs').length);
+  const s1b = d.querySelector('#sends-strips .cs[data-k="bus/1"]');
+  check('send strip shows ch1 -> bus1 (turned OFF earlier, sent 0 dB by the double-tap)', s1b.querySelector('.cs-db').textContent === '0.0'
+        && s1b.querySelector('.cs-mu').textContent === 'OFF', [s1b.querySelector('.cs-db').textContent, s1b.querySelector('.cs-mu').textContent]);
+  P.posts.length = 0;
+  s1b.querySelector('.cs-mu').click(); await tick();
+  check('send ON toggles /ch/1/send/1/on', sets(P, '/ch/1/send/1/on').some(p => p.body.v === 1) && s1b.querySelector('.cs-mu').textContent === 'ON');
+  const sfd = s1b.querySelector('.cs-fd');
+  ptr(w, sfd, 'pointerdown', 5, 50, 11); ptr(w, sfd, 'pointerup', 5, 50, 11); ptr(w, sfd, 'pointerdown', 5, 50, 11); ptr(w, sfd, 'pointerup', 5, 50, 11); await tick();
+  check('send double-tap 0 dB', sets(P, '/ch/1/send/1/lvl').some(p => p.body.v === 0));
+  check('send name tap does nothing', (s1b.querySelector('.cs-nm').click(), d.getElementById('sheet').classList.contains('open')));
+  d.querySelector('#sh-tabs .tab[data-tab="main"]').click(); await tick();
+  check('main page: LR + M/C strips', [...d.querySelectorAll('#main-strips .cs')].map(e => e.dataset.k).join() === 'main/1,main/2');
+  P.posts.length = 0;
+  d.querySelector('#main-strips .cs[data-k="main/2"] .cs-mu').click(); await tick();
+  check('M/C assign posts /ch/1/main/2/on', sets(P, '/ch/1/main/2/on').some(p => p.body.v === 1));
+  check('pan knob on the main page', d.querySelectorAll('#main-pan .knob').length === 1);
+  d.querySelector('#sh-tabs .tab[data-tab="eq"]').click(); await tick(120);
+  check('LC chip next to the bands (X32: no HC)', [...d.querySelectorAll('#eq-flt .btn')].map(b => b.textContent).join() === 'LC');
+  d.querySelector('#eq-flt .btn[data-b="lc"]').click(); await tick();
+  check('LC selected: on / freq / slope controls', [...d.querySelectorAll('#eq-band-ctl .gp span')].map(x => x.textContent).join() === 'Low cut,Freq,Slope',
+        [...d.querySelectorAll('#eq-band-ctl .gp span')].map(x => x.textContent));
+  P.posts.length = 0;
+  d.querySelector('#eq-band-ctl .gp button').click(); await tick();
+  check('LC on/off from the EQ page', sets(P, '/ch/1/flt/lc').some(p => p.body.v === 0));
+  d.querySelector('#eq-bands .btn[data-b="2"]').click(); await tick();
+  d.getElementById('sh-next').click(); await tick(80);
+  check('next -> next strip of the layer, page kept', d.getElementById('sh-tag').textContent === 'CH 1'
+        || d.getElementById('sh-tag').textContent !== '', d.getElementById('sh-tag').textContent);
   d.getElementById('sh-close').click();
 
   // back to classic

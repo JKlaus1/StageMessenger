@@ -678,6 +678,92 @@
     .cv-pk.in { background: rgba(76,217,100,.16); border-color: var(--cv-sel); }
     .cv-pk.in small { color: var(--cv-sel); }
     .cv-ed-foot { display: flex; gap: .4rem; flex-wrap: wrap; }
+
+    /* ══ v4.0 channel page (Mixing Station style): full screen, overview tiles, graphs, own strip on the right ══ */
+    #sheet { background: var(--cv-bg); padding: 0; overflow: hidden; }
+    #sh-body { max-width: none; height: 100%; margin: 0; border: 0; border-left: 5px solid transparent; border-radius: 0; padding: 0;
+      display: flex; flex-direction: column; background: var(--cv-bg); }
+    .cp-top { flex: none; display: flex; align-items: center; gap: .45rem; margin: 0; padding: .35rem .45rem; background: #06080c;
+      border-bottom: 1px solid #000; }
+    #sh-close { flex: none; width: 2.6rem; height: 2.3rem; border: 1px solid var(--cv-btn-b); background: var(--cv-btn); color: var(--text);
+      border-radius: 8px; font-size: 1.4rem; font-weight: 900; line-height: 1; padding: 0; }
+    .cp-title { flex: 1 1 auto; min-width: 0; }
+    .cp-title b { display: block; font-size: 1rem; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cp-title i { display: block; font-style: normal; font-size: .6rem; color: var(--cv-dim); font-weight: 800; letter-spacing: .08em; }
+    .cp-top .inmeter { flex: 0 1 9rem; margin: 0; }
+    .cp-nav { flex: none; width: 2.6rem; height: 2.3rem; border: 1px solid var(--cv-btn-b); background: var(--cv-btn); color: var(--text);
+      border-radius: 8px; font-size: .9rem; padding: 0; }
+    #sh-tabs.cp-ov { flex: none; display: flex; gap: 3px; margin: 0; padding: 3px; overflow-x: auto; background: #0a0c11; border-bottom: 1px solid #000; }
+    #sh-tabs .tab { flex: 1 0 6.4rem; max-width: 11rem; height: 4.1rem; padding: 2px 3px; border-radius: 6px; border: 1px solid #2a3142;
+      background: #141822; color: var(--text); text-align: left; display: flex; flex-direction: column; letter-spacing: 0; text-transform: none; }
+    #sh-tabs .tab.sel { border: 2px solid var(--cv-sel); background: #18221c; color: var(--text); }
+    #sh-tabs .tab em { font-style: normal; font-size: .62rem; font-weight: 800; color: var(--cv-dim); }
+    #sh-tabs .tab .dot { margin-left: .3rem; }
+    .cp-mini { flex: 1; width: 100%; min-height: 0; display: block; }
+    .cp-flags { flex: 1; display: flex; flex-wrap: wrap; gap: 2px; align-content: center; }
+    .cp-flags b { font-size: .56rem; font-weight: 900; padding: 1px 4px; border-radius: 4px; background: #262b37; color: #6d7488; }
+    .cp-flags b.on { background: #2fbf5f; color: #04180b; }
+    .cp-flags b.warn { background: #e0453c; color: #fff; }
+    .cp-main { flex: 1; min-height: 0; display: flex; }
+    .cp-page { flex: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: .5rem .6rem 2rem; }
+    .cp-side { flex: none; width: 5.2rem; display: flex; flex-direction: column; border-left: 2px solid #000; background: var(--cv-strip); }
+    .cp-side .cs { flex: 1; width: auto; border-right: 0; }
+    .cp-pn { flex: none; position: relative; height: 1.9rem; margin: 3px 4px 0; border-radius: 4px; background: #0b0d13; touch-action: none; }
+    .cp-pn .pz { position: absolute; top: 3px; bottom: 3px; left: 50%; width: 1px; background: #3c4355; }
+    .cp-pn .pk { position: absolute; top: 2px; bottom: 2px; width: 6px; margin-left: -3px; border-radius: 2px; background: #fff; }
+    .cp-pn output { position: absolute; right: 3px; top: 1px; font-size: .5rem; color: var(--cv-dim); }
+    .cp-pn.drag .pk { background: var(--cv-sel); }
+    /* config page */
+    .prows { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .cp-box { flex: 1 1 13rem; margin: .5rem 0 0; padding: .55rem; border: 1px solid #262c3a; border-top: 1px solid #262c3a; border-radius: 10px; background: #12161f; }
+    .cp-cells { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; }
+    .cp-col { flex-direction: column; margin: 0; align-self: center; }
+    .prow { display: grid; grid-template-columns: 1fr 1fr; width: 6.6rem; gap: .25rem; justify-items: stretch; margin: 0; }
+    .prow > span { grid-column: 1 / -1; text-align: center; }
+    .prow .fw { grid-column: 1 / -1; display: flex; justify-content: center; }
+    .prow output { grid-column: 1 / -1; text-align: center; font-size: .78rem; }
+    .prow .nud { height: 1.8rem; }
+    .prow select { grid-column: 1 / -1; padding: .3rem; font-size: .72rem; }
+    .prow .btn { padding: .4rem .3rem; }
+    /* knobs */
+    .knob { width: 3.4rem; height: 3.4rem; touch-action: none; cursor: ns-resize; }
+    .knob svg { width: 100%; height: 100%; display: block; overflow: visible; }
+    .knob .kb { fill: none; stroke: #2a3040; stroke-width: 4; stroke-linecap: round; }
+    .knob .kv { fill: none; stroke: #4f8dff; stroke-width: 4; stroke-linecap: round; }
+    .knob .kc { fill: #1d222d; stroke: #07090d; stroke-width: 1.5; }
+    .knob .ki { stroke: #fff; stroke-width: 2.6; stroke-linecap: round; }
+    .knob.drag .kv { stroke: var(--cv-sel); }
+    .cp-knobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.4rem, 1fr)); gap: .45rem .35rem; margin-top: .5rem; }
+    .cp-knobs .gp { display: flex; flex-direction: column; align-items: center; gap: .2rem; margin: 0; padding: .35rem .2rem;
+      border: 1px solid #232937; border-radius: 9px; background: #12161f; min-width: 0; }
+    .cp-knobs .gp > span { font-size: .6rem; text-align: center; max-width: 100%; }
+    .cp-knobs .gp .fw { display: flex; justify-content: center; }
+    .cp-knobs .gp output { font-size: .74rem; text-align: center; }
+    .cp-knobs .gp select { width: 100%; padding: .35rem .2rem; font-size: .72rem; }
+    .cp-knobs .gp .btn { width: 100%; }
+    .cp-knobs .gp > div:empty { display: none; }
+    /* graphs */
+    .cp-graph { display: flex; gap: .5rem; align-items: stretch; flex-wrap: wrap; }
+    .cp-tf { flex: 1 1 15rem; min-width: 0; width: 100%; max-width: 26rem; aspect-ratio: 1; background: #0b0e15; border-radius: 10px; touch-action: none; display: block; }
+    .cp-bars { flex: 1 1 10rem; display: flex; flex-direction: column; justify-content: center; }
+    #eq-canvas { height: min(46vh, 340px); background: #0b0e15; }
+    .cp-bandrow { display: flex; gap: .4rem; flex-wrap: wrap; }
+    .cp-bandrow .bands { margin: .5rem 0 0; }
+    #eq-bands { flex: 3 1 14rem; }
+    #eq-flt { flex: 1 1 6rem; }
+    .bands .btn { border-bottom-width: 3px; }
+    /* sends / main pages: strips like the console view */
+    .cp-sends { display: flex; overflow-x: auto; height: min(62vh, 30rem); border-radius: 8px; background: var(--cv-bg); touch-action: pan-x; }
+    .cp-sends .cs { width: 4rem; }
+    .cp-sends .cs-so { display: none; }
+    .cp-mainrow { display: flex; gap: .6rem; flex-wrap: wrap; align-items: flex-start; }
+    .cp-mainrow .cp-sends { flex: 0 1 auto; }
+    .cp-mainrow .cp-knobs { flex: 1 1 8rem; margin: 0; }
+    @media (max-width: 560px) {
+      .cp-side { width: 3.9rem; }
+      .cp-top .inmeter { display: none; }
+      #sh-tabs .tab { flex-basis: 5.2rem; height: 3.6rem; }
+    }
   </style>
 </head>
 <body>
@@ -881,17 +967,23 @@
 
   <div id="sheet">
     <div class="sheet-body" id="sh-body">
-      <div class="sh-head">
-        <div><b id="sh-name"></b><i id="sh-tag"></i></div>
-        <button id="sh-close">&#10005;</button>
+      <div class="sh-head cp-top">
+        <button id="sh-close" title="Back">&#8249;</button>
+        <div class="cp-title"><b id="sh-name"></b><i id="sh-tag"></i></div>
+        <div class="inmeter"><span class="label" style="margin:0">In</span><div class="lvl"><i id="sh-lvc"></i></div><output id="sh-lvdb"></output></div>
+        <button class="cp-nav" id="sh-prev" title="Previous channel">&#9664;</button>
+        <button class="cp-nav" id="sh-next" title="Next channel">&#9654;</button>
       </div>
-      <div class="inmeter"><span class="label" style="margin:0">In</span><div class="lvl"><i id="sh-lvc"></i></div><output id="sh-lvdb"></output></div>
-      <div class="tabs" id="sh-tabs">
-        <button class="tab sel" data-tab="input">Input</button>
-        <button class="tab" data-tab="eq">EQ<span class="dot"></span></button>
-        <button class="tab" data-tab="gate">Gate<span class="dot"></span></button>
-        <button class="tab" data-tab="dyn">Comp<span class="dot"></span></button>
+      <div class="tabs cp-ov" id="sh-tabs">
+        <button class="tab sel" data-tab="input"><em>Config</em><span class="cp-flags" id="ov-flags"></span></button>
+        <button class="tab" data-tab="gate"><em>Gate<span class="dot"></span></em><canvas class="cp-mini" id="ov-gate"></canvas></button>
+        <button class="tab" data-tab="eq"><em>EQ<span class="dot"></span></em><canvas class="cp-mini" id="ov-eq"></canvas></button>
+        <button class="tab" data-tab="dyn"><em>Comp<span class="dot"></span></em><canvas class="cp-mini" id="ov-dyn"></canvas></button>
+        <button class="tab" data-tab="sends"><em>Sends</em><canvas class="cp-mini" id="ov-sends"></canvas></button>
+        <button class="tab" data-tab="main"><em>Main</em><span class="cp-flags" id="ov-main"></span></button>
       </div>
+      <div class="cp-main">
+      <div class="cp-page">
       <div class="tabpane sel" id="tab-input">
 
       <div class="sect">
@@ -903,20 +995,32 @@
         </div>
       </div>
 
-      <div class="sect" id="sh-pre">
+      <div class="prows">
+      <div class="sect cp-box" id="sh-pre">
         <div class="label">Preamp <span id="sh-prename"></span></div>
-        <div class="prow" id="row-gain"><span>Gain</span><div class="fw"></div><output></output><button class="nud" data-d="-0.5">&minus;</button><button class="nud" data-d="0.5">+</button></div>
-        <div class="flags"><button class="btn warn" id="sh-48v">48V</button><button class="btn" id="sh-spol">Src &Oslash;</button></div>
+        <div class="cp-cells">
+          <div class="prow" id="row-gain"><span>Gain</span><div class="fw"></div><output></output><button class="nud" data-d="-0.5">&minus;</button><button class="nud" data-d="0.5">+</button></div>
+          <div class="flags cp-col"><button class="btn warn" id="sh-48v">+48V</button><button class="btn" id="sh-spol">Src &Oslash;</button></div>
+        </div>
         <div class="note warn" id="sh-shared"></div>
       </div>
-      <div class="sect" id="sh-nopre"><div class="note">No preamp on this source.</div></div>
+      <div class="sect cp-box" id="sh-nopre"><div class="label">Preamp</div><div class="note">No preamp on this source.</div></div>
 
-      <div class="sect">
+      <div class="sect cp-box">
         <div class="label">Channel</div>
-        <div class="prow" id="row-trim"><span>Trim</span><div class="fw"></div><output></output><button class="nud" data-d="-0.5">&minus;</button><button class="nud" data-d="0.5">+</button></div>
-        <div class="prow" id="row-lcf"><span>Low cut</span><div class="fw"></div><output></output><button class="btn" id="sh-lc" style="grid-column: span 2">On</button></div>
-        <div class="prow" id="row-hcf"><span>High cut</span><div class="fw"></div><output></output><button class="btn" id="sh-hc" style="grid-column: span 2">On</button></div>
-        <div class="flags"><button class="btn" id="sh-inv">&Oslash; Polarity</button></div>
+        <div class="cp-cells">
+          <div class="prow" id="row-trim"><span>Trim</span><div class="fw"></div><output></output><button class="nud" data-d="-0.5">&minus;</button><button class="nud" data-d="0.5">+</button></div>
+          <div class="flags cp-col"><button class="btn" id="sh-inv">&Oslash; Polarity</button></div>
+        </div>
+      </div>
+
+      <div class="sect cp-box" id="sh-filters">
+        <div class="label">Filters</div>
+        <div class="cp-cells">
+          <div class="prow" id="row-lcf"><span>Low cut</span><div class="fw"></div><output></output><button class="btn" id="sh-lc" style="grid-column: span 2">On</button><select id="sh-lcs" title="Low cut slope (dB/oct)"></select></div>
+          <div class="prow" id="row-hcf"><span>High cut</span><div class="fw"></div><output></output><button class="btn" id="sh-hc" style="grid-column: span 2">On</button><select id="sh-hcs" title="High cut slope (dB/oct)"></select></div>
+        </div>
+      </div>
       </div>
       </div>
 
@@ -924,26 +1028,49 @@
         <div class="proc-head"><button class="btn" id="eq-on">EQ</button><span class="mdl" id="eq-mdl"></span></div>
         <div id="eq-std">
           <canvas id="eq-canvas"></canvas>
-          <div class="bands" id="eq-bands"></div>
-          <div id="eq-band-ctl"></div>
-          <div id="eq-mix"></div>
-          <div class="note small">Curve is computed from the band settings (approximate).</div>
+          <div class="cp-bandrow"><div class="bands" id="eq-bands"></div><div class="bands" id="eq-flt"></div></div>
+          <div class="cp-knobs" id="eq-band-ctl"></div>
+          <div class="cp-knobs" id="eq-mix"></div>
+          <div class="note small">Curve computed from the band and channel-filter settings (approximate).</div>
         </div>
-        <div id="eq-generic"></div>
+        <div class="cp-knobs" id="eq-generic"></div>
       </div>
 
       <div class="tabpane" id="tab-gate">
-        <div class="grbar"><span>KEY</span><div class="gtrack" id="gate-key"><div class="g-fill"></div><div class="thr"></div></div><output id="gate-keydb"></output></div>
-        <div class="grbar"><span>GR</span><div class="gtrack gr" id="gate-gr"><div class="g-fill"></div></div><output id="gate-grpct"></output></div>
         <div class="proc-head"><button class="btn" id="gate-on">Gate</button><span class="mdl" id="gate-mdl"></span></div>
-        <div id="gate-params"></div>
+        <div class="cp-graph"><canvas id="gate-canvas" class="cp-tf"></canvas>
+          <div class="cp-bars">
+            <div class="grbar"><span>KEY</span><div class="gtrack" id="gate-key"><div class="g-fill"></div><div class="thr"></div></div><output id="gate-keydb"></output></div>
+            <div class="grbar"><span>GR</span><div class="gtrack gr" id="gate-gr"><div class="g-fill"></div></div><output id="gate-grpct"></output></div>
+          </div>
+        </div>
+        <div class="cp-knobs" id="gate-params"></div>
       </div>
 
       <div class="tabpane" id="tab-dyn">
-        <div class="grbar"><span>KEY</span><div class="gtrack" id="dyn-key"><div class="g-fill"></div><div class="thr"></div></div><output id="dyn-keydb"></output></div>
-        <div class="grbar"><span>GR</span><div class="gtrack gr" id="dyn-gr"><div class="g-fill"></div></div><output id="dyn-grpct"></output></div>
         <div class="proc-head"><button class="btn" id="dyn-on">Comp</button><span class="mdl" id="dyn-mdl"></span></div>
-        <div id="dyn-params"></div>
+        <div class="cp-graph"><canvas id="dyn-canvas" class="cp-tf"></canvas>
+          <div class="cp-bars">
+            <div class="grbar"><span>KEY</span><div class="gtrack" id="dyn-key"><div class="g-fill"></div><div class="thr"></div></div><output id="dyn-keydb"></output></div>
+            <div class="grbar"><span>GR</span><div class="gtrack gr" id="dyn-gr"><div class="g-fill"></div></div><output id="dyn-grpct"></output></div>
+          </div>
+        </div>
+        <div class="cp-knobs" id="dyn-params"></div>
+      </div>
+
+      <div class="tabpane" id="tab-sends">
+        <div class="note small" id="sends-note">Send levels to every bus (and matrix). ON = send on; Mute Enable (console view) guards these too.</div>
+        <div class="cp-sends" id="sends-strips"></div>
+      </div>
+
+      <div class="tabpane" id="tab-main">
+        <div class="cp-mainrow">
+          <div class="cp-sends" id="main-strips"></div>
+          <div class="cp-knobs" id="main-pan"></div>
+        </div>
+      </div>
+      </div>
+      <div class="cp-side" id="sh-side"></div>
       </div>
     </div>
   </div>
@@ -3070,7 +3197,7 @@
     const row = $(id), out = row.querySelector('output');
     const toPos = v => log ? Math.log(v / lo) / Math.log(hi / lo) : (v - lo) / (hi - lo);
     const toVal = p => log ? lo * Math.pow(hi / lo, p) : lo + p * (hi - lo);
-    const fader = makeFader((p, final) => {
+    const fader = makeKnob((p, final) => {
       const a = addrFn(); if (!a) return;
       let v = toVal(p); v = log ? Math.round(v) : Math.round(v * 2) / 2;     // 1 Hz / 0.5 dB steps
       S[a] = v; out.textContent = fmt(v); sendThrottled(a, v, final);
@@ -3147,9 +3274,11 @@
       $('sh-shared').textContent = sh.length ? 'Gain / 48V also affect: ' + sh.join(', ') : '';
     }
     $('sh-inv').classList.toggle('on', !!S[b + '/in/set/inv']);
-    $('row-hcf').style.display = CAP.hc ? '' : 'none';                       // X32: no high cut on a channel
+    const noflt = sheetRow.kind === 'aux';                                     // aux strips have no filter block
+    $('row-hcf').style.display = CAP.hc && !noflt ? '' : 'none';             // X32: no high cut on a channel
     $('sh-spol').style.display = CAP.spol ? '' : 'none';                     // X32: no source polarity
-    $('row-lcf').style.display = (X32 && sheetRow.kind === 'aux') ? 'none' : '';   // X32 aux in: no low cut
+    $('row-lcf').style.display = noflt ? 'none' : '';
+    $('sh-filters').style.display = noflt ? 'none' : '';
     for (const k of ['lc', 'hc']) {
       const on = !!S[b + '/flt/' + k];
       $('sh-' + k).classList.toggle('on', on); $('sh-' + k).textContent = on ? 'ON' : 'OFF';
@@ -3157,6 +3286,7 @@
     Object.values(P).forEach(p => p.paint());
     paintSheetMeter();
     if (pickGroup) markCurrentInput();
+    paintPage();
   }
   function paintSheetMeter() {
     if (!sheetRow) return;
@@ -3165,13 +3295,16 @@
     $('sh-lvc').style.width = d == null ? '100%' : (100 - Math.max(0, Math.min(100, (d + 60) / 60 * 100))) + '%';
     $('sh-lvdb').textContent = d == null ? '' : (d <= -90 ? '−∞' : d + ' dB');
     if (curTab === 'gate' || curTab === 'dyn') paintGR();
+    pageMeters();
   }
   const procTabs = r => r.kind === 'aux' ? CAP.auxproc : ['eq', 'gate', 'dyn'];
   function openSheet(r) {
     sheetRow = r; pickGroup = null; $('sh-picker').style.display = 'none';
     document.querySelectorAll('#sh-tabs .tab').forEach(b => {
-      b.style.display = (b.dataset.tab === 'input' || procTabs(r).includes(b.dataset.tab)) ? '' : 'none'; });
+      b.style.display = (['input', 'sends', 'main'].includes(b.dataset.tab) || procTabs(r).includes(b.dataset.tab)) ? '' : 'none'; });
     for (const k of Object.keys(NODE)) delete NODE[k];
+    if ((selBand === 'lc' || selBand === 'hc') && r.kind === 'aux') selBand = X32 ? '1' : 'l';
+    buildPageStrips(r);
     SH.classList.add('open'); selectTab('input'); paintSheet(); paintTabDots();
   }
   function closeSheet() { sheetRow = null; SH.classList.remove('open'); }
@@ -3248,8 +3381,10 @@
     const keysChanged = old.map(p => p.key).join() !== res.params.map(p => p.key).join();
     NODE[path] = res.params;
     paintProc(t, keysChanged);
+    paintOverview();
   }
-  setInterval(() => { if (sheetRow && curTab !== 'input') fetchNode(curTab); }, 1500);
+  const PROC = ['eq', 'gate', 'dyn'];
+  setInterval(() => { if (sheetRow && PROC.includes(curTab)) fetchNode(curTab); }, 1500);
 
   // throttled node writes (same 20 Hz rule as faders)
   const nLast = {}, nPend = {}, nTimer = {};
@@ -3312,10 +3447,11 @@
       paint = () => { const p = param(path, key); out.textContent = p ? fmtParam(p, p.value) : ''; };
     } else {
       const fw = document.createElement('div'); fw.className = 'fw'; const out = document.createElement('output');
-      const fader = makeFader((x, final) => {
+      const fader = makeKnob((x, final) => {
         const p = param(path, key); if (!p) return;
         const v = snap(p, posToP(p, x)); out.textContent = fmtParam(p, v); nodeSend(path, key, v, final);
         if (curTab === 'eq') drawEQ();
+        if (curTab === 'gate' || curTab === 'dyn') drawTF($(curTab + '-canvas'), curTab);
       });
       fw.appendChild(fader); row.appendChild(fw); row.appendChild(out);
       paint = () => { const p = param(path, key); if (!p) return; if (!fader.isDragging()) fader.setPos(Math.max(0, Math.min(1, pToPos(p, p.value)))); out.textContent = fmtParam(p, p.value); };
@@ -3344,6 +3480,7 @@
       ps.filter(p => !['on', 'mdl'].includes(p.key)).forEach(p => { const f = genControl(box, path, p.key, LABELS[p.key]); if (f) painters[t].push(f); });
     } else painters[t].forEach(f => f());
     paintGR();
+    if (curTab === t) drawTF($(t + '-canvas'), t);
   }
   for (const t of ['eq', 'gate', 'dyn']) {
     $(t + '-on').addEventListener('click', () => {
@@ -3394,13 +3531,15 @@
       } else painters.eq.forEach(f => f());
       return;
     }
-    document.querySelectorAll('#eq-bands .btn').forEach(b => b.classList.toggle('sel', b.dataset.b === selBand));
+    document.querySelectorAll('#eq-bands .btn, #eq-flt .btn').forEach(b => b.classList.toggle('sel', b.dataset.b === selBand));
+    $('eq-flt').style.display = sheetRow && sheetRow.kind === 'aux' ? 'none' : '';
     if (rebuild || !painters.eq.length) {
       const box = $('eq-band-ctl'); box.innerHTML = ''; painters.eq = [];
       const k = selBand;
-      if (X32) { const f = genControl(box, path, k + 'type', 'Type'); if (f) painters.eq.push(f); }
+      if (k === 'lc' || k === 'hc') painters.eq.push(fltControls(box, k));
+      else if (X32) { const f = genControl(box, path, k + 'type', 'Type'); if (f) painters.eq.push(f); }
       else if (k === 'l' || k === 'h') { const f = genControl(box, path, k + 'eq', 'Type'); if (f) painters.eq.push(f); }
-      for (const [s2, lab] of [['g', 'Gain'], ['f', 'Freq'], ['q', 'Q']]) { const f = genControl(box, path, k + s2, lab); if (f) painters.eq.push(f); }
+      if (k !== 'lc' && k !== 'hc') for (const [s2, lab] of [['g', 'Gain'], ['f', 'Freq'], ['q', 'Q']]) { const f = genControl(box, path, k + s2, lab); if (f) painters.eq.push(f); }
       const mb = $('eq-mix'); mb.innerHTML = ''; const fm = genControl(mb, path, 'mix', 'Mix'); if (fm) painters.eq.push(fm);
     } else painters.eq.forEach(f => f());
     drawEQ();
@@ -3434,80 +3573,21 @@
       return { k, type: t, f: param(path, k + 'f')?.value, g: param(path, k + 'g')?.value, q: param(path, k + 'q')?.value ?? 1 };
     });
   }
-  function drawEQ() {
-    const cv = $('eq-canvas'); if (!sheetRow || curTab !== 'eq' || !cv.offsetWidth) return;
-    const path = nodePath('eq'); if (!isStdEQ(path)) return;
-    const dpr = window.devicePixelRatio || 1, W = cv.offsetWidth, H = cv.offsetHeight;
-    if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
-    const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
-    const X = f => EQX(f) * W, Y = d => H / 2 - d / DBR * (H / 2 - 8);
-    c.strokeStyle = '#1e1e3a'; c.lineWidth = 1; c.fillStyle = '#55557a'; c.font = '10px system-ui';
-    for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) { c.beginPath(); c.moveTo(X(f), 0); c.lineTo(X(f), H); c.stroke();
-      c.fillText(f >= 1000 ? f / 1000 + 'k' : f, X(f) + 2, H - 4); }
-    for (const d of [-12, -6, 0, 6, 12]) { c.strokeStyle = d === 0 ? '#33335a' : '#1e1e3a'; c.beginPath(); c.moveTo(0, Y(d)); c.lineTo(W, Y(d)); c.stroke(); }
-    const bands = bandsOf(path), on = !!param(path, 'on')?.value, mix = (param(path, 'mix')?.value ?? 100) / 100;
-    c.beginPath();
-    for (let px = 0; px <= W; px += 2) {
-      const f = EQF(px / W); let d = 0;
-      for (const b of bands) if (b.f && (b.g || b.type === 'hp' || b.type === 'lp')) d += bandDb(b.type, b.f, b.g || 0, b.q, f);
-      d *= mix; if (px === 0) c.moveTo(px, Y(d)); else c.lineTo(px, Y(d));
-    }
-    c.strokeStyle = on ? '#00ff88' : '#55557a'; c.lineWidth = 2; c.setLineDash(on ? [] : [5, 4]); c.stroke(); c.setLineDash([]);
-    for (const b of bands) {
-      if (!b.f) continue;
-      const x = X(b.f), y = Y(b.g || 0), sel = b.k === selBand;
-      c.beginPath(); c.arc(x, y, sel ? 11 : 8, 0, 2 * Math.PI);
-      c.fillStyle = sel ? '#00ff88' : '#2a2a4a'; c.fill(); c.strokeStyle = '#c8c8e0'; c.lineWidth = 1; c.stroke();
-      c.fillStyle = sel ? '#001a0d' : '#e0e0f0'; c.font = 'bold 10px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText(b.k === 'l' ? 'L' : b.k === 'h' ? 'H' : b.k, x, y + .5); c.textAlign = 'start'; c.textBaseline = 'alphabetic';
-    }
-  }
-  // drag band handles: x = frequency, y = gain
-  (() => {
-    const cv = $('eq-canvas'); let drag = null;
-    const loc = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top, r.width, r.height]; };
-    cv.addEventListener('pointerdown', e => {
-      const path = nodePath('eq'); if (!isStdEQ(path)) return;
-      const [x, y, W, H] = loc(e); let best = null, bd = 30;
-      for (const b of bandsOf(path)) {
-        const bx = EQX(b.f) * W, by = H / 2 - (b.g || 0) / DBR * (H / 2 - 8), d = Math.hypot(bx - x, by - y);
-        if (d < bd) { bd = d; best = b.k; }
-      }
-      if (!best) return;
-      if (best !== selBand) { selBand = best; paintEQ(true); }
-      drag = { path, k: best, id: e.pointerId }; cv.setPointerCapture(e.pointerId);
-    });
-    cv.addEventListener('pointermove', e => {
-      if (!drag || e.pointerId !== drag.id) return;
-      const [x, y, W, H] = loc(e);
-      const pf = param(drag.path, drag.k + 'f'), pg = param(drag.path, drag.k + 'g');
-      const f = snap(pf, Math.max(pf.lo, Math.min(pf.hi, EQF(Math.max(0, Math.min(1, x / W))))));
-      const g = snap(pg, Math.max(pg.lo, Math.min(pg.hi, (H / 2 - y) / (H / 2 - 8) * DBR)));
-      nodeSend(drag.path, drag.k + 'f', f, false); nodeSend(drag.path, drag.k + 'g', g, false);
-      painters.eq.forEach(fn => fn()); drawEQ();
-    });
-    const end = e => {
-      if (!drag || e.pointerId !== drag.id) return;
-      const f = param(drag.path, drag.k + 'f'), g = param(drag.path, drag.k + 'g');
-      if (f) nodeSend(drag.path, drag.k + 'f', f.value, true); if (g) nodeSend(drag.path, drag.k + 'g', g.value, true);
-      drag = null;
-    };
-    cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
-  })();
-
   // tabs
   function selectTab(t) {
     curTab = t;
     document.querySelectorAll('#sh-tabs .tab').forEach(b => b.classList.toggle('sel', b.dataset.tab === t));
     document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('sel', p.id === 'tab-' + t));
-    if (t !== 'input') { painters[t] = []; fetchNode(t); }
+    if (PROC.includes(t)) { painters[t] = []; fetchNode(t); }
+    paintPage(); pageMeters();
+    if (t === 'eq') drawEQ();
   }
   document.querySelectorAll('#sh-tabs .tab').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
   async function paintTabDots() {           // EQ/gate/comp on-state dots, fetched once per sheet open
     for (const t of (sheetRow ? procTabs(sheetRow) : [])) { if (!NODE[nodePath(t)]) await fetchNode(t); }
     document.querySelectorAll('#sh-tabs .tab').forEach(b => {
-      const t = b.dataset.tab; if (t === 'input') return;
-      const on = param(nodePath(t), 'on'); b.querySelector('.dot').classList.toggle('on', !!(on && on.value));
+      const t = b.dataset.tab, dot = b.querySelector('.dot'); if (!dot) return;
+      const on = param(nodePath(t), 'on'); dot.classList.toggle('on', !!(on && on.value));
     });
   }
 
@@ -3701,6 +3781,7 @@
     return false;
   }
   function cvA(cs) {
+    if (cs.ax) return cs.ax();
     const b = `/${cs.k}/${cs.n}`, T = cs.pinned ? null : CV.sof, base = { b, solo: b + '/$solo' };
     if (!T) return { ...base, lvl: b + '/fdr', mute: b + '/mute' };
     if (!cvCanSend(cs.k)) return null;
@@ -3810,6 +3891,7 @@
     S[A.lvl] = d; cs.db.textContent = fmtDb(d);
     sendThrottled(A.lvl, d, final);
     for (const o of cvAll()) if (o !== cs && !o.drag) { const B = cvA(o); if (B && B.lvl === A.lvl) cvPaint(o); }
+    if (sheetRow && (cs.ax || cs === CP.side)) paintOverview();
   }
   function cvMuteTap(cs) {
     const A = cvA(cs); if (!A) return;
@@ -3818,15 +3900,17 @@
     if (A.send) { const v = S[A.on] === 0 ? 1 : 0; S[A.on] = v; postSet(A.on, v); }
     else if (cs.k === 'ch' || cs.k === 'aux') { const r = rowIndex[b + '/']; if (r) toggleChMute(r); }
     else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); if (cs.k === 'bus') paintBusSum(); }
-    cvRepaint(b);
+    cvRepaint(b); cvPaint(cs);
+    if (sheetRow) paintPage();
   }
   function cvSoloTap(cs) {
-    const a = `/${cs.k}/${cs.n}/$solo`, v = S[a] ? 0 : 1;
+    const a = cvA(cs) ? cvA(cs).solo : `/${cs.k}/${cs.n}/$solo`, v = S[a] ? 0 : 1;
     S[a] = v; postSet(a, v);
     if (cs.k === 'ch' || cs.k === 'aux') { const r = rowIndex[`/${cs.k}/${cs.n}/`]; if (r) paintRow(r); }
-    cvRepaint(`/${cs.k}/${cs.n}`); soloChanged();
+    cvRepaint(`/${cs.k}/${cs.n}`); cvPaint(cs); soloChanged();
   }
   function cvNameTap(cs) {
+    if (cs.noName) return;
     if (cs.k === 'ch' || cs.k === 'aux') { const r = rowIndex[`/${cs.k}/${cs.n}/`]; if (r && CAP.sheet) openSheet(r); return; }
     if (cs.k === 'bus' || cs.k === 'mtx' || (cs.k === 'main' && CAP.mainsof && cs.n > 1)) cvSelectSof({ k: cs.k, n: cs.n });
   }
@@ -4154,6 +4238,452 @@
     if (CV.on && !ED.open) { CV.profile = cvPickProfile(); cvBuild(); cvPaintCols(); }
   }
   cvBuildCols();
+
+  // ══ v4.0 channel page (Mixing Station style) ═══════════════════════════════════════════════════
+  // The old bottom sheet, full screen: overview tiles across the top (live mini graphs), Config / Gate /
+  // EQ / Comp / Sends / Main pages, the channel's own fader strip (with pan) on the right, prev / next.
+  const CP = { side: null, pan: null, sends: [], mains: [], panKnob: null };
+  const clamp01 = v => Math.max(0, Math.min(1, v));
+
+  // ── rotary knob: relative vertical drag (up = more; Fine in the console view = 1:3), mouse wheel steps ──
+  function makeKnob(onChange) {
+    const el = document.createElement('div'); el.className = 'knob';
+    el.innerHTML = '<svg viewBox="0 0 44 44"><path class="kb"/><path class="kv"/><circle class="kc" cx="22" cy="22" r="12.5"/>'
+      + '<line class="ki" x1="22" y1="22" x2="22" y2="11.5"/></svg>';
+    const kb = el.querySelector('.kb'), kv = el.querySelector('.kv'), ki = el.querySelector('.ki');
+    const pt = a => { const r = a * Math.PI / 180; return `${(22 + 18 * Math.sin(r)).toFixed(2)} ${(22 - 18 * Math.cos(r)).toFixed(2)}`; };
+    const arc = (a0, a1) => `M ${pt(a0)} A 18 18 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${pt(a1)}`;
+    kb.setAttribute('d', arc(-135, 135));
+    let pos = 0, pid = null, y0 = 0, p0 = 0, eng = false;
+    const draw = () => {
+      const a = -135 + pos * 270;
+      kv.setAttribute('d', pos > 0.003 ? arc(-135, a) : '');
+      ki.setAttribute('transform', `rotate(${a.toFixed(1)} 22 22)`);
+    };
+    el.setPos = p => { if (!eng) { pos = p; draw(); } };
+    el.isDragging = () => eng;
+    el.addEventListener('pointerdown', e => { if (pid !== null) return; pid = e.pointerId; y0 = e.clientY; p0 = pos; eng = false; });
+    el.addEventListener('pointermove', e => {
+      if (e.pointerId !== pid) return;
+      if (!eng) {
+        if (Math.abs(e.clientY - y0) < 3) return;
+        eng = true; el.classList.add('drag'); y0 = e.clientY; p0 = pos;
+        try { el.setPointerCapture(pid); } catch (err) {}
+      }
+      pos = clamp01(p0 + (y0 - e.clientY) / ((typeof CV !== 'undefined' && CV.fine) ? 540 : 180));
+      draw(); onChange(pos, false);
+    });
+    const end = e => {
+      if (e.pointerId !== pid) return;
+      if (eng) onChange(pos, true);
+      pid = null; eng = false; el.classList.remove('drag');
+    };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      pos = clamp01(pos + (e.deltaY < 0 ? 1 : -1) / 100); draw(); onChange(pos, true);
+    }, { passive: false });
+    draw();
+    return el;
+  }
+  // a knob cell bound straight to a console address (filters in the EQ page, pan)
+  function sKnob(box, label, addrFn, lo, hi, log, fmt, step) {
+    const row = document.createElement('div'); row.className = 'gp';
+    row.innerHTML = `<span>${label}</span><div class="fw"></div><output></output>`;
+    const out = row.querySelector('output');
+    const toPos = v => log ? Math.log(v / lo) / Math.log(hi / lo) : (v - lo) / (hi - lo);
+    const toVal = p => log ? lo * Math.pow(hi / lo, p) : lo + p * (hi - lo);
+    const k = makeKnob((p, final) => {
+      const a = addrFn(); if (!a) return;
+      const v = step(toVal(p)); S[a] = v; out.textContent = fmt(v); sendThrottled(a, v, final);
+      if (curTab === 'eq') drawEQ();
+      paintOverview();
+    });
+    row.querySelector('.fw').appendChild(k); box.appendChild(row);
+    const paint = () => { const a = addrFn(), v = a ? S[a] : null; if (!k.isDragging()) k.setPos(typeof v === 'number' ? clamp01(toPos(v)) : 0); out.textContent = fmt(v); };
+    paint();
+    return paint;
+  }
+
+  // ── canvas helper ──
+  function prep(cv) {
+    const dpr = window.devicePixelRatio || 1, W = cv.offsetWidth, H = cv.offsetHeight;
+    if (!W || !H) return null;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    const c = cv.getContext('2d'); if (!c) return null;
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+    return { c, W, H };
+  }
+  const meterRow = () => sheetRow && M && ((sheetRow.kind === 'ch' ? M.cd : M.ad) || [])[sheetRow.n - 1];
+
+  // ── gate / comp transfer curves (input -> output dB, -80..0) ──
+  const TF_LO = -80;
+  const pval = (path, key) => { const p = param(path, key); return p ? p.value : null; };
+  function gateModel(path) {
+    const thr = pval(path, 'thr'); if (typeof thr !== 'number') return null;
+    const range = typeof pval(path, 'range') === 'number' ? pval(path, 'range') : 60;
+    const mode = String(pval(path, 'mode') || pval(path, 'mdl') || 'GATE');
+    const rt = String(pval(path, 'ratio') || '');
+    let ratio = Infinity;
+    if (/^EXP(\d)/.test(mode)) ratio = +mode.slice(3);
+    else if (/^1:/.test(rt)) ratio = parseFloat(rt.slice(2)) || Infinity;
+    return { thr, range, ratio, duck: /DUCK/.test(mode), on: !!pval(path, 'on') };
+  }
+  function gateOut(m, x) {
+    if (m.duck) return x >= m.thr ? x - m.range : x;
+    if (x >= m.thr) return x;
+    return Math.max(m.ratio === Infinity ? -999 : m.thr + (x - m.thr) * m.ratio, x - m.range);
+  }
+  function dynModel(path) {
+    const thr = pval(path, 'thr'); if (typeof thr !== 'number') return null;
+    const ratio = parseFloat(String(pval(path, 'ratio') || '1').trim()) || 1;
+    const knee = typeof pval(path, 'knee') === 'number' ? pval(path, 'knee') : 0;
+    return { thr, ratio, kw: knee * 3, on: !!pval(path, 'on'), exp: String(pval(path, 'mode') || '') === 'EXP' };
+  }
+  function dynOut(m, x) {
+    const d = x - m.thr;
+    if (m.exp) return d >= 0 ? x : m.thr + d * m.ratio;
+    if (m.kw > 0 && Math.abs(d) <= m.kw / 2) return x + (1 / m.ratio - 1) * Math.pow(d + m.kw / 2, 2) / (2 * m.kw);
+    return d <= 0 ? x : m.thr + d / m.ratio;
+  }
+  function drawTF(cv, t, mini) {
+    const g = prep(cv); if (!g) return;
+    const { c, W, H } = g, path = nodePath(t);
+    const m = path && (t === 'gate' ? gateModel(path) : dynModel(path));
+    const pad = mini ? 2 : 26, X = d => pad + (d - TF_LO) / -TF_LO * (W - pad - 6), Y = d => 6 + (-d) / -TF_LO * (H - pad - 6);
+    c.lineWidth = 1; c.strokeStyle = mini ? '#1c2230' : '#232a39'; c.fillStyle = '#6d7488'; c.font = '10px system-ui';
+    for (let d = TF_LO; d <= 0; d += 10) {
+      c.beginPath(); c.moveTo(X(d), Y(0)); c.lineTo(X(d), Y(TF_LO)); c.stroke();
+      c.beginPath(); c.moveTo(X(TF_LO), Y(d)); c.lineTo(X(0), Y(d)); c.stroke();
+      if (!mini && d % 20 === 0) { c.textAlign = 'center'; c.fillText(d, X(d), H - 8); c.textAlign = 'right'; c.fillText(d, pad - 4, Y(d) + 3); }
+    }
+    c.textAlign = 'start';
+    if (!m) return;
+    const f = x => Math.max(TF_LO, t === 'gate' ? gateOut(m, x) : dynOut(m, x));
+    c.beginPath();
+    for (let px = 0; px <= 200; px++) { const x = TF_LO + px / 200 * -TF_LO, y = f(x); px ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y)); }
+    c.lineTo(X(0), Y(TF_LO)); c.lineTo(X(TF_LO), Y(TF_LO)); c.closePath();
+    c.fillStyle = m.on ? 'rgba(242,208,74,.18)' : 'rgba(140,146,166,.12)'; c.fill();
+    c.beginPath();
+    for (let px = 0; px <= 200; px++) { const x = TF_LO + px / 200 * -TF_LO, y = f(x); px ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y)); }
+    c.strokeStyle = m.on ? '#f2d04a' : '#8a92a6'; c.lineWidth = mini ? 1.5 : 2.5; c.setLineDash(m.on ? [] : [5, 4]); c.stroke(); c.setLineDash([]);
+    if (mini) return;
+    const d = meterRow();                                       // live key level: line + dot on the curve
+    if (d && sheetRow) {
+      const key = t === 'gate' ? d[0] : d[2];
+      if (key > TF_LO) {
+        c.strokeStyle = 'rgba(76,217,100,.55)'; c.lineWidth = 1; c.beginPath(); c.moveTo(X(key), Y(0)); c.lineTo(X(key), Y(TF_LO)); c.stroke();
+        c.fillStyle = '#4cd964'; c.beginPath(); c.arc(X(key), Y(f(key)), 5, 0, 2 * Math.PI); c.fill();
+      }
+    }
+    for (const h of tfHandles(t, m)) {
+      c.beginPath(); c.arc(X(h.x), Y(h.y), 11, 0, 2 * Math.PI);
+      c.strokeStyle = '#f2d04a'; c.lineWidth = 3; c.stroke();
+    }
+    cv._map = { X, Y, W, H, pad };
+  }
+  function tfHandles(t, m) {
+    if (!m) return [];
+    if (t === 'gate') return [{ k: 'thr', x: m.thr, y: m.duck ? m.thr - m.range : m.thr },
+                              ...(m.duck ? [] : [{ k: 'range', x: m.thr, y: Math.max(TF_LO, m.thr - m.range) }])];
+    return [{ k: 'thr', x: m.thr, y: m.thr }, { k: 'ratio', x: 0, y: dynOut(m, 0) }];
+  }
+  function tfDrag(t) {
+    const cv = $(t + '-canvas'); let drag = null;
+    const inv = (cv2, px, py) => { const mp = cv2._map; return [TF_LO + (px - mp.pad) / (mp.W - mp.pad - 6) * -TF_LO, -((py - 6) / (mp.H - mp.pad - 6) * -TF_LO)]; };
+    cv.addEventListener('pointerdown', e => {
+      const path = nodePath(t), m = path && (t === 'gate' ? gateModel(path) : dynModel(path)); if (!m || !cv._map) return;
+      const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top, mp = cv._map;
+      let best = null, bd = 34;
+      for (const h of tfHandles(t, m)) { const dd = Math.hypot(mp.X(h.x) - px, mp.Y(h.y) - py); if (dd < bd) { bd = dd; best = h.k; } }
+      if (!best) return;
+      drag = { k: best, id: e.pointerId, path }; try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    cv.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const r = cv.getBoundingClientRect(), [x, y] = inv(cv, e.clientX - r.left, e.clientY - r.top);
+      const p = param(drag.path, drag.k); if (!p) return;
+      let v;
+      if (drag.k === 'thr') v = snap(p, Math.max(p.lo, Math.min(p.hi, x)));
+      else if (drag.k === 'range') { const thr = pval(drag.path, 'thr'); v = snap(p, Math.max(p.lo, Math.min(p.hi, thr - y))); }
+      else {                                                         // comp end point -> nearest ratio option
+        const m = dynModel(drag.path), want = m.thr < 0 ? -m.thr / Math.max(0.01, y - m.thr) : 1;
+        if (p.type !== 'list') return;
+        v = p.opts.reduce((a, o) => Math.abs(parseFloat(o) - want) < Math.abs(parseFloat(a) - want) ? o : a, p.opts[0]);
+        if (v === p.value) return;
+      }
+      nodeSend(drag.path, drag.k, v, false); painters[t].forEach(fn => fn()); drawTF(cv, t);
+    });
+    const end = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const p = param(drag.path, drag.k); if (p) nodeSend(drag.path, drag.k, p.value, true);
+      drag = null; paintOverview();
+    };
+    cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+  }
+  tfDrag('gate'); tfDrag('dyn');
+
+  // ── EQ: bands + the channel filter block (low / high cut with their slopes), each band shaded ──
+  const BAND_COL = X32 ? { 1: '#3d7cf0', 2: '#b45cf0', 3: '#e8c440', 4: '#2fc7b3' }
+                       : { l: '#3d7cf0', 1: '#b45cf0', 2: '#e8c440', 3: '#f08c3a', 4: '#ec4d4d', h: '#2fc7b3' };
+  const FLT_COL = { lc: '#6f8cff', hc: '#3fd08a' };
+  function fltModel() {
+    if (!sheetRow) return [];
+    const b = base(), out = [];
+    const sl = v => { const n = parseInt(v, 10); return n >= 6 ? n / 6 : 2; };
+    if (typeof S[b + '/flt/lc'] === 'number' && typeof S[b + '/flt/lcf'] === 'number')
+      out.push({ k: 'lc', on: !!S[b + '/flt/lc'], f: S[b + '/flt/lcf'], n: sl(S[b + '/flt/lcs']), hp: true });
+    if (CAP.hc && typeof S[b + '/flt/hc'] === 'number' && typeof S[b + '/flt/hcf'] === 'number')
+      out.push({ k: 'hc', on: !!S[b + '/flt/hc'], f: S[b + '/flt/hcf'], n: sl(S[b + '/flt/hcs']), hp: false });
+    return out;
+  }
+  function fltDb(fl, f) {                       // Butterworth magnitude, order n (6 dB/oct per order)
+    const r = Math.pow(f / fl.f, 2 * fl.n);
+    return 10 * Math.log10(fl.hp ? r / (1 + r) : 1 / (1 + r));
+  }
+  function bandOn(b) { return b.f && (b.g || b.type === 'hp' || b.type === 'lp'); }
+  (() => {                                      // LC / HC chips next to the band buttons, bands coloured
+    document.querySelectorAll('#eq-bands .btn').forEach(b => { b.style.borderBottomColor = BAND_COL[b.dataset.b] || ''; });
+    const box = $('eq-flt');
+    [['lc', 'LC'], ...(CAP.hc ? [['hc', 'HC']] : [])].forEach(([k, lab]) => {
+      const b = document.createElement('button'); b.className = 'btn'; b.dataset.b = k; b.textContent = lab;
+      b.style.borderBottomColor = FLT_COL[k];
+      b.addEventListener('click', () => { selBand = k; paintEQ(true); }); box.appendChild(b);
+    });
+  })();
+  function drawEQOn(cv, mini) {
+    const g = prep(cv); if (!g) return;
+    const { c, W, H } = g, path = nodePath('eq');
+    const X = f => EQX(f) * W, Y = d => H / 2 - d / DBR * (H / 2 - (mini ? 2 : 8));
+    c.lineWidth = 1;
+    for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+      c.strokeStyle = mini ? '#1c2230' : '#232a39'; c.beginPath(); c.moveTo(X(f), 0); c.lineTo(X(f), H); c.stroke();
+      if (!mini) { c.fillStyle = '#6d7488'; c.font = '10px system-ui'; c.fillText(f >= 1000 ? f / 1000 + 'k' : f, X(f) + 2, H - 4); }
+    }
+    for (const d of [-12, -6, 0, 6, 12]) {
+      c.strokeStyle = d === 0 ? '#3a4255' : (mini ? '#1c2230' : '#232a39'); c.beginPath(); c.moveTo(0, Y(d)); c.lineTo(W, Y(d)); c.stroke();
+      if (!mini && d) { c.fillStyle = '#6d7488'; c.fillText((d > 0 ? '+' : '') + d, 3, Y(d) - 2); }
+    }
+    const std = path && isStdEQ(path), flts = fltModel();
+    const bands = std ? bandsOf(path) : [], on = std && !!param(path, 'on')?.value, mix = std ? (param(path, 'mix')?.value ?? 100) / 100 : 0;
+    const shade = (fn, col) => {                // one band's own curve, shaded down / up to 0 dB
+      c.beginPath(); c.moveTo(0, Y(0));
+      for (let px = 0; px <= W; px += 3) c.lineTo(px, Y(Math.max(-DBR, Math.min(DBR, fn(EQF(px / W))))));
+      c.lineTo(W, Y(0)); c.closePath(); c.fillStyle = col; c.fill();
+    };
+    if (!mini) {
+      for (const b of bands) if (bandOn(b)) shade(f => bandDb(b.type, b.f, b.g || 0, b.q, f) * (on ? mix : 1), (BAND_COL[b.k] || '#888') + '40');
+      for (const fl of flts) if (fl.on) shade(f => fltDb(fl, f), FLT_COL[fl.k] + '33');
+    }
+    c.beginPath();
+    for (let px = 0; px <= W; px += 2) {
+      const f = EQF(px / W); let d = 0;
+      if (on) { for (const b of bands) if (bandOn(b)) d += bandDb(b.type, b.f, b.g || 0, b.q, f); d *= mix; }
+      for (const fl of flts) if (fl.on) d += fltDb(fl, f);
+      d = Math.max(-DBR - 2, Math.min(DBR + 2, d));
+      if (px === 0) c.moveTo(px, Y(d)); else c.lineTo(px, Y(d));
+    }
+    c.strokeStyle = (on || flts.some(x => x.on)) ? '#f5d33a' : '#8a92a6'; c.lineWidth = mini ? 1.5 : 2.5; c.stroke();
+    if (mini) return;
+    for (const b of bands) {
+      if (!b.f) continue;
+      const x = X(b.f), y = Y(b.g || 0), sel = b.k === selBand;
+      c.beginPath(); c.arc(x, y, sel ? 12 : 9, 0, 2 * Math.PI);
+      c.fillStyle = BAND_COL[b.k] || '#888'; c.globalAlpha = on ? 1 : .5; c.fill(); c.globalAlpha = 1;
+      if (sel) { c.strokeStyle = '#fff'; c.lineWidth = 2.5; c.stroke(); }
+      c.fillStyle = '#fff'; c.font = 'bold 10px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(b.k === 'l' ? 'L' : b.k === 'h' ? 'H' : b.k, x, y + .5); c.textAlign = 'start'; c.textBaseline = 'alphabetic';
+    }
+    for (const fl of flts) {
+      const x = X(fl.f), y = Y(-DBR * 0.72), sel = fl.k === selBand;
+      c.beginPath(); c.arc(x, y, sel ? 12 : 9, 0, 2 * Math.PI);
+      c.fillStyle = FLT_COL[fl.k]; c.globalAlpha = fl.on ? 1 : .35; c.fill(); c.globalAlpha = 1;
+      if (sel) { c.strokeStyle = '#fff'; c.lineWidth = 2.5; c.stroke(); }
+      c.fillStyle = '#04120a'; c.font = 'bold 9px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(fl.k.toUpperCase(), x, y + .5); c.textAlign = 'start'; c.textBaseline = 'alphabetic';
+    }
+  }
+  function drawEQ() { if (sheetRow && curTab === 'eq') drawEQOn($('eq-canvas'), false); }
+  // drag: bands x = frequency, y = gain; LC / HC x = cut-off
+  (() => {
+    const cv = $('eq-canvas'); let drag = null;
+    const loc = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top, r.width, r.height]; };
+    const fltAddr = k => base() + '/flt/' + (k === 'lc' ? 'lcf' : 'hcf');
+    cv.addEventListener('pointerdown', e => {
+      const path = nodePath('eq'); if (!sheetRow) return;
+      const [x, y, W, H] = loc(e); let best = null, bd = 30;
+      const Yp = d => H / 2 - d / DBR * (H / 2 - 8);
+      if (path && isStdEQ(path)) for (const b of bandsOf(path)) {
+        const dd = Math.hypot(EQX(b.f) * W - x, Yp(b.g || 0) - y); if (dd < bd) { bd = dd; best = b.k; }
+      }
+      for (const fl of fltModel()) { const dd = Math.hypot(EQX(fl.f) * W - x, Yp(-DBR * 0.72) - y); if (dd < bd) { bd = dd; best = fl.k; } }
+      if (!best) return;
+      if (best !== selBand) { selBand = best; paintEQ(true); }
+      drag = { path, k: best, id: e.pointerId }; try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    cv.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const [x, y, W, H] = loc(e);
+      if (drag.k === 'lc' || drag.k === 'hc') {
+        const [lo, hi] = drag.k === 'lc' ? CAP.lcf : [X32 ? 200 : 50, 20000], a = fltAddr(drag.k);
+        const v = Math.round(Math.max(lo, Math.min(hi, EQF(clamp01(x / W)))));
+        S[a] = v; sendThrottled(a, v, false); painters.eq.forEach(fn => fn()); drawEQ(); return;
+      }
+      const pf = param(drag.path, drag.k + 'f'), pg = param(drag.path, drag.k + 'g');
+      const f = snap(pf, Math.max(pf.lo, Math.min(pf.hi, EQF(clamp01(x / W)))));
+      const g = snap(pg, Math.max(pg.lo, Math.min(pg.hi, (H / 2 - y) / (H / 2 - 8) * DBR)));
+      nodeSend(drag.path, drag.k + 'f', f, false); nodeSend(drag.path, drag.k + 'g', g, false);
+      painters.eq.forEach(fn => fn()); drawEQ();
+    });
+    const end = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      if (drag.k === 'lc' || drag.k === 'hc') { const a = fltAddr(drag.k); if (typeof S[a] === 'number') sendThrottled(a, S[a], true); }
+      else {
+        const f = param(drag.path, drag.k + 'f'), g = param(drag.path, drag.k + 'g');
+        if (f) nodeSend(drag.path, drag.k + 'f', f.value, true); if (g) nodeSend(drag.path, drag.k + 'g', g.value, true);
+      }
+      drag = null; paintOverview();
+    };
+    cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+  })();
+  function fltControls(box, k) {               // band controls for LC / HC: On, frequency, slope
+    const b = base(), on = document.createElement('div'); on.className = 'gp';
+    on.innerHTML = `<span>${k === 'lc' ? 'Low cut' : 'High cut'}</span><button class="btn"></button><div></div>`;
+    const bt = on.querySelector('button');
+    bt.addEventListener('click', () => { const a = base() + '/flt/' + k, v = S[a] ? 0 : 1; S[a] = v; postSet(a, v); paintSheet(); paintEQ(false); });
+    box.appendChild(on);
+    const [lo, hi] = k === 'lc' ? CAP.lcf : [X32 ? 200 : 50, 20000];
+    const fk = sKnob(box, 'Freq', () => base() && base() + '/flt/' + (k === 'lc' ? 'lcf' : 'hcf'), lo, hi, true, fmtHz, v => Math.round(v));
+    const sp = document.createElement('div'); sp.className = 'gp';
+    sp.innerHTML = '<span>Slope</span><select></select><div></div>';
+    const sel = sp.querySelector('select');
+    slopeOpts(k).forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o + ' dB/oct'; sel.appendChild(op); });
+    sel.addEventListener('change', () => { const a = base() + '/flt/' + k + 's'; S[a] = sel.value; postSet(a, sel.value); drawEQ(); paintOverview(); });
+    if (slopeOpts(k).length) box.appendChild(sp);
+    return () => {
+      const v = !!S[base() + '/flt/' + k]; bt.classList.toggle('on', v); bt.textContent = v ? 'ON' : 'OFF'; fk();
+      const s = S[base() + '/flt/' + k + 's']; if (s != null && document.activeElement !== sel) sel.value = String(parseInt(s, 10));
+    };
+  }
+  const slopeOpts = k => k === 'lc' ? (X32 ? ['12', '18', '24'] : ['6', '12', '18', '24']) : (X32 ? [] : ['6', '12']);
+
+  // ── overview tiles ──
+  function paintOverview() {
+    if (!sheetRow) return;
+    const b = base(), sb = srcBase();
+    const flag = (t, on, cls) => `<b class="${on ? (cls || 'on') : ''}">${t}</b>`;
+    $('ov-flags').innerHTML = (sb && typeof S[sb + '/vph'] === 'number' ? flag('+48V', S[sb + '/vph'], 'warn') : '')
+      + (typeof S[b + '/flt/lc'] === 'number' ? flag('LC', S[b + '/flt/lc']) : '')
+      + (CAP.hc && typeof S[b + '/flt/hc'] === 'number' ? flag('HC', S[b + '/flt/hc']) : '')
+      + flag('Ø', S[b + '/in/set/inv']) + (onAlt(sheetRow) ? flag(ALT_TAG, 1, 'warn') : '');
+    $('ov-main').innerHTML = Array.from({ length: NMAIN }, (_, i) => {
+      const on = S[`${b}/main/${i + 1}/on`];
+      return typeof on === 'number' ? flag(X32 ? (i ? 'M/C' : 'LR') : 'M' + (i + 1), on) : '';
+    }).join('');
+    drawEQOn($('ov-eq'), true);
+    for (const t of ['gate', 'dyn']) drawTF($('ov-' + t), t, true);
+    const g = prep($('ov-sends'));                                 // send levels as bars (green = on)
+    if (g) {
+      const { c, W, H } = g, n = NBUS, bw = W / n;
+      for (let i = 1; i <= n; i++) {
+        const lv = S[`${b}/send/${i}/lvl`], on = S[`${b}/send/${i}/on`] !== 0, h = dbToPos(typeof lv === 'number' ? lv : null) * (H - 2);
+        c.fillStyle = on ? '#3ddc5a' : '#4a5163'; c.fillRect((i - 1) * bw + 1, H - h, Math.max(1, bw - 2), h);
+      }
+    }
+  }
+
+  // ── sends / main pages + the channel's own strip (with pan) ──
+  function pageStrip(key, box, ax) {
+    const cs = cvStrip(key, box, true); cs.ax = ax; cs.noName = true; return cs;
+  }
+  function buildPageStrips(r) {
+    const cb = `/${r.kind}/${r.n}`;
+    const sb = $('sends-strips'); sb.innerHTML = '';
+    CP.sends = [];
+    for (let i = 1; i <= NBUS; i++)
+      CP.sends.push(pageStrip(`bus/${i}`, sb, () => ({ b: `/bus/${i}`, solo: `/bus/${i}/$solo`, lvl: `${cb}/send/${i}/lvl`, on: `${cb}/send/${i}/on`, send: true })));
+    if (MTXSRC.includes(r.kind)) for (let i = 1; i <= NMTX; i++)
+      CP.sends.push(pageStrip(`mtx/${i}`, sb, () => ({ b: `/mtx/${i}`, solo: `/mtx/${i}/$solo`, lvl: `${cb}/send/MX${i}/lvl`, on: `${cb}/send/MX${i}/on`, send: true })));
+    const mb = $('main-strips'); mb.innerHTML = '';
+    CP.mains = [];
+    for (let i = 1; i <= NMAIN; i++)
+      CP.mains.push(pageStrip(`main/${i}`, mb, () => ({ b: `/main/${i}`, solo: `/main/${i}/$solo`,
+        lvl: (X32 && i === 1) ? cb + '/fdr' : `${cb}/main/${i}/lvl`, on: `${cb}/main/${i}/on`, send: true })));
+    const mp = $('main-pan'); mp.innerHTML = '';
+    CP.panKnob = sKnob(mp, 'Pan', () => base() && base() + '/pan', -100, 100, false, fmtPan, v => Math.round(v));
+    const side = $('sh-side'); side.innerHTML = '';
+    CP.pan = panSlider(side);
+    CP.side = cvStrip(`${r.kind}/${r.n}`, side, true); CP.side.noName = true;
+  }
+  const fmtPan = v => typeof v !== 'number' ? '' : (Math.abs(v) < 0.5 ? 'C' : (v < 0 ? 'L' : 'R') + Math.round(Math.abs(v)));
+  function panSlider(box) {                     // relative horizontal drag, double-tap = centre
+    const el = document.createElement('div'); el.className = 'cp-pn';
+    el.innerHTML = '<div class="pz"></div><div class="pk"></div><output></output>';
+    const pk = el.querySelector('.pk'), out = el.querySelector('output');
+    let pid = null, x0 = 0, v0 = 0, eng = false, last = 0, val = 0;
+    const draw = () => { pk.style.left = ((val + 100) / 2) + '%'; out.textContent = fmtPan(val); };
+    const set = (v, final) => { const a = base() && base() + '/pan'; if (!a) return; val = Math.round(Math.max(-100, Math.min(100, v))); S[a] = val; draw(); sendThrottled(a, val, final); };
+    el.addEventListener('pointerdown', e => { pid = e.pointerId; x0 = e.clientX; v0 = val; eng = false; });
+    el.addEventListener('pointermove', e => {
+      if (e.pointerId !== pid) return;
+      if (!eng) { if (Math.abs(e.clientX - x0) < 4) return; eng = true; el.classList.add('drag'); x0 = e.clientX; try { el.setPointerCapture(pid); } catch (err) {} }
+      set(v0 + (e.clientX - x0) / (el.getBoundingClientRect().width || 1) * 200 * (CV.fine ? 1 / 3 : 1), false);
+    });
+    const end = e => {
+      if (e.pointerId !== pid) return;
+      if (eng) set(val, true);
+      else if (e.type === 'pointerup') { const now = Date.now(); if (now - last < 330) { last = 0; set(0, true); } else last = now; }
+      pid = null; eng = false; el.classList.remove('drag');
+    };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+    box.appendChild(el);
+    return { paint() { const a = base() && base() + '/pan', v = a ? S[a] : null; el.style.visibility = typeof v === 'number' ? '' : 'hidden';
+                       if (!eng && typeof v === 'number') { val = v; draw(); } } };
+  }
+  function paintPage() {
+    if (!sheetRow) return;
+    if (CP.side) cvPaint(CP.side);
+    if (CP.pan) CP.pan.paint();
+    if (CP.panKnob) CP.panKnob();
+    if (curTab === 'sends') CP.sends.forEach(cvPaint);
+    if (curTab === 'main') CP.mains.forEach(cvPaint);
+    for (const k of ['lc', 'hc']) {
+      const sel = $('sh-' + k + 's'), opts = slopeOpts(k), s = S[base() + '/flt/' + k + 's'];
+      if (sel.options.length !== opts.length) { sel.innerHTML = ''; opts.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o + ' dB/oct'; sel.appendChild(op); }); }
+      sel.style.display = (opts.length && s != null) ? '' : 'none';
+      if (s != null && document.activeElement !== sel) sel.value = String(parseInt(s, 10));
+    }
+    paintOverview();
+  }
+  for (const k of ['lc', 'hc']) $('sh-' + k + 's').addEventListener('change', e => {
+    const a = base() && base() + '/flt/' + k + 's'; if (!a) return; S[a] = e.target.value; postSet(a, e.target.value); paintPage();
+  });
+  function pageMeters() {
+    if (!sheetRow) return;
+    const one = cs => { const d = cvMeterOf(cs); cs.mt.classList.toggle('off', d == null);
+      if (d != null) cs.mti.style.height = ((1 - clamp01((d + 60) / 60)) * 100) + '%'; };
+    if (CP.side) one(CP.side);
+    if (curTab === 'sends') CP.sends.forEach(one);
+    if (curTab === 'main') CP.mains.forEach(one);
+    if (curTab === 'gate' || curTab === 'dyn') drawTF($(curTab + '-canvas'), curTab);
+  }
+  // prev / next: the console view's current layer, else the classic page's channel order
+  function sheetList() {
+    if (CV.on) {
+      const l = CV.strips.filter(cs => cs.k === 'ch' || cs.k === 'aux').map(cs => rowIndex[`/${cs.k}/${cs.n}/`]).filter(Boolean);
+      if (l.length) return l;
+    }
+    return domOrder().map(k => rowIndex[`/${k}/`]).filter(Boolean);
+  }
+  function sheetStep(d) {
+    const l = sheetList(); if (!l.length) return;
+    const i = Math.max(0, l.indexOf(sheetRow)), r = l[(i + d + l.length) % l.length], t = curTab;
+    openSheet(r);
+    if (t === 'sends' || t === 'main' || (t !== 'input' && procTabs(r).includes(t))) selectTab(t);
+  }
+  $('sh-prev').addEventListener('click', () => sheetStep(-1));
+  $('sh-next').addEventListener('click', () => sheetStep(1));
+  window.addEventListener('resize', () => { if (sheetRow) { drawEQ(); paintOverview(); if (curTab === 'gate' || curTab === 'dyn') drawTF($(curTab + '-canvas'), curTab); } });
 
   buildRec(); buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll();
   {                                                 // v4.0: ?view=console|classic, else this device's last choice

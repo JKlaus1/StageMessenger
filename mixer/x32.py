@@ -69,6 +69,7 @@ COLOR_MAP = {0: 0, 1: 9, 2: 5, 3: 7, 4: 2, 5: 11, 6: 4, 7: 18}
 KINDS = {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'mtx': N_MTX, 'main': N_MAIN, 'dca': N_DCA}
 PAN_KINDS = ('ch', 'aux', 'bus')                 # v4.0: mix/pan 0..1 -> canonical -100..+100
 MTX_SRC = ('bus', 'main')                        # v4.0: who sends to a matrix (mix/01-06)
+HP_SLOPES = ('12', '18', '24')                   # v4.0: preamp/hpslope 0..2 -> canonical flt/lcs (dB/oct)
 GAIN_RANGE, LCF_RANGE = (-12.0, 60.0), (20.0, 400.0)
 SRC_LABEL = {'LCL': 'Local', 'A': 'AES A', 'B': 'AES B', 'CRD': 'Card', 'AUX': 'Aux', 'USB': 'USB', 'FX': 'FX',
              'BUS': 'Bus', 'TB': 'Talkback'}
@@ -380,6 +381,8 @@ class X32:
                 if kind == 'ch':
                     add(f'{rb}/preamp/hpon', lambda r=rb, c=cb: [(c + '/flt/lc', 1 if self.raw.get(r + '/preamp/hpon') else 0)])
                     add(f'{rb}/preamp/hpf', lambda r=rb, c=cb: [(c + '/flt/lcf', self._lcf(r))])
+                    add(f'{rb}/preamp/hpslope', lambda r=rb, c=cb: [(c + '/flt/lcs', HP_SLOPES[self.raw.get(r + '/preamp/hpslope')]
+                                                                        if self.raw.get(r + '/preamp/hpslope') in (0, 1, 2) else None)])
                 add(f'/-ha/{ha_slot(kind, n):02d}/index', self._d_headamps)
         for h in range(128):
             add(f'/headamp/{h:03d}/gain', self._d_headamps)
@@ -414,7 +417,7 @@ class X32:
                     a += [f'{rb}/config/source',
                           f'{rb}/preamp/trim', f'{rb}/preamp/invert', f'/-ha/{ha_slot(kind, n):02d}/index']
                 if kind == 'ch':
-                    a += [f'{rb}/preamp/hpon', f'{rb}/preamp/hpf']
+                    a += [f'{rb}/preamp/hpon', f'{rb}/preamp/hpf', f'{rb}/preamp/hpslope']
         a += [f'/headamp/{h:03d}/{k}' for h in range(128) for k in ('gain', 'phantom')]
         a += REC_RAW
         for kind in ('ch', 'aux'):
@@ -743,8 +746,8 @@ class X32:
             return [rb + '/preamp/trim']
         if leaf == 'in/set/inv' and kind in ('ch', 'aux'):
             return [rb + '/preamp/invert']
-        if leaf in ('flt/lc', 'flt/lcf') and kind == 'ch':
-            return [rb + ('/preamp/hpon' if leaf == 'flt/lc' else '/preamp/hpf')]
+        if leaf in ('flt/lc', 'flt/lcf', 'flt/lcs') and kind == 'ch':
+            return [rb + {'flt/lc': '/preamp/hpon', 'flt/lcf': '/preamp/hpf', 'flt/lcs': '/preamp/hpslope'}[leaf]]
         if leaf.startswith('in/') and kind in ('ch', 'aux'):
             return [rb + '/config/source']
         if leaf.startswith('send/') and kind in ('ch', 'aux') and leaf.split('/')[1].isdigit():
@@ -818,6 +821,12 @@ class X32:
         if leaf == 'flt/lc' and kind == 'ch':
             v = 1 if int(value) else 0
             self._write(rb + '/preamp/hpon', v)
+            return v
+        if leaf == 'flt/lcs' and kind == 'ch':
+            v = str(value).strip()
+            if v not in HP_SLOPES:
+                return None
+            self._write(rb + '/preamp/hpslope', HP_SLOPES.index(v))
             return v
         if leaf == 'flt/lcf' and kind == 'ch':
             import math
