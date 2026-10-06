@@ -49,14 +49,17 @@ else
   echo "  wireplumber not running in this session -- the rule applies at the next desktop login"
 fi
 
+X32CARD=""
+for c in XLIVE XUSB; do [ -d /proc/asound/$c ] && { X32CARD=$c; break; }; done
 if [ -d /proc/asound/WING ]; then PCM=wing_pi; WHERE="WING USB 1/2 (AUX 1)"
-elif [ -d /proc/asound/XLIVE ]; then PCM=xlive_pi; WHERE="X32 Card in 1/2"
+elif [ -n "$X32CARD" ]; then PCM=xlive_pi; WHERE="X32 Card in 1/2 (hw:$X32CARD)"; export STAGE_RIG_X32_CARD=$X32CARD
 else PCM=""; fi
+echo "  sound cards: $(ls /proc/asound 2>/dev/null | grep -E '^[A-Za-z]' | grep -v -E '^(cards|devices|hwdep|modules|oss|pcm|seq|timers|version)$' | tr '\n' ' ')"
 if [ "$PCM" = "xlive_pi" ]; then
-  RATES=$(grep -h 'Rates:' /proc/asound/XLIVE/stream0 2>/dev/null | sort -u | tr -s ' ' | sed 's/^ //')
-  echo "  X-LIVE reports: ${RATES:-rates unknown}"
+  RATES=$(grep -h 'Rates:' /proc/asound/$X32CARD/stream0 2>/dev/null | sort -u | tr -s ' ' | sed 's/^ //')
+  echo "  $X32CARD reports: ${RATES:-rates unknown}"
   case "$RATES" in *48000*) ok "48 kHz available (asound.conf xlive_dmix uses 48000)";;
-    "") ;; *) bad "X-LIVE is not at 48 kHz -- set the console clock to 48 kHz, or change xlive_dmix rate in mixer/asound.conf";; esac
+    "") ;; *) bad "$X32CARD is not at 48 kHz -- set the console clock to 48 kHz, or change xlive_dmix rate in mixer/asound.conf";; esac
 fi
 say "3. tone test through /etc/asound.conf ${PCM:-?} -> ${WHERE:-no console USB found} (-30 dBFS; the return fader is at -oo, so expect silence)"
 tone() { python3 -c "
@@ -76,7 +79,7 @@ if [ -n "$PCM" ]; then
   R3=$(STAGE_RIG_PCM=$PCM bash -c "$(declare -f tone play); PCM=spotify_out; play 550 1")
   [ "$R3" = "0" ] && ok "spotify_out follows STAGE_RIG_PCM=$PCM (what go-librespot uses)" || bad "spotify_out with STAGE_RIG_PCM=$PCM exit $R3"
 else
-  bad "neither /proc/asound/WING nor /proc/asound/XLIVE exists -- plug the console's USB into the Pi and re-run"
+  bad "no WING / XLIVE / XUSB card in /proc/asound -- plug the console's USB into the Pi and re-run (another name? tell Claude the list above)"
 fi
 
 say "4. go-librespot (download only -- not configured, not started)"

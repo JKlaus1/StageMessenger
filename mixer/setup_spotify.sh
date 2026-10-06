@@ -121,7 +121,7 @@ s = json.load(sys.stdin); t = s.get('track') or {}
 print('  OK   playing:', t.get('name', '?'), '--', ', '.join(t.get('artist_names') or []), '|', t.get('album_name', ''))
 print('       device:', s.get('device_name'), '| volume', s.get('volume'), '/', s.get('volume_steps'), '(fixed: not applied to audio)')"
     sleep 1
-    CARD=WING; [ -d /proc/asound/XLIVE ] && [ ! -d /proc/asound/WING ] && CARD=XLIVE
+    CARD=WING; for c in XLIVE XUSB; do [ -d /proc/asound/$c ] && [ ! -d /proc/asound/WING ] && CARD=$c; done
     if grep -q 'RUNNING' /proc/asound/$CARD/pcm0p/sub0/status 2>/dev/null; then ok "$CARD USB playback stream RUNNING"
     else bad "$CARD USB playback stream not running:"; cat /proc/asound/$CARD/pcm0p/sub0/status 2>&1 | head -5; fi
     echo "  output: $(grep STAGE_RIG_PCM "$CFG/console.env" 2>/dev/null || echo 'STAGE_RIG_PCM unset -> wing_pi (default)')"

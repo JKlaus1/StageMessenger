@@ -129,30 +129,35 @@ class Spotify:
         except ValueError:
             self.aux = 1
 
-    def set_console(self, console):
-        """Point go-librespot at this console's USB (STAGE_RIG_PCM in console.env) and pin its strip.
-        Restarts go-librespot only when the pcm actually changes (playback stops; the login is kept)."""
+    def set_console(self, console, card=''):
+        """Point go-librespot at this console's USB (STAGE_RIG_PCM + STAGE_RIG_X32_CARD in console.env) and
+        pin its strip. Restarts go-librespot only when those actually change (playback stops; login kept).
+        `card` = the X32's ALSA card id (XLIVE / XUSB), from Mixer.x32_card()."""
         console = console if console in self.pcm_map else 'wing'
         self.console = console
         self._apply_strip()
         pcm = self.pcm_map[console]
+        card = (card or 'XLIVE') if console == 'x32' else ''
         path = os.path.join(self.config_dir, ENV_FILE)
         try:
             with open(path) as f:
                 cur = f.read()
         except FileNotFoundError:
             cur = ''
-        had = None
+        had, had_card = None, ''
         for line in cur.splitlines():
             if line.startswith('STAGE_RIG_PCM='):
                 had = line.split('=', 1)[1].strip()
-        if had == pcm:
+            elif line.startswith('STAGE_RIG_X32_CARD='):
+                had_card = line.split('=', 1)[1].strip()
+        if had == pcm and (console != 'x32' or had_card == card):
             return
         try:
             os.makedirs(self.config_dir, exist_ok=True)
             tmp = path + '.tmp'
             with open(tmp, 'w') as f:
-                f.write(f'# written by mixer/spotify.py for the connected console -- do not edit\nSTAGE_RIG_PCM={pcm}\n')
+                f.write(f'# written by mixer/spotify.py for the connected console -- do not edit\nSTAGE_RIG_PCM={pcm}\n'
+                        + (f'STAGE_RIG_X32_CARD={card}\n' if card else ''))
             os.replace(tmp, path)
         except Exception as e:
             print(f'[mixer] spotify: could not write {path}: {e}', flush=True)
@@ -160,7 +165,8 @@ class Spotify:
         if had is None and pcm == PCM['wing']:
             print(f'[mixer] spotify: output {pcm} ({console}) -- {ENV_FILE} created, go-librespot default already matches', flush=True)
             return                                    # first run on a WING: the asound.conf default is wing_pi anyway
-        print(f'[mixer] spotify: output -> {pcm} ({console}, was {had or "default"}) -- restarting go-librespot', flush=True)
+        print(f'[mixer] spotify: output -> {pcm}{" on hw:" + card if card else ""} ({console}, was {had or "default"}'
+              f'{" on " + had_card if had_card else ""}) -- restarting go-librespot', flush=True)
         try:
             self._systemctl('restart')
             self._note(f'Stage Rig now plays to the {console.upper()}')

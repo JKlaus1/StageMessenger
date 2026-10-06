@@ -56,7 +56,9 @@ DEFAULTS = {
     # listen-back capture per console (v3.9): ALSA device + channel count (both S24_3LE 48 kHz)
     'capture': {
         'wing': {'device': 'hw:WING', 'channels': 48},
-        'x32':  {'device': 'hw:XLIVE', 'channels': 32},
+        # X32 card: device '' = auto -- the first of `cards` present in /proc/asound (X-LIVE enumerates as
+        # XLIVE, X-USB as XUSB); set device to pin one. Also exported as STAGE_RIG_X32_CARD for asound.conf.
+        'x32':  {'device': '', 'channels': 32, 'cards': ['XLIVE', 'XUSB']},
     },
     'bitrate':         '128k',
     # listen-back latency (v1.10)
@@ -332,12 +334,31 @@ class Mixer:
         self._spotify_console()
 
     # ── listen capture per console (v3.9) ──
+    def x32_card(self):
+        """ALSA card id of the X32's USB card (v4.1.1): the first configured name present in /proc/asound,
+        else the first name (XLIVE). Exported as STAGE_RIG_X32_CARD so /etc/asound.conf (xlive_dmix) and
+        go-librespot (via console.env) open the same card."""
+        c = (self.cfg.get('capture') or {}).get('x32') or {}
+        cards = [str(x) for x in (c.get('cards') or DEFAULTS['capture']['x32']['cards'])] or ['XLIVE']
+        found = next((x for x in cards if os.path.isdir(f'/proc/asound/{x}')), cards[0])
+        os.environ['STAGE_RIG_X32_CARD'] = found
+        return found
+
     def _capture(self):
         from .listen import capture_cmd_for
         c = (self.cfg.get('capture') or {}).get(self.console) or DEFAULTS['capture'].get(self.console) \
             or DEFAULTS['capture']['wing']
         ch = int(c.get('channels', 48))
-        return capture_cmd_for(c.get('device', 'hw:WING'), ch), ch
+        dev = c.get('device') or ('hw:' + self.x32_card() if self.console == 'x32' else 'hw:WING')
+        return capture_cmd_for(dev, ch), ch
+
+    def _refresh_x32_card(self):
+        """Console USB plugged in after start / different card: re-point capture + Spotify output."""
+        cmd, ch = self._capture()
+        if cmd != self.listener.capture_cmd:
+            print(f'[mixer] X32 USB card now {cmd[2]} -- capture re-pointed', flush=True)
+            self.listener.set_capture(cmd, ch)
+            self._spotify_console()
 
     def ambient_channel(self):
         """Channel whose input source feeds the ambient listen slot (page choice per console, else config)."""
@@ -447,9 +468,10 @@ class Mixer:
         if not self.spotify:
             return
         sp, console = self.spotify, self.console
+        card = self.x32_card() if console == 'x32' else ''
         def run():
             try:
-                sp.set_console(console)                # may restart go-librespot: keep it off the swap path
+                sp.set_console(console, card)          # may restart go-librespot: keep it off the swap path
             except Exception as e:
                 print(f'[mixer] spotify: set_console failed: {e}', flush=True)
         threading.Thread(target=run, daemon=True, name='spotify-console').start()
@@ -528,6 +550,7 @@ class Mixer:
                 if self.wing.loaded and n % 5 == 0:             # X32 listen block: re-check every ~15 s
                     try:
                         self.ensure_patch()
+                        self._refresh_x32_card()
                     except Exception as e:
                         print(f'[mixer] x32 listen patch: {e}', flush=True)
                 continue
