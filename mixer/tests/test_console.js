@@ -48,10 +48,10 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   console.log('X32 console view (M32C)');
   const snap = JSON.parse(fs.readFileSync(path.join(FX, 'x32.json')));
   const API = JSON.parse(fs.readFileSync(path.join(FX, 'x32_api.json')));
-  let saved = null;
+  let saved = null; const saved_layers = {};
   API['/mixer/api/layouts'] = body => {
     if (body && body.delete) return { ok: true, profiles: {} };
-    saved = body; return { ok: true, profiles: { [body.profile]: { layers: body.layers } } };
+    saved = body; return { ok: true, profiles: { [body.profile]: { layers: body.layers || (saved_layers[body.profile] || []), sof: body.sof || [] } } };
   };
   const P = load(fs.readFileSync(path.join(FX, 'x32.html'), 'utf8'), snap, API);
   await tick(80);
@@ -75,12 +75,13 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
 
   // mute enable
   P.posts.length = 0;
-  d.getElementById('cv-muteen').click(); await tick();
-  check('Mute Enable off', !d.getElementById('cv-muteen').classList.contains('on') && w.localStorage.getItem('mixer.cvMuteEn') === '0');
+  check('Mute Enable off by default (v4.0.5)', !d.getElementById('cv-muteen').classList.contains('on'));
+  check('Fine has no 1:3 sublabel', d.getElementById('cv-fine').textContent === 'FINE');
   strip(d, 'ch/17').querySelector('.cs-mu').click(); await tick();
   check('MUTE ignored while disabled', !P.posts.some(p => p.url === '/mixer/api/mute'));
   check('MUTE EN flashes', d.getElementById('cv-muteen').classList.contains('flash'));
   d.getElementById('cv-muteen').click(); await tick();
+  check('Mute Enable on + remembered', d.getElementById('cv-muteen').classList.contains('on') && w.localStorage.getItem('mixer.cvMuteEn') === '1');
   strip(d, 'ch/17').querySelector('.cs-mu').click(); await tick();
   check('MUTE posts the channel mute (group-aware API)', P.posts.some(p => p.url === '/mixer/api/mute' && p.body.kind === 'ch' && p.body.n === 17));
   check('ch17 lit at once', strip(d, 'ch/17').querySelector('.cs-mu').classList.contains('on'));
@@ -215,6 +216,24 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   d.getElementById('cv-sw-auto').click();
   check('strip width Auto saved', w.localStorage.getItem('mixer.cvAcross') === '0');
 
+  // v4.0.5: bus list editor (settings -> Choose / reorder)
+  d.getElementById('cv-set-btn').click(); await tick();
+  d.getElementById('cv-sof-edit').click(); await tick();
+  check('bus list editor opens with the default list (16 buses + 6 mtx)', d.getElementById('cv-ed').classList.contains('open')
+        && d.querySelectorAll('#cv-ed-cur .cv-it').length === 22 && !d.getElementById('cv-menu').classList.contains('open'));
+  check('bus list editor tabs: Buses, Matrix (X32: no mains)', [...d.querySelectorAll('#cv-ed-tabs .btn')].map(b => b.textContent).join() === 'Buses,Matrix');
+  d.getElementById('cv-ed-clr').click();
+  const pk2 = k => [...d.querySelectorAll('#cv-ed-grid .cv-pk')].find(b => b.querySelector('small').textContent.replace(' ✓', '') === k);
+  pk2('Bus 6').click(); pk2('Bus 2').click();
+  [...d.querySelectorAll('#cv-ed-tabs .btn')].find(b => b.textContent === 'Matrix').click(); pk2('Mtx 1').click();
+  d.getElementById('cv-ed-ok').click(); await tick(60);
+  check('saves sof only (layers untouched)', saved && saved.sof && saved.sof.join() === 'bus/6,bus/2,mtx/1' && !saved.layers, saved);
+  check('right column now LR, Bus 6, Bus 2, Mtx 1 (no section labels)',
+        [...d.querySelectorAll('#cv-c2 .cvbus')].map(b => b.dataset.k + b.dataset.n).join() === '0,bus6,bus2,mtx1' && !d.querySelector('#cv-c2 .cvsec'),
+        [...d.querySelectorAll('#cv-c2 .cvbus')].map(b => b.dataset.k + b.dataset.n));
+  // v4.0.5: video lives in the Listen popup; Watch floats it over the faders
+  d.getElementById('cv-ls-btn').click(); await tick();
+  check('video card in the Listen & video popup', d.getElementById('cam-card').parentElement.id === 'cv-ls-home');
   // name tap opens the channel sheet / selects a bus
   d.querySelectorAll('.cv-ov.open').forEach(o => o.classList.remove('open'));
   d.getElementById('cv-l3').click(); await tick();

@@ -140,6 +140,14 @@ def main():
         check('kept in mixer_state.json under the console', 'Joseph' in st['layouts']['x32'] and 'wing' not in st['layouts'])
         check('snapshot carries the layouts', 'Joseph' in c.get('/mixer/api/state').get_json()['layouts'])
         check('empty profile name refused', c.post('/mixer/api/layouts', json={'profile': '  ', 'layers': lay}).status_code == 400)
+        r = c.post('/mixer/api/layouts', json={'profile': 'Joseph', 'sof': ['bus/6', 'mtx/2', 'bus/6', 'main/2', 'main/1', 'bus/17', 'mtx/7']}).get_json()
+        P = r['profiles']['Joseph']
+        check('v4.0.5 bus list saved + cleaned (X32: no Main SOF, mtx 1-6), layers kept', P.get('sof') == ['bus/6', 'mtx/2']
+              and P['layers'][0]['items'][0] == 'ch/1', P)
+        r = c.post('/mixer/api/layouts', json={'profile': 'Joseph', 'layers': lay}).get_json()
+        check('saving layers keeps the bus list', r['profiles']['Joseph'].get('sof') == ['bus/6', 'mtx/2'])
+        r = c.post('/mixer/api/layouts', json={'profile': 'Joseph', 'sof': []}).get_json()
+        check('empty bus list = default (key dropped)', 'sof' not in r['profiles']['Joseph'])
         c.post('/mixer/api/layouts', json={'profile': 'Presley', 'layers': [{'name': 'P', 'items': ['ch/3']}]})
         check('two profiles side by side', set(c.get('/mixer/api/layouts').get_json()['profiles']) == {'Joseph', 'Presley'})
         c.post('/mixer/api/layouts', json={'profile': 'Presley', 'delete': True})

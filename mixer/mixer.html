@@ -819,6 +819,29 @@
     .cp-chip small { display: block; font-size: .5rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cp-chip.on { border: 2px solid var(--cv-sel); color: var(--cv-sel); background: #1d2a22; }
     .cs-tap { flex: none; width: 100%; padding: 2px; font-size: .58rem; border-radius: 4px; }
+
+    /* v4.0.5: video card fits a phone (no sideways page stretch); floating video over the console view */
+    html, body { max-width: 100%; overflow-x: hidden; }
+    .cam-opts { flex-wrap: wrap; }
+    .cam-opts select { flex: 1 1 7rem; min-width: 0; max-width: 100%; }
+    .cam-opts .sp { display: none; }
+    #cam-card .listen-row select { min-width: 0; }
+    .cam-sync { flex-wrap: wrap; }
+    #cv-float { position: fixed; z-index: 24; left: 8px; top: 3.2rem; width: var(--fw, 62vw); max-width: calc(100vw - 16px);
+      display: none; background: #000; border: 1px solid #343c4f; border-radius: 10px; overflow: hidden; box-shadow: 0 8px 28px rgba(0,0,0,.75); }
+    #cv-float.on { display: block; }
+    .cvf-bar { display: flex; align-items: center; gap: .3rem; padding: .25rem .35rem; background: #151a24; touch-action: none; cursor: move;
+      -webkit-user-select: none; user-select: none; }
+    .cvf-bar span { flex: 1; font-size: .58rem; font-weight: 900; letter-spacing: .1em; color: var(--cv-dim); }
+    .cvf-bar button { border: 1px solid var(--cv-btn-b); background: var(--cv-btn); color: var(--text); border-radius: 6px;
+      min-width: 2.1rem; height: 1.8rem; font-size: .8rem; padding: 0 .4rem; }
+    #cv-float #cam-video { margin-top: 0; border-radius: 0; max-height: 70vh; }
+    #cv-float .cam-ovl { border-radius: 0; }
+    #cv-float .cam-sync, #cv-float .vol-row { display: none; }
+    #cvf-home { position: relative; min-height: 3.2rem; }
+    #cvf-home::before { content: 'Connecting\2026'; position: absolute; left: 0; right: 0; top: 1rem; text-align: center;
+      font-size: .7rem; color: var(--cv-dim); }
+    #cv-float #cam-video.on { position: relative; z-index: 1; }
   </style>
 </head>
 <body>
@@ -1142,7 +1165,7 @@
     <div class="cv-pin" id="cv-pin"></div>
     <div class="cv-col" id="cv-c1">
       <button class="cvb" id="cv-muteen" title="Mute Enable: when off, MUTE / send ON buttons ignore taps">MUTE<small>ENABLE</small></button>
-      <button class="cvb" id="cv-fine" title="Fine: faders move 1/3 as far as your finger">FINE<small>1:3</small></button>
+      <button class="cvb" id="cv-fine" title="Fine: faders move 1/3 as far as your finger">FINE</button>
       <button class="cvb" id="cv-l1" data-l="1" title="Tap: show this layer. Hold: edit it"></button>
       <button class="cvb" id="cv-l2" data-l="2" title="Tap: show this layer. Hold: edit it"></button>
       <button class="cvb" id="cv-l3" data-l="3" title="Tap: show this layer. Hold: edit it"></button>
@@ -1158,6 +1181,8 @@
     <div class="note small" id="cv-prof-note"></div>
     <div class="cv-row"><span>Strips across</span><button class="btn" id="cv-sw-dn">&minus;</button><output id="cv-sw-val"></output><button class="btn" id="cv-sw-up">+</button><button class="btn" id="cv-sw-auto">Auto</button></div>
     <div class="note small">Or pinch the faders with two fingers.</div>
+    <div class="cv-row"><span>Bus list</span><button class="btn" id="cv-sof-edit">Choose / reorder&hellip;</button></div>
+    <div class="note small">The right-hand column (sends on fader) for this layout.</div>
     <div class="cv-row"><button class="btn" id="cv-classic">&#8592; Classic view</button></div>
     <div class="note small">Hold a layer button (1&ndash;3) to choose what is on it. Double-tap a fader for 0 dB. Tap a bus / matrix name to mix its sends on the faders.</div>
   </div></div>
@@ -1166,9 +1191,12 @@
     <div id="cv-mg-home"></div>
   </div></div>
   <div class="cv-ov" id="cv-lsp"><div class="cv-pop">
-    <div class="sh-head"><div><b>Listen</b></div><button class="btn" data-close>&#10005;</button></div>
+    <div class="sh-head"><div><b>Listen &amp; video</b><i>WATCH OPENS A FLOATING VIDEO OVER THE FADERS</i></div><button class="btn" data-close>&#10005;</button></div>
     <div id="cv-ls-home"></div>
   </div></div>
+  <div id="cv-float"><div class="cvf-bar" id="cvf-bar"><span>VIDEO</span>
+    <button id="cvf-size" title="Size">&#8644;</button><button id="cvf-dock" title="Back into the Listen &amp; video panel">&#9662;</button>
+    <button id="cvf-x" title="Stop the video">&#10005;</button></div><div id="cvf-home"></div></div>
   <div class="cv-ov" id="cv-ed"><div class="cv-pop">
     <div class="cv-ed-hd"><button class="btn" id="cv-ed-x">Cancel</button><input id="cv-ed-name" maxlength="12" placeholder="Layer name" autocomplete="off"><button class="btn on" id="cv-ed-ok">Save</button></div>
     <div class="cv-ed-sub" id="cv-ed-sub"></div>
@@ -2822,6 +2850,10 @@
     if (VOL.cam !== 1) audioCtx();                        // inside the tap: lets the volume boost start
     setCamSound(!!(camSt && camSt.audio));                // the video's sound takes over (inside the tap)
     startCam();
+    if (CV.on) {                                           // console view: straight into the floating window
+      camFloat(true);
+      document.querySelectorAll('.cv-ov.open').forEach(o => o.classList.remove('open'));
+    }
   });
 
   // ── pause / live (v3.7): freeze the last frame, drop the connection; Live reconnects at now ──
@@ -2887,10 +2919,11 @@
     const on = pipActive();
     $('cam-pip').classList.toggle('on', on);
     $('cam-pip').title = on ? 'Pop in' : 'Pop out';
-    $('cam-pip-ph').classList.toggle('on', !!pipWin);
+    $('cam-pip-ph').classList.toggle('on', !!pipWin || floatOn);
   }
   async function popOut() {
     const k = pipKind();
+    if (floatOn) { floatOn = false; $('cv-float').classList.remove('on'); }
     try {
       if (k === 'doc') {
         const w = await window.documentPictureInPicture.requestWindow({ width: 480, height: 330 });
@@ -2975,6 +3008,7 @@
   }
   function stopCam(user) {
     camWant = false; cDrops = 0;
+    camFloat(false);
     if (pipActive()) popIn();
     closeCam();
     camVideo.classList.remove('on');
@@ -3824,7 +3858,7 @@
   const CVK = { ch: NCH, aux: NAUX, fxr: NFXR, bus: NBUS, main: NMAIN, mtx: NMTX, dca: NDCA };
   const KLBL = { ch: 'Ch', aux: 'Aux', fxr: 'FX', bus: 'Bus', main: 'Main', mtx: 'Mtx', dca: 'DCA' };
   const CV = { on: false, layer: LS.get('mixer.cvLayer') || '1', sof: null, fine: LS.get('mixer.cvFine') === '1',
-               muteEn: LS.get('mixer.cvMuteEn') !== '0', across: +(LS.get('mixer.cvAcross') || 0) || 0,
+               muteEn: LS.get('mixer.cvMuteEn') === '1', across: +(LS.get('mixer.cvAcross') || 0) || 0,
                strips: [], pin: null, idx: {}, profiles: {}, who: '', profile: 'Default', scroll: {}, built: '', pinch: false };
   const rng = (k, n) => Array.from({ length: n }, (_, i) => `${k}/${i + 1}`);
   const cvTag = (k, n) => (k === 'main' && X32) ? (n === 1 ? 'LR' : 'M/C') : `${KLBL[k]} ${n}`;
@@ -4080,8 +4114,19 @@
   })();
 
   // ── right-hand columns ──
+  function cvSofDefault() {
+    return (CAP.mainsof ? rng('main', NMAIN).slice(1) : []).concat(rng('bus', NBUS), rng('mtx', NMTX));
+  }
+  const sofOk = key => { const [k, n] = String(key).split('/');
+    return (k === 'bus' && +n >= 1 && +n <= NBUS) || (k === 'mtx' && +n >= 1 && +n <= NMTX) || (k === 'main' && CAP.mainsof && +n >= 2 && +n <= NMAIN); };
+  function cvSofList() {
+    const p = CV.profiles[CV.profile], l = ((p && p.sof) || []).filter(sofOk);
+    return l.length ? l : null;                     // null = the default list (with section labels)
+  }
   function cvBuildCols() {
     const c2 = $('cv-c2'); c2.innerHTML = '';
+    const custom = cvSofList();
+    CV.colSig = custom ? custom.join() : '';
     const sec = t => { const d = document.createElement('div'); d.className = 'cvsec'; d.textContent = t; c2.appendChild(d); };
     const add = (k, n) => {
       const b = document.createElement('button'); b.className = 'cvbus'; b.dataset.k = k; b.dataset.n = n;
@@ -4090,12 +4135,17 @@
       c2.appendChild(b);
     };
     add('', 0);
-    if (CAP.mainsof) for (let m = 2; m <= NMAIN; m++) add('main', m);
-    sec('BUSES'); for (let b = 1; b <= NBUS; b++) add('bus', b);
-    if (NMTX) { sec('MATRIX'); for (let m = 1; m <= NMTX; m++) add('mtx', m); }
+    if (custom) custom.forEach(key => { const [k, n] = key.split('/'); add(k, +n); });
+    else {
+      if (CAP.mainsof) for (let m = 2; m <= NMAIN; m++) add('main', m);
+      sec('BUSES'); for (let b = 1; b <= NBUS; b++) add('bus', b);
+      if (NMTX) { sec('MATRIX'); for (let m = 1; m <= NMTX; m++) add('mtx', m); }
+    }
     $('cv-ldca').style.display = NDCA ? '' : 'none';
   }
   function cvPaintCols() {
+    const sl = cvSofList();
+    if ((sl ? sl.join() : '') !== CV.colSig) cvBuildCols();
     const L = cvLayers();
     for (let i = 1; i <= 3; i++) {
       const b = $('cv-l' + i);
@@ -4161,17 +4211,19 @@
     $('view-btn').textContent = on ? 'CLASSIC' : 'CONSOLE';
     $('view-btn').title = on ? 'Back to the classic page' : 'Console view (faders across, layers, sends on fader)';
     if (on) {
-      cvHome($('listen-card'), $('cv-ls-home')); cvHome($('mg-grid'), $('cv-mg-home'));
+      cvHome($('listen-card'), $('cv-ls-home')); cvHome($('cam-card'), $('cv-ls-home')); cvHome($('mg-grid'), $('cv-mg-home'));
       CV.profile = cvPickProfile();
       cvBuild(true); cvPaintCols();
     } else {
-      cvHome($('listen-card'), null); cvHome($('mg-grid'), null);
+      camFloat(false);
+      cvHome($('listen-card'), null); cvHome($('cam-card'), null); cvHome($('mg-grid'), null);
       document.querySelectorAll('.cv-ov.open').forEach(o => o.classList.remove('open'));
       CV.sof = null; paintAll(); paintMeters();
     }
   }
   $('view-btn').addEventListener('click', () => cvEnter(!CV.on, true));
   $('cv-classic').addEventListener('click', () => cvEnter(false, true));
+  $('cv-sof-edit').addEventListener('click', () => { $('cv-menu').classList.remove('open'); cvEdit('sof'); });
   const cvOpen = id => { $(id).classList.add('open'); };
   document.querySelectorAll('.cv-ov').forEach(o => {
     o.addEventListener('click', e => { if (e.target === o || e.target.closest('[data-close]')) { if (o.id === 'cv-ed') cvEdClose(); else o.classList.remove('open'); } });
@@ -4200,8 +4252,9 @@
   $('cv-prof').addEventListener('change', e => {
     CV.profile = e.target.value; LS.set('mixer.cvProfile', CV.profile); cvBuild(); cvPaintCols(); cvPaintMenu();
   });
-  async function cvSaveProfile(name, layers, del) {
-    const x = await postJSON('/mixer/api/layouts', del ? { profile: name, delete: true } : { profile: name, layers });
+  async function cvSaveProfile(name, layers, del, sof) {
+    const body = del ? { profile: name, delete: true } : Object.assign({ profile: name }, layers ? { layers } : {}, sof ? { sof } : {});
+    const x = await postJSON('/mixer/api/layouts', body);
     if (!x) return false;
     try { const j = await x.json(); if (j.profiles) CV.profiles = j.profiles; } catch (e) {}
     return true;
@@ -4210,7 +4263,7 @@
     const nm = (prompt('Name for the new layout (e.g. your name):', '') || '').trim().slice(0, 24);
     if (!nm) return;
     if (CV.profiles[nm] && !confirm(`"${nm}" exists. Use it on this device?`)) return;
-    if (!CV.profiles[nm] && !(await cvSaveProfile(nm, cvLayers()))) return;
+    if (!CV.profiles[nm] && !(await cvSaveProfile(nm, cvLayers(), false, cvSofList() || []))) return;
     CV.profile = nm; LS.set('mixer.cvProfile', nm); cvBuild(); cvPaintCols(); cvPaintMenu();
   });
   $('cv-prof-del').addEventListener('click', async () => {
@@ -4228,13 +4281,17 @@
   const ED = { i: 0, items: [], tab: 'ch', open: false };
   const ED_TABS = [['ch', 'Channels'], ['aux', 'Aux'], ['fxr', 'FX Rtn'], ['bus', 'Buses'], ['main', 'Mains'], ['mtx', 'Matrix'], ['dca', 'DCA']]
     .filter(([k]) => CVK[k] > 0);
-  function cvEdit(i) {
-    const L = cvLayers()[i - 1];
+  const SOF_TABS = [['bus', 'Buses'], ['mtx', 'Matrix'], ...(CAP.mainsof ? [['main', 'Mains']] : [])].filter(([k]) => CVK[k] > 0);
+  const edKeys = t => rng(t, CVK[t]).filter(k => ED.i !== 'sof' || sofOk(k));
+  function cvEdit(i) {                           // i = 1..3 (a layer) or 'sof' (the bus list)
+    const sof = i === 'sof', L = sof ? { name: '', items: cvSofList() || cvSofDefault() } : cvLayers()[i - 1];
     ED.i = i; ED.items = L.items.slice(); ED.open = true;
-    $('cv-ed-name').value = L.name;
-    $('cv-ed-sub').textContent = `Layer ${i} · layout "${CV.profile}" (shared by everyone using it; make your own in ⚙)`;
+    if (sof && !SOF_TABS.some(([k]) => k === ED.tab)) ED.tab = 'bus';
+    if (!sof && !ED_TABS.some(([k]) => k === ED.tab)) ED.tab = 'ch';
+    $('cv-ed-name').value = L.name; $('cv-ed-name').style.visibility = sof ? 'hidden' : '';
+    $('cv-ed-sub').textContent = (sof ? 'Bus list (sends on fader)' : `Layer ${i}`) + ` · layout "${CV.profile}" (shared by everyone using it; make your own in ⚙)`;
     const tabs = $('cv-ed-tabs'); tabs.innerHTML = '';
-    ED_TABS.forEach(([k, lab]) => {
+    (sof ? SOF_TABS : ED_TABS).forEach(([k, lab]) => {
       const b = document.createElement('button'); b.className = 'btn'; b.dataset.t = k; b.textContent = lab;
       b.addEventListener('click', () => { ED.tab = k; cvEdPaint(); }); tabs.appendChild(b);
     });
@@ -4257,7 +4314,7 @@
     });
     document.querySelectorAll('#cv-ed-tabs .btn').forEach(b => b.classList.toggle('sel', b.dataset.t === ED.tab));
     const grid = $('cv-ed-grid'); grid.innerHTML = '';
-    rng(ED.tab, CVK[ED.tab]).forEach(key => {
+    edKeys(ED.tab).forEach(key => {
       const [tag, nm, col] = cvEdLabel(key);
       const b = document.createElement('button'); b.className = 'cv-pk' + (ED.items.includes(key) ? ' in' : '');
       b.innerHTML = '<small></small><span></span>';
@@ -4300,10 +4357,18 @@
     raf = requestAnimationFrame(tick);
   }
   $('cv-ed-x').addEventListener('click', cvEdClose);
-  $('cv-ed-all').addEventListener('click', () => { ED.items = ED.items.concat(rng(ED.tab, CVK[ED.tab]).filter(k => !ED.items.includes(k))); cvEdPaint(); });
+  $('cv-ed-all').addEventListener('click', () => { ED.items = ED.items.concat(edKeys(ED.tab).filter(k => !ED.items.includes(k))); cvEdPaint(); });
   $('cv-ed-clr').addEventListener('click', () => { ED.items = []; cvEdPaint(); });
-  $('cv-ed-def').addEventListener('click', () => { ED.items = cvDefaults()[ED.i - 1].items.slice(); $('cv-ed-name').value = cvDefaults()[ED.i - 1].name; cvEdPaint(); });
+  $('cv-ed-def').addEventListener('click', () => {
+    if (ED.i === 'sof') { ED.items = cvSofDefault(); cvEdPaint(); return; }
+    ED.items = cvDefaults()[ED.i - 1].items.slice(); $('cv-ed-name').value = cvDefaults()[ED.i - 1].name; cvEdPaint();
+  });
   $('cv-ed-ok').addEventListener('click', async () => {
+    if (ED.i === 'sof') {                          // [] = back to the default list
+      const same = ED.items.join() === cvSofDefault().join();
+      if (!(await cvSaveProfile(CV.profile, null, false, same ? [] : ED.items.slice()))) return;
+      cvEdClose(); cvBuildCols(); cvPaintCols(); return;
+    }
     const layers = cvLayers().map(l => ({ name: l.name, items: l.items }));
     layers[ED.i - 1] = { name: $('cv-ed-name').value.trim().slice(0, 12), items: ED.items.slice() };
     if (!(await cvSaveProfile(CV.profile, layers))) return;
@@ -4334,6 +4399,48 @@
     if (CV.on && !ED.open) { CV.profile = cvPickProfile(); cvBuild(); cvPaintCols(); }
   }
   cvBuildCols();
+
+  // ── v4.0.5: floating video over the console view (works on Android / iPad / desktop alike) ──
+  let floatOn = false;
+  const FW = [0.45, 0.62, 0.92];
+  let fwi = Math.max(0, Math.min(2, +(LS.get('mixer.cvFloatW') || 1)));
+  function camFloat(on) {
+    if (on === floatOn) return;
+    floatOn = on;
+    const pop = $('cam-pop'), f = $('cv-float');
+    if (on) {
+      if (pipWin) { try { pipWin.close(); } catch (e) {} }
+      $('cvf-home').appendChild(pop); f.style.setProperty('--fw', Math.round(FW[fwi] * 100) + 'vw'); f.classList.add('on');
+    } else { $('cam-pip-ph').after(pop); f.classList.remove('on'); }
+    paintPip();
+    if (camWant) camVideo.play().catch(() => {});
+  }
+  $('cvf-size').addEventListener('click', () => {
+    fwi = (fwi + 1) % FW.length; LS.set('mixer.cvFloatW', String(fwi));
+    $('cv-float').style.setProperty('--fw', Math.round(FW[fwi] * 100) + 'vw'); cvfClamp();
+  });
+  $('cvf-dock').addEventListener('click', () => { camFloat(false); cvOpen('cv-lsp'); });
+  $('cvf-x').addEventListener('click', () => stopCam(true));
+  function cvfClamp() {
+    const f = $('cv-float'), r = f.getBoundingClientRect();
+    const x = Math.max(4, Math.min(window.innerWidth - r.width - 4, r.left)), y = Math.max(4, Math.min(window.innerHeight - 40, r.top));
+    f.style.left = x + 'px'; f.style.top = y + 'px';
+  }
+  (() => {                                       // drag by the bar
+    const bar = $('cvf-bar'), f = $('cv-float'); let pid = null, dx = 0, dy = 0;
+    bar.addEventListener('pointerdown', e => {
+      if (e.target.closest('button')) return;
+      const r = f.getBoundingClientRect(); pid = e.pointerId; dx = e.clientX - r.left; dy = e.clientY - r.top;
+      try { bar.setPointerCapture(pid); } catch (err) {}
+    });
+    bar.addEventListener('pointermove', e => {
+      if (e.pointerId !== pid) return;
+      f.style.left = (e.clientX - dx) + 'px'; f.style.top = (e.clientY - dy) + 'px';
+    });
+    const end = e => { if (e.pointerId === pid) { pid = null; cvfClamp(); } };
+    bar.addEventListener('pointerup', end); bar.addEventListener('pointercancel', end);
+    window.addEventListener('resize', () => { if (floatOn) cvfClamp(); });
+  })();
 
   // ══ v4.0 channel page (Mixing Station style) ═══════════════════════════════════════════════════
   // The old bottom sheet, full screen: overview tiles across the top (live mini graphs), Config / Gate /

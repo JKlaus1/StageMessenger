@@ -629,7 +629,18 @@ class Mixer:
     def layouts(self):
         return dict((self._state_raw.get('layouts') or {}).get(self.console) or {})
 
-    def save_layout(self, profile, layers=None, delete=False, email=''):
+    def clean_sof(self, items):
+        """v4.0.5: the console view's bus list (sends-on-fader targets) in the user's order."""
+        c = self.caps
+        lim = {'bus': c['nbus'], 'mtx': c.get('nmtx', 0), 'main': c.get('nmain', 2) if c.get('mainsof') else 0}
+        out = []
+        for k in items if isinstance(items, list) else []:
+            m = re.fullmatch(r'(bus|mtx|main)/(\d{1,2})', str(k))
+            if m and (2 if m.group(1) == 'main' else 1) <= int(m.group(2)) <= lim[m.group(1)] and k not in out:
+                out.append(k)
+        return out[:48]
+
+    def save_layout(self, profile, layers=None, delete=False, email='', sof=None):
         name = str(profile or '').strip()[:24]
         if not name:
             return None, 'profile name required'
@@ -641,8 +652,13 @@ class Mixer:
             else:
                 if name not in mine and len(mine) >= MAX_PROFILES:
                     return None, 'too many profiles'
-                ent = {'layers': self.clean_layers(layers)}
-                email = str(email or (mine.get(name) or {}).get('email') or '').strip()[:120]
+                old = mine.get(name) or {}
+                ent = {'layers': self.clean_layers(layers) if layers is not None
+                       else old.get('layers') or self.clean_layers([])}
+                s = self.clean_sof(sof) if sof is not None else old.get('sof') or []
+                if s:
+                    ent['sof'] = s
+                email = str(email or old.get('email') or '').strip()[:120]
                 if email:
                     ent['email'] = email
                 mine[name] = ent
@@ -1416,7 +1432,7 @@ def api_layouts():
     if request.method == 'GET':
         return jsonify(ok=True, console=_mixer.console, profiles=_mixer.layouts(), who=_email())
     d = request.get_json(silent=True) or {}
-    prof, err = _mixer.save_layout(d.get('profile'), d.get('layers'), bool(d.get('delete')), _email())
+    prof, err = _mixer.save_layout(d.get('profile'), d.get('layers'), bool(d.get('delete')), _email(), d.get('sof'))
     if err:
         return jsonify(ok=False, err=err), 400
     return jsonify(ok=True, profiles=prof)
