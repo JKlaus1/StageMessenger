@@ -809,6 +809,16 @@
     .pin.cur { border-color: var(--green); outline: 1px solid var(--green); }
     .tab.sel { border-color: var(--green); color: var(--green); }
     #view-btn { border-color: var(--green); color: var(--green); }
+
+    /* v4.0.3: output-strip pages, group / DCA assignment chips, send tap */
+    #sh-body.outk .cp-in { display: none !important; }
+    #sh-assign[hidden], #sh-outnote[hidden] { display: none; }
+    .cp-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.9rem, 1fr)); gap: 4px; }
+    .cp-chip { min-height: 2.5rem; padding: 2px; border-radius: 6px; border: 1px solid var(--cv-btn-b); background: var(--cv-btn);
+      color: var(--cv-dim); font-size: .72rem; font-weight: 900; line-height: 1.05; overflow: hidden; }
+    .cp-chip small { display: block; font-size: .5rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cp-chip.on { border: 2px solid var(--cv-sel); color: var(--cv-sel); background: #1d2a22; }
+    .cs-tap { flex: none; width: 100%; padding: 2px; font-size: .58rem; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -1031,7 +1041,7 @@
       <div class="cp-page">
       <div class="tabpane sel" id="tab-input">
 
-      <div class="sect">
+      <div class="sect cp-in">
         <div class="label">Source <button class="btn" id="sh-change">Change</button></div>
         <div class="src-line"><div id="sh-src"></div></div>
         <div id="sh-picker" style="display:none">
@@ -1040,7 +1050,7 @@
         </div>
       </div>
 
-      <div class="prows">
+      <div class="prows cp-in">
       <div class="sect cp-box" id="sh-pre">
         <div class="label">Preamp <span id="sh-prename"></span></div>
         <div class="cp-cells">
@@ -1067,6 +1077,12 @@
         </div>
       </div>
       </div>
+      <div class="sect cp-box" id="sh-assign">
+        <div class="label">Mute groups</div><div class="cp-chips" id="sh-mg"></div>
+        <div class="label" style="margin-top:.6rem">DCA</div><div class="cp-chips" id="sh-dca"></div>
+        <div class="note warn" id="sh-asg-note"></div>
+      </div>
+      <div class="note" id="sh-outnote" hidden>EQ and Comp for this strip are on their tiles above.</div>
       </div>
 
       <div class="tabpane" id="tab-eq">
@@ -1428,7 +1444,7 @@
     if (r.master === 'main2') return X32 ? CAP.main2 : 'MAIN 2';
     if (r.master === 'bus') return 'BUS ' + r.bus;
     if (r.master) return mix === 'lr' ? 'MAIN 1' : 'BUS ' + mix;
-    return (r.kind === 'ch' ? 'CH ' : 'AUX ') + r.n;
+    return r.kind === 'ch' ? 'CH ' + r.n : r.kind === 'aux' ? 'AUX ' + r.n : cvTag(r.kind, r.n).toUpperCase();
   }
 
   function paintRow(r) {
@@ -3335,22 +3351,29 @@
   }
   function paintSheetMeter() {
     if (!sheetRow) return;
-    const v = M && (sheetRow.kind === 'ch' ? M.c : M.a)[sheetRow.n - 1];
-    const d = v ? v[0] : null;
+    const k = sheetRow.kind, i = sheetRow.n - 1;
+    const d = !M ? null : k === 'ch' || k === 'aux' ? ((k === 'ch' ? M.c : M.a)[i] || [null])[0]
+      : k === 'bus' ? (M.b || [])[i] : k === 'main' ? (M.m || [])[i] : (M.x || [])[i];
     $('sh-lvc').style.width = d == null ? '100%' : (100 - Math.max(0, Math.min(100, (d + 60) / 60 * 100))) + '%';
     $('sh-lvdb').textContent = d == null ? '' : (d <= -90 ? '−∞' : d + ' dB');
     if (curTab === 'gate' || curTab === 'dyn') paintGR();
     pageMeters();
   }
-  const procTabs = r => r.kind === 'aux' ? CAP.auxproc : ['eq', 'gate', 'dyn'];
+  const OUT = k => k === 'bus' || k === 'main' || k === 'mtx';         // v4.0.3: output strips have a page too
+  const procTabs = r => OUT(r.kind) ? ['eq', 'dyn'] : r.kind === 'aux' ? CAP.auxproc : ['eq', 'gate', 'dyn'];
+  const hasSends = r => r.kind === 'ch' || r.kind === 'aux' || (MTXSRC.includes(r.kind) && NMTX > 0);
+  const hasMains = r => r.kind === 'ch' || r.kind === 'aux' || r.kind === 'bus';
+  const OUTROWS = {};
+  const sheetRowFor = (k, n) => (k === 'ch' || k === 'aux') ? rowIndex[`/${k}/${n}/`] : (OUTROWS[k + n] = OUTROWS[k + n] || { kind: k, n });
   function openSheet(r) {
     sheetRow = r; pickGroup = null; $('sh-picker').style.display = 'none';
-    document.querySelectorAll('#sh-tabs .tab').forEach(b => {
-      b.style.display = (['input', 'sends', 'main'].includes(b.dataset.tab) || procTabs(r).includes(b.dataset.tab)) ? '' : 'none'; });
+    const show = (r.kind === 'main' || r.kind === 'mtx' ? [] : ['input']).concat(procTabs(r), hasSends(r) ? ['sends'] : [], hasMains(r) ? ['main'] : []);
+    document.querySelectorAll('#sh-tabs .tab').forEach(b => { b.style.display = show.includes(b.dataset.tab) ? '' : 'none'; });
+    $('sh-body').classList.toggle('outk', OUT(r.kind));
     for (const k of Object.keys(NODE)) delete NODE[k];
-    if ((selBand === 'lc' || selBand === 'hc') && r.kind === 'aux') selBand = X32 ? '1' : 'l';
+    if ((selBand === 'lc' || selBand === 'hc') && r.kind !== 'ch') selBand = X32 ? '1' : 'l';
     buildPageStrips(r);
-    SH.classList.add('open'); selectTab('input'); paintSheet(); paintTabDots();
+    SH.classList.add('open'); selectTab(show[0]); paintSheet(); paintTabDots();
   }
   function closeSheet() { sheetRow = null; SH.classList.remove('open'); }
   $('sh-close').addEventListener('click', closeSheet);
@@ -3535,7 +3558,7 @@
   }
   function paintGR() {
     if (!sheetRow || !M) return;
-    const d = ((sheetRow.kind === 'ch' ? M.cd : M.ad) || [])[sheetRow.n - 1]; if (!d) return;
+    const d = grRow(); if (!d) return;
     const set = (t, key, gr, lo) => {
       const path = nodePath(t), thr = param(path, 'thr');
       $(t + '-key').querySelector('.g-fill').style.width = Math.max(0, Math.min(100, (key - lo) / -lo * 100)) + '%';
@@ -3550,20 +3573,25 @@
 
   // ── EQ ──
   // WING STD: low/high shelf-or-peak + 4 PEQ.  X32: 4 bands, each with its own type (incl. low/high cut).
-  const BANDS = X32 ? [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']]
-                    : [['l', 'Low'], ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['h', 'High']];
+  function bandList(path) {
+    const six = !!param(path, '5f');
+    if (X32) return (six ? ['1', '2', '3', '4', '5', '6'] : ['1', '2', '3', '4']).map(k => [k, k]);
+    return [['l', 'Low'], ...['1', '2', '3', '4'].concat(six ? ['5', '6'] : []).map(k => [k, k]), ['h', 'High']];
+  }
+  let BANDS = bandList(null);
   const X32_EQT = { PEQ: 'peq', VEQ: 'peq', LShv: 'ls', HShv: 'hs', LCut: 'hp', HCut: 'lp' };
   let selBand = '1';
-  (() => {
-    const box = $('eq-bands');
+  function buildBandButtons() {
+    const box = $('eq-bands'); box.innerHTML = '';
     BANDS.forEach(([k, lab]) => {
       const b = document.createElement('button'); b.className = 'btn'; b.dataset.b = k; b.textContent = lab;
       b.addEventListener('click', () => { selBand = k; paintEQ(true); }); box.appendChild(b);
     });
-  })();
+  }
+  buildBandButtons();
   function isStdEQ(path) {
     const m = param(path, 'mdl');
-    return (X32 || (m && m.value === 'STD')) && BANDS.every(([k]) => param(path, k + 'g') && param(path, k + 'f'));
+    return (X32 || (m && m.value === 'STD')) && bandList(path).every(([k]) => param(path, k + 'g') && param(path, k + 'f'));
   }
   function paintEQ(rebuild) {
     const path = nodePath('eq'), std = isStdEQ(path);
@@ -3576,8 +3604,15 @@
       } else painters.eq.forEach(f => f());
       return;
     }
+    const want = bandList(path);
+    if (want.map(x => x[0]).join() !== BANDS.map(x => x[0]).join()) {
+      BANDS = want; buildBandButtons();
+      if (selBand !== 'lc' && selBand !== 'hc' && !BANDS.some(([k]) => k === selBand)) selBand = BANDS[1] ? BANDS[1][0] : BANDS[0][0];
+      rebuild = true;
+    }
+    document.querySelectorAll('#eq-bands .btn').forEach(b => { b.style.borderBottomColor = BAND_COL[b.dataset.b] || ''; });
     document.querySelectorAll('#eq-bands .btn, #eq-flt .btn').forEach(b => b.classList.toggle('sel', b.dataset.b === selBand));
-    $('eq-flt').style.display = sheetRow && sheetRow.kind === 'aux' ? 'none' : '';
+    $('eq-flt').style.display = sheetRow && sheetRow.kind !== 'ch' ? 'none' : '';
     if (rebuild || !painters.eq.length) {
       const box = $('eq-band-ctl'); box.innerHTML = ''; painters.eq = [];
       const k = selBand;
@@ -3610,14 +3645,25 @@
   }
   const EQX = f => Math.log(f / 20) / Math.log(1000), EQF = x => 20 * Math.pow(1000, x);
   const DBR = 18;
+  function edgeType(v, k) {                     // WING low / high band type: PEQ, SHV, or a cut filter (outputs)
+    if (!v || v === 'PEQ') return { type: 'peq' };
+    if (v === 'SHV') return { type: k === 'l' ? 'ls' : 'hs' };
+    const m = /^(BW|BS|LR)(\d+)$/.exec(v), o = m ? (+m[2]) / 6 : 2, lr = !!m && m[1] === 'LR';
+    return { type: 'flt', hp: k === 'l', n: lr ? o / 2 : o, sq: lr };      // LR = two Butterworths of half the order
+  }
   function bandsOf(path) {
-    return BANDS.map(([k]) => {
+    return bandList(path).map(([k]) => {
       if (X32) return { k, type: X32_EQT[param(path, k + 'type')?.value] || 'peq', f: param(path, k + 'f')?.value,
                         g: param(path, k + 'g')?.value, q: param(path, k + 'q')?.value ?? 1 };
-      const t = k === 'l' ? (param(path, 'leq')?.value === 'SHV' ? 'ls' : 'peq') : k === 'h' ? (param(path, 'heq')?.value === 'SHV' ? 'hs' : 'peq') : 'peq';
-      return { k, type: t, f: param(path, k + 'f')?.value, g: param(path, k + 'g')?.value, q: param(path, k + 'q')?.value ?? 1 };
+      const t = (k === 'l' || k === 'h') ? edgeType(param(path, k + 'eq')?.value, k) : { type: 'peq' };
+      return { k, ...t, f: param(path, k + 'f')?.value, g: param(path, k + 'g')?.value, q: param(path, k + 'q')?.value ?? 1 };
     });
   }
+  function bandMag(b, f) {
+    if (b.type === 'flt') return fltDb({ f: b.f, n: b.n, hp: b.hp }, f) * (b.sq ? 2 : 1);
+    return bandDb(b.type, b.f, b.g || 0, b.q, f);
+  }
+  const bandY = b => b.type === 'flt' ? -DBR * 0.5 : (b.g || 0);
   // tabs
   function selectTab(t) {
     curTab = t;
@@ -3653,6 +3699,7 @@
     if (localSetAt[a] && Date.now() - localSetAt[a] < 500) return;
     S[a] = v;
     cvOnUpd(a);
+    if (sheetRow && OUT(sheetRow.kind) && a.startsWith(`/${sheetRow.kind}/${sheetRow.n}/`)) paintSheet();
     if (a.endsWith('/$solo') && !/^\/(ch|aux)\//.test(a)) soloChanged();
     if (a === '/io/altsw') { paintAlt(); eachRow(paintRow); if (sheetRow) paintSheet(); return; }
     if (a.startsWith('/cards/wlive/auto_')) { paintAlt(); return; }
@@ -3831,7 +3878,7 @@
     if (!T) return { ...base, lvl: b + '/fdr', mute: b + '/mute' };
     if (!cvCanSend(cs.k)) return null;
     const leaf = T.k === 'bus' ? `send/${T.n}` : T.k === 'mtx' ? `send/MX${T.n}` : `main/${T.n}`;
-    return { ...base, lvl: `${b}/${leaf}/lvl`, on: `${b}/${leaf}/on`, send: true };
+    return { ...base, lvl: `${b}/${leaf}/lvl`, on: `${b}/${leaf}/on`, send: true, tap: T.k === 'bus' && !X32 ? `${b}/${leaf}/mode` : null };
   }
 
   // ── strips ──
@@ -3861,6 +3908,7 @@
     const b = `/${cs.k}/${cs.n}`, A = cvA(cs);
     cs.el.classList.toggle('na', !A);
     cs.nmt.textContent = cvName(cs.k, cs.n);
+    cs.lb.textContent = cvTag(cs.k, cs.n) + (A && A.tap && typeof S[A.tap] === 'string' ? ' · ' + S[A.tap] : '');
     const col = colorOf(b);
     cs.nm.style.background = col === 'transparent' ? '' : col;
     cs.nm.style.color = col === 'transparent' ? '' : textOn(col);
@@ -3956,8 +4004,8 @@
   }
   function cvNameTap(cs) {
     if (cs.noName) return;
-    if (cs.k === 'ch' || cs.k === 'aux') { const r = rowIndex[`/${cs.k}/${cs.n}/`]; if (r && CAP.sheet) openSheet(r); return; }
-    if (cs.k === 'bus' || cs.k === 'mtx' || (cs.k === 'main' && CAP.mainsof && cs.n > 1)) cvSelectSof({ k: cs.k, n: cs.n });
+    if (cs.k === 'dca' || !CAP.sheet) return;
+    const r = sheetRowFor(cs.k, cs.n); if (r) openSheet(r);
   }
 
   // ── meters: ch / aux show their output (their input while mixing sends), buses / mains / matrices out ──
@@ -4359,7 +4407,14 @@
     c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
     return { c, W, H };
   }
-  const meterRow = () => sheetRow && M && ((sheetRow.kind === 'ch' ? M.cd : M.ad) || [])[sheetRow.n - 1];
+  function grRow() {                            // [gateKey, gateGR%, dynKey, dynGR% (, X32 dB...)]
+    if (!sheetRow || !M) return null;
+    const k = sheetRow.kind, i = sheetRow.n - 1;
+    if (k === 'ch' || k === 'aux') return ((k === 'ch' ? M.cd : M.ad) || [])[i];
+    const r = ({ bus: M.bd, main: M.md, mtx: M.xd }[k] || [])[i];
+    return r ? [-99, 0, r[0], r[1]] : null;
+  }
+  const meterRow = grRow;
 
   // ── gate / comp transfer curves (input -> output dB, -80..0) ──
   const TF_LO = -80;
@@ -4469,8 +4524,8 @@
   tfDrag('gate'); tfDrag('dyn');
 
   // ── EQ: bands + the channel filter block (low / high cut with their slopes), each band shaded ──
-  const BAND_COL = X32 ? { 1: '#3d7cf0', 2: '#b45cf0', 3: '#e8c440', 4: '#2fc7b3' }
-                       : { l: '#3d7cf0', 1: '#b45cf0', 2: '#e8c440', 3: '#f08c3a', 4: '#ec4d4d', h: '#2fc7b3' };
+  const BAND_COL = X32 ? { 1: '#3d7cf0', 2: '#b45cf0', 3: '#e8c440', 4: '#2fc7b3', 5: '#e05bb0', 6: '#8fd14f' }
+                       : { l: '#3d7cf0', 1: '#b45cf0', 2: '#e8c440', 3: '#f08c3a', 4: '#ec4d4d', 5: '#e05bb0', 6: '#8fd14f', h: '#2fc7b3' };
   const FLT_COL = { lc: '#6f8cff', hc: '#3fd08a' };
   function fltModel() {
     if (!sheetRow) return [];
@@ -4486,7 +4541,7 @@
     const r = Math.pow(f / fl.f, 2 * fl.n);
     return 10 * Math.log10(fl.hp ? r / (1 + r) : 1 / (1 + r));
   }
-  function bandOn(b) { return b.f && (b.g || b.type === 'hp' || b.type === 'lp'); }
+  function bandOn(b) { return b.f && (b.g || b.type === 'hp' || b.type === 'lp' || b.type === 'flt'); }
   (() => {                                      // LC / HC chips next to the band buttons, bands coloured
     document.querySelectorAll('#eq-bands .btn').forEach(b => { b.style.borderBottomColor = BAND_COL[b.dataset.b] || ''; });
     const box = $('eq-flt');
@@ -4517,13 +4572,13 @@
       c.lineTo(W, Y(0)); c.closePath(); c.fillStyle = col; c.fill();
     };
     if (!mini) {
-      for (const b of bands) if (bandOn(b)) shade(f => bandDb(b.type, b.f, b.g || 0, b.q, f) * (on ? mix : 1), (BAND_COL[b.k] || '#888') + '40');
+      for (const b of bands) if (bandOn(b)) shade(f => bandMag(b, f) * (on ? mix : 1), (BAND_COL[b.k] || '#888') + '40');
       for (const fl of flts) if (fl.on) shade(f => fltDb(fl, f), FLT_COL[fl.k] + '33');
     }
     c.beginPath();
     for (let px = 0; px <= W; px += 2) {
       const f = EQF(px / W); let d = 0;
-      if (on) { for (const b of bands) if (bandOn(b)) d += bandDb(b.type, b.f, b.g || 0, b.q, f); d *= mix; }
+      if (on) { for (const b of bands) if (bandOn(b)) d += bandMag(b, f); d *= mix; }
       for (const fl of flts) if (fl.on) d += fltDb(fl, f);
       d = Math.max(-DBR - 2, Math.min(DBR + 2, d));
       if (px === 0) c.moveTo(px, Y(d)); else c.lineTo(px, Y(d));
@@ -4532,7 +4587,7 @@
     if (mini) return;
     for (const b of bands) {
       if (!b.f) continue;
-      const x = X(b.f), y = Y(b.g || 0), sel = b.k === selBand;
+      const x = X(b.f), y = Y(bandY(b)), sel = b.k === selBand;
       c.beginPath(); c.arc(x, y, sel ? 12 : 9, 0, 2 * Math.PI);
       c.fillStyle = BAND_COL[b.k] || '#888'; c.globalAlpha = on ? 1 : .5; c.fill(); c.globalAlpha = 1;
       if (sel) { c.strokeStyle = '#fff'; c.lineWidth = 2.5; c.stroke(); }
@@ -4559,7 +4614,7 @@
       const [x, y, W, H] = loc(e); let best = null, bd = 30;
       const Yp = d => H / 2 - d / DBR * (H / 2 - 8);
       if (path && isStdEQ(path)) for (const b of bandsOf(path)) {
-        const dd = Math.hypot(EQX(b.f) * W - x, Yp(b.g || 0) - y); if (dd < bd) { bd = dd; best = b.k; }
+        const dd = Math.hypot(EQX(b.f) * W - x, Yp(bandY(b)) - y); if (dd < bd) { bd = dd; best = b.k; }
       }
       for (const fl of fltModel()) { const dd = Math.hypot(EQX(fl.f) * W - x, Yp(-DBR * 0.72) - y); if (dd < bd) { bd = dd; best = fl.k; } }
       if (!best) return;
@@ -4577,7 +4632,8 @@
       const pf = param(drag.path, drag.k + 'f'), pg = param(drag.path, drag.k + 'g');
       const f = snap(pf, Math.max(pf.lo, Math.min(pf.hi, EQF(clamp01(x / W)))));
       const g = snap(pg, Math.max(pg.lo, Math.min(pg.hi, (H / 2 - y) / (H / 2 - 8) * DBR)));
-      nodeSend(drag.path, drag.k + 'f', f, false); nodeSend(drag.path, drag.k + 'g', g, false);
+      nodeSend(drag.path, drag.k + 'f', f, false);
+      if ((bandsOf(drag.path).find(b => b.k === drag.k) || {}).type !== 'flt') nodeSend(drag.path, drag.k + 'g', g, false);
       painters.eq.forEach(fn => fn()); drawEQ();
     });
     const end = e => {
@@ -4617,7 +4673,7 @@
     if (!sheetRow) return;
     const b = base(), sb = srcBase();
     const flag = (t, on, cls) => `<b class="${on ? (cls || 'on') : ''}">${t}</b>`;
-    $('ov-flags').innerHTML = (sb && typeof S[sb + '/vph'] === 'number' ? flag('+48V', S[sb + '/vph'], 'warn') : '')
+    $('ov-flags').innerHTML = OUT(sheetRow.kind) ? '' : (sb && typeof S[sb + '/vph'] === 'number' ? flag('+48V', S[sb + '/vph'], 'warn') : '')
       + (typeof S[b + '/flt/lc'] === 'number' ? flag('LC', S[b + '/flt/lc']) : '')
       + (CAP.hc && typeof S[b + '/flt/hc'] === 'number' ? flag('HC', S[b + '/flt/hc']) : '')
       + flag('Ø', S[b + '/in/set/inv']) + (onAlt(sheetRow) ? flag(ALT_TAG, 1, 'warn') : '');
@@ -4645,13 +4701,23 @@
     const cb = `/${r.kind}/${r.n}`;
     const sb = $('sends-strips'); sb.innerHTML = '';
     CP.sends = [];
-    for (let i = 1; i <= NBUS; i++)
-      CP.sends.push(pageStrip(`bus/${i}`, sb, () => ({ b: `/bus/${i}`, solo: `/bus/${i}/$solo`, lvl: `${cb}/send/${i}/lvl`, on: `${cb}/send/${i}/on`, send: true })));
+    const chan = r.kind === 'ch' || r.kind === 'aux';
+    if (chan) for (let i = 1; i <= NBUS; i++) {
+      const cs = pageStrip(`bus/${i}`, sb, () => ({ b: `/bus/${i}`, solo: `/bus/${i}/$solo`, lvl: `${cb}/send/${i}/lvl`, on: `${cb}/send/${i}/on`, send: true }));
+      if (!X32) {                                 // WING send tap: PRE / POST / GRP
+        const sel = document.createElement('select'); sel.className = 'cs-tap';
+        ['PRE', 'POST', 'GRP'].forEach(o => { const op = document.createElement('option'); op.value = op.textContent = o; sel.appendChild(op); });
+        const a = `${cb}/send/${i}/mode`;
+        sel.addEventListener('change', () => { S[a] = sel.value; postSet(a, sel.value); });
+        cs.el.appendChild(sel); cs.tap = { sel, a };
+      }
+      CP.sends.push(cs);
+    }
     if (MTXSRC.includes(r.kind)) for (let i = 1; i <= NMTX; i++)
       CP.sends.push(pageStrip(`mtx/${i}`, sb, () => ({ b: `/mtx/${i}`, solo: `/mtx/${i}/$solo`, lvl: `${cb}/send/MX${i}/lvl`, on: `${cb}/send/MX${i}/on`, send: true })));
     const mb = $('main-strips'); mb.innerHTML = '';
     CP.mains = [];
-    for (let i = 1; i <= NMAIN; i++)
+    if (hasMains(r)) for (let i = 1; i <= NMAIN; i++)
       CP.mains.push(pageStrip(`main/${i}`, mb, () => ({ b: `/main/${i}`, solo: `/main/${i}/$solo`,
         lvl: (X32 && i === 1) ? cb + '/fdr' : `${cb}/main/${i}/lvl`, on: `${cb}/main/${i}/on`, send: true })));
     const mp = $('main-pan'); mp.innerHTML = '';
@@ -4685,12 +4751,48 @@
     return { paint() { const a = base() && base() + '/pan', v = a ? S[a] : null; el.style.visibility = typeof v === 'number' ? '' : 'hidden';
                        if (!eng && typeof v === 'number') { val = v; draw(); } } };
   }
+  (() => {
+    const mk = (box, grp, n) => {
+      for (let i = 1; i <= n; i++) {
+        const b = document.createElement('button'); b.className = 'cp-chip'; b.dataset.g = grp; b.dataset.i = i;
+        b.innerHTML = `${grp === 'M' ? 'MG' : ''}${i}<small></small>`;
+        b.addEventListener('click', () => assignTap(grp, i, b));
+        box.appendChild(b);
+      }
+    };
+    mk($('sh-mg'), 'M', NMG); mk($('sh-dca'), 'D', NDCA);
+  })();
+  const tagsOf = () => String(S[base() + '/tags'] || '').split(',').map(t => t.trim()).filter(Boolean);
+  async function assignTap(grp, i, btn) {
+    if (!sheetRow) return;
+    const r = sheetRow, tag = `#${grp}${i}`, cur = tagsOf(), on = !cur.includes(tag), a = base() + '/tags';
+    S[a] = (on ? cur.concat(tag) : cur.filter(t => t !== tag)).join(','); localSetAt[a] = Date.now(); paintAssign();
+    $('sh-asg-note').textContent = '';
+    const x = await postJSON('/mixer/api/assign', { kind: r.kind, n: r.n, grp, idx: i, on });
+    if (!x) return;
+    try { const j = await x.json(); if (j.ok && typeof j.tags === 'string') S[a] = j.tags; } catch (e) {}
+    paintAssign(); if (r.kind === 'ch' || r.kind === 'aux') paintRow(r); cvRepaint(base());
+  }
+  function paintAssign() {
+    if (!sheetRow) return;
+    const k = sheetRow.kind, can = k === 'ch' || k === 'aux' || k === 'bus';
+    $('sh-assign').hidden = !can; $('sh-outnote').hidden = !OUT(k);
+    if (!can) return;
+    const tags = tagsOf();
+    document.querySelectorAll('#sh-assign .cp-chip').forEach(b => {
+      const g = b.dataset.g, i = +b.dataset.i;
+      b.classList.toggle('on', tags.includes(`#${g}${i}`));
+      const nm = g === 'M' ? S[`/mgrp/${i}/name`] : S[`/dca/${i}/name`];
+      b.querySelector('small').textContent = typeof nm === 'string' ? nm : '';
+    });
+  }
   function paintPage() {
     if (!sheetRow) return;
     if (CP.side) cvPaint(CP.side);
     if (CP.pan) CP.pan.paint();
     if (CP.panKnob) CP.panKnob();
-    if (curTab === 'sends') CP.sends.forEach(cvPaint);
+    if (curTab === 'sends') CP.sends.forEach(cs => { cvPaint(cs); if (cs.tap && typeof S[cs.tap.a] === 'string' && document.activeElement !== cs.tap.sel) cs.tap.sel.value = S[cs.tap.a]; });
+    paintAssign();
     if (curTab === 'main') CP.mains.forEach(cvPaint);
     for (const k of ['lc', 'hc']) {
       const sel = $('sh-' + k + 's'), opts = slopeOpts(k), s = S[base() + '/flt/' + k + 's'];
@@ -4714,17 +4816,19 @@
   }
   // prev / next: the console view's current layer, else the classic page's channel order
   function sheetList() {
+    const out = !!sheetRow && OUT(sheetRow.kind);
     if (CV.on) {
-      const l = CV.strips.filter(cs => cs.k === 'ch' || cs.k === 'aux').map(cs => rowIndex[`/${cs.k}/${cs.n}/`]).filter(Boolean);
+      const l = CV.strips.filter(cs => out ? OUT(cs.k) : (cs.k === 'ch' || cs.k === 'aux')).map(cs => sheetRowFor(cs.k, cs.n)).filter(Boolean);
       if (l.length) return l;
     }
+    if (out) return Array.from({ length: CVK[sheetRow.kind] }, (_, i) => sheetRowFor(sheetRow.kind, i + 1));
     return domOrder().map(k => rowIndex[`/${k}/`]).filter(Boolean);
   }
   function sheetStep(d) {
     const l = sheetList(); if (!l.length) return;
     const i = Math.max(0, l.indexOf(sheetRow)), r = l[(i + d + l.length) % l.length], t = curTab;
     openSheet(r);
-    if (t === 'sends' || t === 'main' || (t !== 'input' && procTabs(r).includes(t))) selectTab(t);
+    if ((t === 'sends' && hasSends(r)) || (t === 'main' && hasMains(r)) || (t !== 'input' && procTabs(r).includes(t))) selectTab(t);
   }
   $('sh-prev').addEventListener('click', () => sheetStep(-1));
   $('sh-next').addEventListener('click', () => sheetStep(1));

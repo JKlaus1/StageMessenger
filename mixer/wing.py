@@ -113,6 +113,7 @@ FLOAT_RANGES = {'g': (-2.5, 45.0), 'trim': (-18.0, 18.0), 'lcf': (20.0, 2000.0),
                 'pan': (-100.0, 100.0)}
 # v4.0: channel filter slopes (list params, dB/oct as text)
 SLOPES = {'lcs': ('6', '12', '18', '24'), 'hcs': ('6', '12')}
+SEND_MODES = ('PRE', 'POST', 'GRP')                          # v4.0.3: /ch/N/send/B/mode
 # Physical input groups and sizes (WING Rack fw 3.1, from /io/in '?')
 SRC_GROUPS = [('LCL', 24), ('A', 48), ('B', 48), ('C', 48), ('SC', 32), ('USB', 48),
               ('CRD', 64), ('MOD', 64), ('PLAY', 4), ('AES', 2)]
@@ -151,7 +152,7 @@ def strip_addrs():
                 a += [f'/ch/{i}/flt/lcs', f'/ch/{i}/flt/hcs']
     for i in range(1, N_BUS + 1):
         a += [f'/bus/{i}/name', f'/bus/{i}/$name', f'/bus/{i}/fdr', f'/bus/{i}/mute',
-              f'/bus/{i}/col', f'/bus/{i}/$col', f'/bus/{i}/$solo', f'/bus/{i}/pan']
+              f'/bus/{i}/col', f'/bus/{i}/$col', f'/bus/{i}/$solo', f'/bus/{i}/pan', f'/bus/{i}/tags']
     for i in range(1, N_MAIN + 1):
         a += [f'/main/{i}/name', f'/main/{i}/$name', f'/main/{i}/fdr', f'/main/{i}/mute',
               f'/main/{i}/col', f'/main/{i}/$col', f'/main/{i}/$solo', f'/main/{i}/pan']
@@ -168,8 +169,16 @@ def strip_addrs():
         for i in range(1, n + 1):
             for b in range(1, N_BUS + 1):
                 a += [f'/{kind}/{i}/send/{b}/lvl', f'/{kind}/{i}/send/{b}/on']
-    # v4.0 (console view): sends to the mains (ch / aux / bus -> Main 1-4) and to the matrices
-    # (ch / aux / bus / main -> MX1-8). Last of all: only sends-on-fader for a main / matrix needs them.
+    return a
+
+
+def extra_addrs():
+    """v4.0 (console view): sends to the mains (ch / aux / bus -> Main 1-4) and to the matrices
+    (ch / aux / bus / main -> MX1-8), send taps. Read AFTER the page is up (it is usable without them)."""
+    a = []
+    for kind, n in (('ch', N_CH), ('aux', N_AUX)):
+        for i in range(1, n + 1):
+            a += [f'/{kind}/{i}/send/{b}/mode' for b in range(1, N_BUS + 1)]
     for kind, n in (('ch', N_CH), ('aux', N_AUX), ('bus', N_BUS)):
         for i in range(1, n + 1):
             for m in range(1, N_MAIN + 1):
@@ -307,6 +316,11 @@ class Wing:
         time.sleep(0.5)
         self.loaded = True
         self.on_loaded()
+        for a in extra_addrs():                     # v4.0.3: console-view extras, after the page is live
+            if not self.connected or self._stop.is_set():
+                return
+            self._send(a)
+            time.sleep(0.002)
 
     # ── public api ──
     def query(self, addr, timeout=0.5):
@@ -340,6 +354,11 @@ class Wing:
             self._send(addr, v)
         elif leaf in ('grp',):
             v = str(value); self._send(addr, v)
+        elif leaf == 'mode' and '/send/' in addr:              # v4.0.3: send tap
+            v = str(value).strip().upper()
+            if v not in SEND_MODES:
+                return None
+            self._send(addr, v)
         elif leaf in SLOPES:
             v = str(value).strip()
             if v not in SLOPES[leaf]:

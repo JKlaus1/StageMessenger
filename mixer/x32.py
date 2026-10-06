@@ -113,7 +113,17 @@ NODE_SPECS = {
             _p('rel', 'dyn/release', 'log', 5, 4000, 'ms', 101), _p('pos', 'dyn/pos', 'list', opts=['PRE', 'POST']),
             _p('mix', 'dyn/mix', 'lin', 0, 100, '%', 21), _p('auto', 'dyn/auto', 'int', 0, 1)] + _key_filter('dyn'),
 }
-NODE_ON = {'ch': ('eq', 'gate', 'dyn'), 'aux': ('eq',)}
+NODE_SPECS['eq6'] = [_p('on', 'eq/on', 'int', 0, 1)] + [x for b in range(1, 7) for x in (      # v4.0.3: bus / mtx / main
+    _p(f'{b}type', f'eq/{b}/type', 'list', opts=EQ_TYPES),
+    _p(f'{b}g', f'eq/{b}/g', 'lin', -15, 15, 'dB', 121),
+    _p(f'{b}f', f'eq/{b}/f', 'log', 20, 20000, 'Hz', 201),
+    _p(f'{b}q', f'eq/{b}/q', 'qlog', 0.3, 10, '', 72))]
+NODE_ON = {'ch': ('eq', 'gate', 'dyn'), 'aux': ('eq',),
+           'bus': ('eq', 'dyn'), 'mtx': ('eq', 'dyn'), 'main': ('eq', 'dyn')}     # v4.0.3: output strips (6-band EQ)
+
+
+def node_specs(kind, blk):
+    return NODE_SPECS['eq6'] if blk == 'eq' and kind in ('bus', 'mtx', 'main') else NODE_SPECS[blk]
 
 # X-LIVE -> the WING-LIVE dialect the page / controller speak (card 1 only; the M32 records to one slot)
 REC_STATES = {0: 'STOP', 1: 'PPAUSE', 2: 'PLAY', 3: 'REC'}
@@ -351,6 +361,7 @@ class X32:
                 add(mix_raw(kind, n, 'on'), lambda k=kind, n=n: self._d_mute(k, n))
                 if kind in ('ch', 'aux', 'bus'):
                     add(f'{rb}/grp/mute', lambda k=kind, n=n: self._d_mute(k, n))
+                    add(f'{rb}/grp/dca', lambda k=kind, n=n: self._d_mute(k, n))
                 add(f'/-stat/solosw/{solo_index(kind, n):02d}',            # v4.0: every strip kind has a solo
                     lambda k=kind, n=n, c=cb: [(c + '/$solo', 1 if self.raw.get(
                         f'/-stat/solosw/{solo_index(k, n):02d}') else 0)])
@@ -410,7 +421,7 @@ class X32:
                 a += [f'{rb}/config/name', f'{rb}/config/color', mix_raw(kind, n, 'fader'), mix_raw(kind, n, 'on'),
                       f'/-stat/solosw/{solo_index(kind, n):02d}']
                 if kind in ('ch', 'aux', 'bus'):
-                    a += [f'{rb}/grp/mute', f'{rb}/mix/st', f'{rb}/mix/mono', f'{rb}/mix/mlevel']
+                    a += [f'{rb}/grp/mute', f'{rb}/grp/dca', f'{rb}/mix/st', f'{rb}/mix/mono', f'{rb}/mix/mlevel']
                 if kind in PAN_KINDS:
                     a.append(f'{rb}/mix/pan')
                 if kind in ('ch', 'aux'):
@@ -458,6 +469,8 @@ class X32:
             return [(cb + '/mute', 0 if on else 1)]
         mask = self.raw.get(rb + '/grp/mute') or 0
         groups = [g for g in range(1, N_MGRP + 1) if mask & (1 << (g - 1))]
+        dmask = self.raw.get(rb + '/grp/dca') or 0
+        dcas = [d for d in range(1, N_DCA + 1) if dmask & (1 << (d - 1))]
         held = bool(set(groups) & self._engaged())
         if on:
             own, st = 0, 0
@@ -466,7 +479,7 @@ class X32:
         else:
             own, st = 1, 1
         out = [(cb + '/mute', own if kind != 'bus' else (0 if on else 1)),
-               (cb + '/tags', ','.join(f'#M{g}' for g in groups))]
+               (cb + '/tags', ','.join([f'#M{g}' for g in groups] + [f'#D{d}' for d in dcas]))]
         if kind != 'bus':
             out.append((cb + '/$mute', st))
         return out
@@ -940,7 +953,7 @@ class X32:
             return []
         kind, n, blk = t
         rb = raw_base(kind, n)
-        specs = NODE_SPECS[blk]
+        specs = node_specs(kind, blk)
         got = self._query_raw([f'{rb}/{sp["raw"]}' for sp in specs], timeout=0.6)
         out = []
         for sp in specs:
@@ -963,7 +976,7 @@ class X32:
         if not t:
             return None, 'bad node'
         kind, n, blk = t
-        sp = next((x for x in NODE_SPECS[blk] if x['key'] == key), None)
+        sp = next((x for x in node_specs(kind, blk) if x['key'] == key), None)
         if not sp:
             return None, 'parameter not writable'
         raw = f'{raw_base(kind, n)}/{sp["raw"]}'
@@ -1024,6 +1037,18 @@ class X32:
         after = self.query(b + '/$mute')
         action = 'override' if before == 2 else 'own'
         return True, action, after
+
+    def assign(self, kind, n, grp, idx, on):
+        """v4.0.3: mute group / DCA membership = bit (idx-1) of /<strip>/grp/mute|dca."""
+        if kind not in ('ch', 'aux', 'bus'):
+            return None, 'no groups on this strip'
+        raw = raw_base(kind, n) + ('/grp/mute' if grp == 'M' else '/grp/dca')
+        cur = self._query_raw([raw], timeout=0.5).get(raw)
+        if not isinstance(cur, int):
+            return None, 'console did not answer'
+        bit = 1 << (idx - 1)
+        self._write(raw, (cur | bit) if on else (cur & ~bit))
+        return self.state.get(f'/{kind}/{n}/tags'), None
 
     def clear_solo(self):
         self._send('/-action/clearsolo', 1)

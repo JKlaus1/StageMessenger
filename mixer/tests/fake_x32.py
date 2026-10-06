@@ -100,6 +100,9 @@ def seed():
         st.update({b + '/config/name': nm, b + '/config/color': 7 if nm else 0, b + '/mix/fader': 0.749756, b + '/mix/on': 0})
     for k in range(1, 81):
         st[f'/-stat/solosw/{k:02d}'] = 0
+    for pre, cnt in (('/ch', 32), ('/auxin', 8), ('/bus', 16)):          # v4.0.3: DCA membership (ch 1-2 in DCA 1)
+        for i in range(1, cnt + 1):
+            st[f'{pre}/{i:02d}/grp/dca'] = 1 if (pre, i) in (('/ch', 1), ('/ch', 2)) else 0
     # v4.0 console view: DCAs, pan, LR / M/C assigns, matrix sends (bus / main -> mtx 1-6)
     for i in range(1, 9):
         st.update({f'/dca/{i}/fader': 0.75 if i < 3 else 0.0, f'/dca/{i}/on': 1,
@@ -129,6 +132,13 @@ def seed():
                    b + '/preamp/hpf': .28, b + '/preamp/hpslope': 2})
         st.update({f'{b}/eq/{k}': v for k, v in eq.items()})
         st.update({f'{b}/gate/{k}': v for k, v in gate.items()})
+        st.update({f'{b}/dyn/{k}': v for k, v in dyn.items()})
+    eq6 = {'on': 1}                               # v4.0.3: output strips -- 6-band EQ + dyn
+    for b6 in range(1, 7):
+        eq6.update({f'{b6}/type': 2, f'{b6}/f': .1 + b6 * .12, f'{b6}/g': .5, f'{b6}/q': .5})
+    eq6['1/type'] = 0                             # band 1 = low cut
+    for b in [f'/bus/{i:02d}' for i in range(1, 17)] + [f'/mtx/{i:02d}' for i in range(1, 7)] + ['/main/st', '/main/m']:
+        st.update({f'{b}/eq/{k}': v for k, v in eq6.items()})
         st.update({f'{b}/dyn/{k}': v for k, v in dyn.items()})
     for i in range(1, 9):
         b = f'/auxin/{i:02d}'

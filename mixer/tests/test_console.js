@@ -207,9 +207,30 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   // name tap opens the channel sheet / selects a bus
   d.querySelectorAll('.cv-ov.open').forEach(o => o.classList.remove('open'));
   d.getElementById('cv-l3').click(); await tick();
-  strip(d, 'bus/5').querySelector('.cs-nm').click(); await tick();
-  check('bus name tap -> sends on fader for it', d.querySelector('#cv-c2 .cvbus[data-k="bus"][data-n="5"]').classList.contains('sel'));
-  d.querySelector('#cv-c2 .cvbus[data-k=""]').click(); await tick();
+  strip(d, 'bus/5').querySelector('.cs-nm').click(); await tick(120);
+  // ── v4.0.3 bus page ──
+  check('bus name tap opens the bus page', d.getElementById('sheet').classList.contains('open') && d.getElementById('sh-tag').textContent === 'BUS 5',
+        d.getElementById('sh-tag').textContent);
+  const vtabs = [...d.querySelectorAll('#sh-tabs .tab')].filter(b => b.style.display !== 'none').map(b => b.dataset.tab).join();
+  check('bus page tiles: config, EQ, comp, sends (matrices), main', vtabs === 'input,eq,dyn,sends,main', vtabs);
+  check('input sections hidden on a bus', d.getElementById('sh-body').classList.contains('outk') && !d.getElementById('sh-assign').hidden);
+  check('bus page side strip = bus 5 fader', d.querySelector('#sh-side .cs').dataset.k === 'bus/5');
+  d.querySelector('#sh-tabs .tab[data-tab="eq"]').click(); await tick(120);
+  check('bus EQ: 6 band buttons', d.querySelectorAll('#eq-bands .btn').length === 6, d.querySelectorAll('#eq-bands .btn').length);
+  check('no LC/HC chips on a bus', d.getElementById('eq-flt').style.display === 'none');
+  d.querySelector('#sh-tabs .tab[data-tab="sends"]').click(); await tick();
+  check('bus sends page = 6 matrices', [...d.querySelectorAll('#sends-strips .cs')].map(e => e.dataset.k).join() === 'mtx/1,mtx/2,mtx/3,mtx/4,mtx/5,mtx/6');
+  P.posts.length = 0;
+  d.querySelector('#sends-strips .cs[data-k="mtx/2"] .cs-mu').click(); await tick();
+  check('bus -> mtx send toggle from the bus page', sets(P, '/bus/5/send/MX2/on').length === 1);
+  d.querySelector('#sh-tabs .tab[data-tab="input"]').click(); await tick();
+  P.posts.length = 0;
+  d.querySelector('#sh-mg .cp-chip[data-i="3"]').click(); await tick();
+  check('bus -> MG 3 assign posts', P.posts.some(p => p.url === '/mixer/api/assign' && p.body.kind === 'bus' && p.body.n === 5 && p.body.grp === 'M'
+        && p.body.idx === 3 && p.body.on === true));
+  d.getElementById('sh-next').click(); await tick(80);
+  check('next on a bus page -> next bus', d.getElementById('sh-tag').textContent === 'BUS 6', d.getElementById('sh-tag').textContent);
+  d.getElementById('sh-close').click();
   d.getElementById('cv-l1').click(); await tick();
   strip(d, 'ch/1').querySelector('.cs-nm').click(); await tick(60);
   check('channel name tap opens the channel sheet', d.getElementById('sheet').classList.contains('open'));
@@ -224,6 +245,14 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   const lcs = d.getElementById('sh-lcs'); lcs.value = '12'; lcs.dispatchEvent(new w.Event('change')); await tick();
   check('slope change posts flt/lcs', sets(P, '/ch/1/flt/lcs').some(p => p.body.v === '12'));
   check('knobs on the config page', d.querySelectorAll('#row-trim .knob').length === 1);
+  check('MG chips: 6 on X32, DCA chips: 8', d.querySelectorAll('#sh-mg .cp-chip').length === 6 && d.querySelectorAll('#sh-dca .cp-chip').length === 8);
+  check('ch1 lit in MG 1+2 and DCA 1', ['1', '2'].every(i => d.querySelector(`#sh-mg .cp-chip[data-i="${i}"]`).classList.contains('on'))
+        && d.querySelector('#sh-dca .cp-chip[data-i="1"]').classList.contains('on'), snap.state['/ch/1/tags']);
+  check('DCA chip carries the DCA name', d.querySelector('#sh-dca .cp-chip[data-i="1"] small').textContent === 'Drums');
+  P.posts.length = 0;
+  d.querySelector('#sh-dca .cp-chip[data-i="4"]').click(); await tick();
+  check('DCA 4 chip posts assign on', P.posts.some(p => p.url === '/mixer/api/assign' && p.body.grp === 'D' && p.body.idx === 4 && p.body.on === true)
+        && d.querySelector('#sh-dca .cp-chip[data-i="4"]').classList.contains('on'));
   d.querySelector('#sh-tabs .tab[data-tab="sends"]').click(); await tick();
   check('sends page: 16 bus strips (X32: no matrix sends from a channel)', d.querySelectorAll('#sends-strips .cs').length === 16,
         d.querySelectorAll('#sends-strips .cs').length);
@@ -269,7 +298,7 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   const wsnap = { conn: true, loaded: true, found: true, ip: '1.2.3.4', feeds: [], feed: 'main1', listen: {}, srcgroups: [], ovr: [], order: [],
     layouts: { Joseph: { email: 'joe@x.com', layers: [{ name: 'BAND', items: ['ch/1', 'ch/2', 'bus/11', 'bus/12'] }] } }, who: 'joe@x.com',
     state: { '/ch/1/name': 'Kick', '/ch/1/fdr': 4.9, '/ch/1/main/2/lvl': -3, '/ch/1/main/2/on': 1, '/ch/1/send/MX3/lvl': -6, '/ch/1/send/MX3/on': 0,
-             '/bus/11/name': 'Reverb', '/bus/11/main/2/lvl': -9, '/main/2/name': 'SUBS', '/dca/1/name': 'guitar', '/dca/1/fdr': -24.8 } };
+             '/bus/11/name': 'Reverb', '/ch/1/send/11/mode': 'POST', '/bus/11/main/2/lvl': -9, '/main/2/name': 'SUBS', '/dca/1/name': 'guitar', '/dca/1/fdr': -24.8 } };
   const Q = load(fs.readFileSync(path.join(FX, 'wing.html'), 'utf8'), wsnap, {});
   await tick(80);
   const D = Q.d;
@@ -281,10 +310,24 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   check('Main 2 SOF: buses can send too', strip(D, 'bus/11').querySelector('.cs-db').textContent === '-9.0' && !strip(D, 'bus/11').classList.contains('na'));
   check('Main 2 pinned', !!strip(D, 'main/2', true));
   D.querySelector('#cv-c2 .cvbus[data-k="mtx"][data-n="3"]').click(); await tick();
+  D.querySelector('#cv-c2 .cvbus[data-k="bus"][data-n="11"]').click(); await tick();
+  check('WING SOF label shows the send tap', strip(D, 'ch/1').querySelector('.cs-lb').textContent === 'Ch 1 · POST',
+        strip(D, 'ch/1').querySelector('.cs-lb').textContent);
+  D.querySelector('#cv-c2 .cvbus[data-k="mtx"][data-n="3"]').click(); await tick();
   check('WING: channels feed matrices', strip(D, 'ch/1').querySelector('.cs-db').textContent === '-6.0' && strip(D, 'ch/1').querySelector('.cs-mu').textContent === 'OFF');
   D.getElementById('cv-ldca').click(); await tick();
   check('WING: 16 DCAs', keys(D).length === 16 && strip(D, 'dca/1').querySelector('.cs-nm').textContent === 'guitar');
   check('DCA greyed while mixing a matrix', strip(D, 'dca/1').classList.contains('na'));
+  D.getElementById('cv-l1').click(); await tick();
+  strip(D, 'ch/1').querySelector('.cs-nm').click(); await tick(80);
+  D.querySelector('#sh-tabs .tab[data-tab="sends"]').click(); await tick();
+  const tapSel = D.querySelector('#sends-strips .cs[data-k="bus/11"] .cs-tap');
+  check('WING sends page: tap select per bus, shows POST', !!tapSel && tapSel.value === 'POST');
+  Q.posts.length = 0;
+  tapSel.value = 'PRE'; tapSel.dispatchEvent(new Q.w.Event('change')); await tick();
+  check('tap change posts /ch/1/send/11/mode', Q.posts.some(p => p.body && p.body.a === '/ch/1/send/11/mode' && p.body.v === 'PRE'));
+  check('WING: 8 MG chips, 16 DCA chips', D.querySelectorAll('#sh-mg .cp-chip').length === 8 && D.querySelectorAll('#sh-dca .cp-chip').length === 16);
+  D.getElementById('sh-close').click();
   check('no script errors (WING)', Q.errors.length === 0, Q.errors);
 
   // classic start: nothing of the console view visible, it builds on first switch

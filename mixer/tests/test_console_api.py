@@ -61,6 +61,27 @@ def main():
         check('ch -> Main 3 refused on X32', setv('/ch/1/main/3/on', 1).status_code == 400)
         check('bus sends 1-16 unaffected', setv('/ch/1/send/2/lvl', -10).get_json()['ok'] and F(fake, '/ch/01/mix/02/level', lambda v: near(v, 0.5, 1e-3)))
 
+        print('X32: output strips + assignments (v4.0.3)')
+        j = c.get('/mixer/api/node?path=/bus/1/eq').get_json()
+        keys = [q['key'] for q in j['params']]
+        check('bus 1 EQ: 6 bands, band 1 LCut', j['ok'] and '6f' in keys and '7f' not in keys
+              and next(q for q in j['params'] if q['key'] == '1type')['value'] == 'LCut', keys)
+        check('main LR dyn node', c.get('/mixer/api/node?path=/main/1/dyn').get_json()['ok'])
+        check('mtx gate refused', c.get('/mixer/api/node?path=/mtx/1/gate').status_code == 400)
+        r = c.post('/mixer/api/nodeset', json={'path': '/bus/2/eq', 'key': '6g', 'value': 6}).get_json()
+        check('bus 2 band 6 +6 dB -> 0.7', r['ok'] and F(fake, '/bus/02/eq/6/g', lambda v: near(v, 0.7, 1e-3)), r)
+        check('ch1 tags carry DCA 1', '#D1' in (g('/ch/1/tags') or ''), g('/ch/1/tags'))
+        r = c.post('/mixer/api/assign', json={'kind': 'ch', 'n': 3, 'grp': 'D', 'idx': 4, 'on': True}).get_json()
+        check('assign ch3 -> DCA 4 (grp/dca bit 3)', r['ok'] and F(fake, '/ch/03/grp/dca', lambda v: v == 8)
+              and wait_for(lambda: '#D4' in (g('/ch/3/tags') or ''), 1), (r, fake.st.get('/ch/03/grp/dca'), g('/ch/3/tags')))
+        r = c.post('/mixer/api/assign', json={'kind': 'bus', 'n': 2, 'grp': 'M', 'idx': 5, 'on': True}).get_json()
+        check('assign bus2 -> MG 5', r['ok'] and F(fake, '/bus/02/grp/mute', lambda v: v == 16))
+        r = c.post('/mixer/api/assign', json={'kind': 'ch', 'n': 1, 'grp': 'D', 'idx': 1, 'on': False}).get_json()
+        check('ch1 out of DCA 1', r['ok'] and F(fake, '/ch/01/grp/dca', lambda v: v == 0))
+        check('assign: DCA 9 refused on X32', c.post('/mixer/api/assign', json={'kind': 'ch', 'n': 1, 'grp': 'D', 'idx': 9, 'on': True}).status_code == 400)
+        check('assign: mtx refused', c.post('/mixer/api/assign', json={'kind': 'mtx', 'n': 1, 'grp': 'M', 'idx': 1, 'on': True}).status_code == 400)
+        check('send tap refused on X32', setv('/ch/1/send/1/mode', 'POST').status_code == 400)
+
         print('X32: console pushes')
         fake.console_set('/dca/4/fader', 0.5)
         check('dca4 moved at the desk -> -10 dB', wait_for(lambda: near(g('/dca/4/fdr'), -10.0), 2), g('/dca/4/fdr'))

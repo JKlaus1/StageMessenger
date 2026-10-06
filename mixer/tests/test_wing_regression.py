@@ -130,6 +130,33 @@ def main():
         html = c.get('/mixer').get_data(as_text=True)
         check('page CAPS = wing', '"console":"wing"' in html and '"nch":40' in html)
         check('node API still served (not 409)', c.get('/mixer/api/node?path=/ch/1/eq').status_code != 409)
+        # v4.0.3: assignments (tags), send tap, output-strip nodes
+        fake.st['/ch/5/tags'] = '#M1,#M2'
+        r = c.post('/mixer/api/assign', json={'kind': 'ch', 'n': 5, 'grp': 'D', 'idx': 3, 'on': True}).get_json()
+        check('assign ch5 -> DCA 3 writes tags', r['ok'] and wait_for(lambda: fake.st.get('/ch/5/tags') == '#M1,#M2,#D3'), (r, fake.st.get('/ch/5/tags')))
+        r = c.post('/mixer/api/assign', json={'kind': 'ch', 'n': 5, 'grp': 'M', 'idx': 2, 'on': False}).get_json()
+        check('assign ch5 out of MG 2', r['ok'] and wait_for(lambda: fake.st.get('/ch/5/tags') == '#M1,#D3'), fake.st.get('/ch/5/tags'))
+        fake.st['/bus/2/tags'] = ''
+        r = c.post('/mixer/api/assign', json={'kind': 'bus', 'n': 2, 'grp': 'M', 'idx': 8, 'on': True}).get_json()
+        check('assign bus 2 -> MG 8', r['ok'] and wait_for(lambda: fake.st.get('/bus/2/tags') == '#M8'))
+        check('DCA 17 refused', c.post('/mixer/api/assign', json={'kind': 'ch', 'n': 5, 'grp': 'D', 'idx': 17, 'on': True}).status_code == 400)
+        mx.overrides['/ch/6'] = ['#M1']
+        check('MG edit refused while overridden here', c.post('/mixer/api/assign', json={'kind': 'ch', 'n': 6, 'grp': 'M', 'idx': 1, 'on': True}).status_code == 409)
+        mx.overrides.pop('/ch/6')
+        r = c.post('/mixer/api/set', json={'a': '/ch/1/send/4/mode', 'v': 'post'}).get_json()
+        check('send tap POST', r['ok'] and r['v'] == 'POST' and wait_for(lambda: fake.st.get('/ch/1/send/4/mode') == 'POST'))
+        check('send tap junk refused', c.post('/mixer/api/set', json={'a': '/ch/1/send/4/mode', 'v': 'SIDE'}).status_code == 400)
+        r = c.post('/mixer/api/set', json={'a': '/ch/1/flt/lcs', 'v': '18'}).get_json()
+        check('low-cut slope 18', r['ok'] and wait_for(lambda: fake.st.get('/ch/1/flt/lcs') == '18'))
+        check('slope 36 refused', c.post('/mixer/api/set', json={'a': '/ch/1/flt/lcs', 'v': '36'}).status_code == 400)
+        check('bus / main / mtx eq + dyn node paths accepted, mtx gate refused',
+              all(c.get(f'/mixer/api/node?path={p}').status_code == 200 for p in ('/bus/16/eq', '/main/4/dyn', '/mtx/8/eq'))
+              and c.get('/mixer/api/node?path=/mtx/1/gate').status_code == 400 and c.get('/mixer/api/node?path=/bus/17/eq').status_code == 400)
+        r = c.post('/mixer/api/set', json={'a': '/ch/2/send/MX3/lvl', 'v': -5}).get_json()
+        check('ch -> matrix send write (WING)', r['ok'] and wait_for(lambda: fake.st.get('/ch/2/send/MX3/lvl') == -5.0))
+        r = c.post('/mixer/api/set', json={'a': '/dca/16/fdr', 'v': 0}).get_json()
+        check('DCA 16 fader write (WING)', r['ok'] and wait_for(lambda: fake.st.get('/dca/16/fdr') == 0.0))
+        check('caps: 4 mains, 16 DCAs', mx.caps['nmain'] == 4 and mx.caps['ndca'] == 16)
         r = c.post('/mixer/api/order', json={'order': ['ch/39', 'ch/1']}).get_json()
         import json as _j
         with open(os.path.join(tmp, 'mixer_state.json')) as f:

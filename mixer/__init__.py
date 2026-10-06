@@ -240,13 +240,14 @@ SETTABLE = re.compile(
     r'|(?:ch|aux|bus)/\d{1,2}/main/[1-4]/(?:lvl|on)'
     r'|(?:ch|aux|bus|main)/\d{1,2}/send/MX[1-8]/(?:lvl|on)'
     r'|ch/\d{1,2}/flt/(?:lcs|hcs)'
+    r'|(?:ch|aux)/\d{1,2}/send/\d{1,2}/mode'
     r'|mgrp/[1-8]/mute'
     r'|(?:ch|aux)/\d{1,2}/(?:in/set/(?:trim|inv)|flt/(?:lc|lcf|hc|hcf))'
     r'|io/in/(?:LCL|A|B|C|SC|USB|CRD|MOD|PLAY|AES)/\d{1,2}/(?:g|vph|pol)'
     r'|io/altsw|cards/wlive/auto_(?:play|rec|stop))$')
 LOGGED_SETS = ('/io/altsw', '/cards/wlive/auto_')   # console-wide changes: note who made them
 SRC_COUNT = dict(SRC_GROUPS)
-NODE_PATH = re.compile(r'^/(ch|aux)/(\d{1,2})/(eq|gate|dyn)$')
+NODE_PATH = re.compile(r'^/(ch|aux|bus|main|mtx)/(\d{1,2})/(eq|gate|dyn)$')   # v4.0.3: output strips (eq / dyn)
 LAYOUT_ITEM = re.compile(r'^(ch|aux|bus|main|mtx|dca)/(\d{1,2})$')
 N_LAYERS, MAX_PROFILES = 3, 24
 NODE_LOCKED = ('mdl',)          # model changes stay at the console for now
@@ -256,7 +257,9 @@ def _node_ok(path):
     if _mixer is not None and _mixer.x32:
         return _mixer.wing._node_target(path) is not None
     m = NODE_PATH.match(path or '')
-    return bool(m) and 1 <= int(m.group(2)) <= {'ch': N_CH, 'aux': N_AUX}[m.group(1)]
+    if not m or (m.group(3) == 'gate' and m.group(1) not in ('ch', 'aux')):
+        return False
+    return 1 <= int(m.group(2)) <= {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'main': N_MAIN, 'mtx': N_MTX}[m.group(1)]
 
 
 class Mixer:
@@ -729,6 +732,27 @@ class Mixer:
                 self.hub.publish({'t': 'upd', 'a': a, 'v': v})
         return ok, action, after.get(b + '/$mute')
 
+    def assign(self, kind, n, grp, idx, on):
+        """v4.0.3: put a strip in / take it out of mute group (grp 'M') or DCA ('D') idx."""
+        b = f'/{kind}/{n}'
+        if self.x32:
+            return self.wing.assign(kind, n, grp, idx, on)
+        tag = f'#{grp}{idx}'
+        with self._ovr_lock:
+            if grp == 'M' and b in self.overrides:
+                return None, 'pulled out of a mute group here -- press MUTE to put it back first'
+            tags = self._tag_list(self.wing.query(b + '/tags'))
+            if on and tag not in tags:
+                tags.append(tag)
+            elif not on:
+                tags = [t for t in tags if t != tag]
+            v = self.wing.set(b + '/tags', ','.join(tags))
+        self.hub.publish({'t': 'upd', 'a': b + '/tags', 'v': v})
+        if grp == 'M':
+            self.refresh_mutes()
+        print(f'[mixer] {b} {"+" if on else "-"}{tag} from {_who()}', flush=True)
+        return v, None
+
     def _source_addrs(self, extra=()):
         srcs = set(extra)
         for k, n in self._strips():
@@ -815,7 +839,10 @@ class Mixer:
                               # gate key dB, gate GR %, dyn key dB, dyn GR %
                               'cd': [r[2:] for r in lv['ch']], 'ad': [r[2:] for r in lv['aux']],
                               'b': [r[1] for r in lv['bus']], 'm': [r[1] for r in lv['main']],
-                              'x': [r[1] for r in lv.get('mtx') or []]})
+                              'x': [r[1] for r in lv.get('mtx') or []],
+                              # v4.0.3: dyn key dB / GR % for the output strips (bus / main / mtx detail pages)
+                              'bd': [r[4:6] for r in lv['bus']], 'md': [r[4:6] for r in lv['main']],
+                              'xd': [r[4:6] for r in lv.get('mtx') or []]})
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
@@ -1352,6 +1379,24 @@ def api_mute():
         return jsonify(ok=False, err='bad strip'), 400
     ok, action, state = _mixer.toggle_mute(kind, n)
     return jsonify(ok=ok, action=action, state=state)
+
+
+@bp.route('/api/assign', methods=['POST'])
+def api_assign():
+    d = request.get_json(silent=True) or {}
+    kind, grp = str(d.get('kind', '')), str(d.get('grp', ''))
+    try:
+        n, idx = int(d.get('n')), int(d.get('idx'))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, err='bad number'), 400
+    lim = {'ch': _mixer.caps['nch'], 'aux': _mixer.caps['naux'], 'bus': _mixer.caps['nbus']}.get(kind)
+    top = {'M': _mixer.caps['nmg'], 'D': _mixer.caps.get('ndca', 0)}.get(grp)
+    if not lim or not 1 <= n <= lim or not top or not 1 <= idx <= top:
+        return jsonify(ok=False, err='bad assignment'), 400
+    v, err = _mixer.assign(kind, n, grp, idx, bool(d.get('on')))
+    if err:
+        return jsonify(ok=False, err=err), 409
+    return jsonify(ok=True, tags=v)
 
 
 @bp.route('/api/order', methods=['POST'])

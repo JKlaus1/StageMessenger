@@ -131,7 +131,7 @@ def sheet_suite(c, mx, fake):
     code, aq = node('/aux/1/eq')
     check('aux eq served', code == 200 and len(aq) == 17)
     check('aux gate / dyn not on the M32 -> 400', node('/aux/1/gate')[0] == 400 and node('/aux/1/dyn')[0] == 400)
-    check('ch 33 / bus node -> 400', node('/ch/33/eq')[0] == 400 and node('/bus/1/eq')[0] == 400)
+    check('ch 33 / bus gate node -> 400 (v4.0.3: bus eq/dyn served)', node('/ch/33/eq')[0] == 400 and node('/bus/1/gate')[0] == 400)
 
     print('sheet: processing writes')
     def ns(path, key, value):
@@ -329,7 +329,7 @@ def main():
         check('ch2 fader -inf', s.get('/ch/2/fdr') == -144.0)
         check('ch1 colour BL -> palette 2', s.get('/ch/1/$col') == 2)
         check('ch18 colour WHi -> palette 18', s.get('/ch/18/$col') == 18)
-        check('ch1 tags #M1,#M2', s.get('/ch/1/tags') == '#M1,#M2')
+        check('ch1 tags #M1,#M2 + DCA 1 (v4.0.3)', s.get('/ch/1/tags') == '#M1,#M2,#D1', s.get('/ch/1/tags'))
         check('ch17 no tags', s.get('/ch/17/tags') == '')
         check('ch21 own mute', s.get('/ch/21/mute') == 1 and s.get('/ch/21/$mute') == 1)
         check('ch1 unmuted', s.get('/ch/1/mute') == 0 and s.get('/ch/1/$mute') == 0)
