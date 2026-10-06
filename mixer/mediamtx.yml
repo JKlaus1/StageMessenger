@@ -23,8 +23,8 @@ webrtcICEServers2:
   - url: stun:stun.cloudflare.com:3478   # lets the Pi learn its public address behind the hotspot
 
 # v3.9: an RTMP listener for cameras that PUSH (GoPro via Quik "custom RTMP"). This is the one other
-# port open on the LAN; the camera publishes to rtmp://<pi>:1935/gopro and /mixer pulls it back
-# over local RTSP (add a Wi-Fi camera with URL rtsp://127.0.0.1:8554/gopro).
+# port open on the LAN; the camera publishes to rtmp://<pi>:1935/live/gopro (Quik wants app/key, two
+# segments) and /mixer pulls it back over local RTSP (Wi-Fi camera URL rtsp://127.0.0.1:8554/live/gopro).
 rtmp: true
 rtmpAddress: :1935
 hls: false
@@ -41,6 +41,6 @@ paths:
   cam:
     source: publisher
   # v3.9: a pushing camera (GoPro / any RTMP encoder). Nobody but the camera publishes here; /mixer's
-  # ffmpeg reads it as rtsp://127.0.0.1:8554/gopro like any other network camera.
-  gopro:
+  # ffmpeg reads it as rtsp://127.0.0.1:8554/live/gopro like any other network camera.
+  live/gopro:
     source: publisher
