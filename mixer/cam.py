@@ -261,7 +261,8 @@ class Cam:
         self._auto = {}                           # source id -> rotation the accelerometer asked for
         self._auto_cand = None
         self._auto_note = ''
-        self._mic_bad_until = 0.0
+        self._mic_bad = {}                        # source id -> time until which its mic is not tried again
+        self._net_fails = {}                      # source id -> consecutive failed checks
         self._src_cache = None
         self._active = None                       # the source the running encoder uses
         self.audio_kind = ''                      # '' | 'console' | 'mic'
@@ -318,7 +319,7 @@ class Cam:
     def _audio_plan(self, src):
         """'mic' (the camera's own mic), 'console' (a WING pair via the picker) or '' (picture only)."""
         now = time.time()
-        if self.feed == 'mic' and src and src.get('mic') and now >= self._mic_bad_until:
+        if self.feed == 'mic' and src and src.get('mic') and now >= self._mic_bad.get(src.get('id'), 0):
             return 'mic'
         if self._pair() is not None and now >= self._no_audio_until:
             return 'console'
@@ -329,7 +330,8 @@ class Cam:
         if fid != 'mic' and not any(f['id'] == fid for f in self.feeds() or []):
             return False
         self.feed = fid
-        self._no_audio_until = self._mic_bad_until = 0.0         # chosen again: try that audio again
+        self._no_audio_until = 0.0                                # chosen again: try that audio again
+        self._mic_bad = {}
         self._write_ctl()
         self._saved(); self._publish()
         if self.running and self._audio_plan(self._active) != self.audio_kind:
@@ -483,10 +485,20 @@ class Cam:
         for s in self.sources():
             if s['kind'] != 'net':
                 continue
-            try:
-                ok, info = self._net_probe(s['url'])
-            except Exception:
-                ok, info = False, {}
+            proc = self._proc
+            if self.running and self._active and self._active['id'] == s['id'] and proc and proc.poll() is None \
+                    and time.time() - self._started_at > 5:
+                ok, info = True, {}                              # streaming from it right now: that's proof enough
+            else:
+                try:
+                    ok, info = self._net_probe(s['url'], 2.5)
+                except Exception:
+                    ok, info = False, {}
+            if not ok and self._online.get(s['id']):           # one missed answer on busy Wi-Fi is not "offline"
+                self._net_fails[s['id']] = self._net_fails.get(s['id'], 0) + 1
+                if self._net_fails[s['id']] < 2:
+                    continue
+            self._net_fails[s['id']] = 0
             if self._online.get(s['id']) != ok:
                 changed = True
                 print(f"[mixer] cam: {s['name']} {'online' if ok else 'offline'}", flush=True)
@@ -605,7 +617,7 @@ class Cam:
             'fallback':  bool(self.choice and act and act['id'] != self.choice and any(s['id'] == self.choice for s in srcs)),
             'rotate':    self._eff_rot(act),
             'rotate_mode': self.rot.get(act['id'], '0') if act else '0',
-            'mic_ok':    bool(act and act.get('mic')) and time.time() >= self._mic_bad_until,
+            'mic_ok':    bool(act and act.get('mic')) and time.time() >= self._mic_bad.get(act['id'], 0),
             'audio_kind': self.audio_kind if self.running else self._audio_plan(act),
             'auto_note': self._auto_note,
             'epoch':     self.epoch,
@@ -620,7 +632,7 @@ class Cam:
             'audio_rates': list(AUDIO_RATES),
             'max_delay': MAX_DELAY_MS,
             'error':     self.error,
-            'audio_issue': self._audio_issue if self.running and not self.audio else '',
+            'audio_issue': self._audio_issue if self.running and (not self.audio or (self.feed == 'mic' and self.audio_kind != 'mic')) else '',
             'restarts':  self.restarts,
         }
 
@@ -695,7 +707,7 @@ class Cam:
         if mic == 'same':
             return []
         if mic.startswith('hw:'):                                  # USB webcam mic: its own ALSA card
-            return ['-thread_queue_size', '1024', '-f', 'alsa', '-ac', '1', '-ar', '48000',
+            return ['-thread_queue_size', '1024', '-f', 'alsa', '-channels', '1', '-sample_rate', '48000',
                     '-use_wallclock_as_timestamps', '1', '-i', mic]
         return ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '2',
                 '-rw_timeout', str(NET_TIMEOUT_US), '-fflags', 'nobuffer', '-thread_queue_size', '1024',
@@ -777,8 +789,8 @@ class Cam:
             self._gen += 1
             gen = self._gen
             audio = self._audio_plan(src)                       # '' | 'console' | 'mic'
-            if audio:
-                self._audio_issue = ''
+            if audio and not (self.feed == 'mic' and audio != 'mic' and src.get('mic')):
+                self._audio_issue = ''                            # (a failed camera mic keeps saying why)
             self._active = src
             self.audio_kind = audio
             self.audio, self.error, self.ready, self.readers = bool(audio), '', False, 0
@@ -917,7 +929,7 @@ class Cam:
                 self.error = why[:200]
                 act = self._active or {}
                 if audio == 'mic' and now - self._started_at < 10:      # the camera mic won't open: go on without it
-                    self._mic_bad_until = now + 60
+                    self._mic_bad[act.get('id')] = now + 60
                     self._audio_issue = ('camera mic unavailable: ' + why)[:120]
                     self._restart('camera mic failed: ' + self.error)
                     return

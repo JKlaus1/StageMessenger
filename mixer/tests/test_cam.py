@@ -738,6 +738,15 @@ def test_cam_sources():
             c.probe_once()
             time.sleep(1.0)
             check('phone back online -> goes back to it by itself', c._active['id'] == 'nabc123' and not c.status()['fallback'], c._active['id'])
+            online['v'] = False
+            c._started_at = time.time() - 10                  # streaming from it for a while: its own stream proves it
+            c.probe_once()
+            check('while the phone is streaming fine, a failed status check does not switch away', c._active['id'] == 'nabc123' and c._online['nabc123'] is True)
+            c._started_at = time.time()
+            c.probe_once()
+            check('one missed check on busy Wi-Fi is not "offline"', c._online['nabc123'] is True)
+            online['v'] = True
+            c.probe_once()
             check('rotate 90 -> encoder restarts turned, portrait 720x1280', c.set_rotate('90') and c._eff_rot(c._active) == '90')
             cmd = c._cmd(False, c._active)
             vf = cmd[cmd.index('-vf') + 1]
@@ -770,7 +779,8 @@ def test_cam_sources():
                   and cmd[cmd.index('-af') + 1].startswith('adelay=150:all=1,') and cmd[cmd.index('-ac', cmd.index('-c:a')) + 1] == '2', cmd)
             usb = {'id': 'usb:x', 'kind': 'usb', 'dev': '/dev/video0', 'mic': 'hw:CARD=Webcam', 'name': 'x'}
             cmd = c._cmd('mic', usb)
-            check('USB webcam mic: ALSA card input', '-f' in cmd and 'alsa' in cmd and 'hw:CARD=Webcam' in cmd, cmd)
+            check('USB webcam mic: ALSA card input, mono 48 kHz (alsa demuxer options)', 'alsa' in cmd and 'hw:CARD=Webcam' in cmd
+                  and cmd[cmd.index('-channels') + 1] == '1' and cmd[cmd.index('-sample_rate') + 1] == '48000' and '-ac' not in cmd[:cmd.index('hw:CARD=Webcam')][-8:], cmd)
             rt = {'id': 'net0', 'kind': 'net', 'url': 'rtsp://10.1.1.1/x', 'mic': 'same', 'name': 'x'}
             cmd = c._cmd('mic', rt)
             check('rtsp camera mic: optional audio from the same input', '0:a:0?' in cmd and cmd.count('-i') == 1, cmd)
