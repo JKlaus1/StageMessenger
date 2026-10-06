@@ -348,6 +348,145 @@ def test_cam_failure():
         lst._teardown()
 
 
+# A stand-in for a phone running IP Webcam: multipart MJPEG at /video, 800x600 (4:3, so the pad path runs).
+class FakePhone:
+    def __init__(self, size='800x600', rate=15, user=None):
+        import http.server, socketserver
+        outer = self
+        self.size, self.rate, self.hits, self.procs = size, rate, 0, []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                if self.path != '/video':
+                    self.send_error(404); return
+                outer.hits += 1
+                self.send_response(200)
+                self.send_header('Content-Type', 'multipart/x-mixed-replace;boundary=ffmpeg')
+                self.end_headers()
+                p = subprocess.Popen(['ffmpeg', '-v', 'error', '-re', '-f', 'lavfi', '-i',
+                                      f'testsrc2=size={outer.size}:rate={outer.rate}', '-c:v', 'mjpeg', '-q:v', '8',
+                                      '-f', 'mpjpeg', '-boundary_tag', 'ffmpeg', '-'],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                outer.procs.append(p)
+                try:
+                    while True:
+                        b = p.stdout.read(4096)
+                        if not b:
+                            break
+                        self.wfile.write(b)
+                except OSError:
+                    pass
+                finally:
+                    p.kill()
+
+        class S(socketserver.ThreadingMixIn, http.server.HTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+        self.srv = S(('127.0.0.1', 0), H)
+        self.port = self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def stop(self):
+        for p in self.procs:
+            p.kill()
+        self.srv.shutdown(); self.srv.server_close()
+
+
+def video_size(path):
+    r = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+                        '-of', 'csv=p=0', path], capture_output=True, text=True)
+    try:
+        w, h = r.stdout.strip().split(',')[:2]
+        return int(w), int(h)
+    except ValueError:
+        return None
+
+
+def net_cam(tmp, url, out_file=None, **cfg):
+    ctl = os.path.join(tmp, 'cam.ctl')
+    lst = Listener(capture_cmd=['false'], bitrate='64k', cam_ctl=ctl)
+    c = Cam({'enabled': True, 'idle_s': 1.0, 'video_url': url, **cfg}, lst, lambda: [],
+            probe=lambda: (False, False, 0), ctl_path=ctl,
+            output=['-y', '-f', 'matroska', out_file] if out_file else None)
+    return lst, c
+
+
+def test_cam_net_source_setup():
+    print('cam: network camera (video_url) -- config, command line, redaction')
+    from mixer.cam import clean_url, redact
+    with tempfile.TemporaryDirectory() as tmp:
+        lst, c = net_cam(tmp, 'http://192.168.1.50:8080/video', quality='low')
+        cmd = c._cmd(False)
+        check('http url: available without a USB camera', c.available() and c.status()['source'] == 'network', c.status())
+        check('http url: ffmpeg reads the url, not v4l2', '-i' in cmd and 'http://192.168.1.50:8080/video' in cmd and 'v4l2' not in cmd, cmd)
+        check('http url: wall-clock stamps + reconnect + read timeout',
+              '-use_wallclock_as_timestamps' in cmd and '-reconnect' in cmd and '-rw_timeout' in cmd, cmd)
+        vf = cmd[cmd.index('-vf') + 1]
+        check('picture fitted to the tier (low -> 854x480, 10 fps) with even dims',
+              vf.startswith('fps=10,scale=854:480:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bilinear,pad=854:480:'), vf)
+        check('url never appears in status', 'video_url' not in str(c.status()) and '192.168' not in str(c.status()), c.status())
+        lst._teardown()
+        lst, c = net_cam(tmp, 'rtsp://u:p@192.168.1.50:8554/live', rtsp_transport='udp')
+        cmd = c._cmd(False)
+        check('rtsp url: transport + socket timeout, no http reconnect flags',
+              cmd[cmd.index('-rtsp_transport') + 1] == 'udp' and '-timeout' in cmd and '-reconnect' not in cmd, cmd)
+        lst._teardown()
+        lst, c = net_cam(tmp, 'rtsp://h/x', rtsp_transport='bogus')
+        cmd = c._cmd(False)
+        check('bad rtsp transport falls back to tcp', cmd[cmd.index('-rtsp_transport') + 1] == 'tcp', cmd)
+        lst._teardown()
+        for bad in ('file:///etc/passwd', 'concat:a|b', '/dev/video0', 'ftp://h/x', 'javascript:1'):
+            lst, c = net_cam(tmp, bad, device='/nonexistent/video0')
+            check(f'rejects {bad!r}', c.url == '' and not c.available() and c.status()['source'] == 'usb', c.status())
+            lst._teardown()
+        lst, c = net_cam(tmp, '', device='/nonexistent/video0')
+        check('no url, no camera -> not available (unchanged)', not c.available())
+        lst._teardown()
+        check('clean_url strips whitespace', clean_url('  HTTP://x/y ') == 'HTTP://x/y')
+        check('redact hides user:password', redact('Error opening http://admin:s3cret@10.0.0.5:8080/video: Refused') ==
+              'Error opening http://***@10.0.0.5:8080/video: Refused')
+        check('redact leaves plain urls and text alone', redact('http://10.0.0.5/video x@y') == 'http://10.0.0.5/video x@y')
+
+
+def test_cam_net_pipeline():
+    print('cam: network camera end to end (fake phone serving multipart MJPEG)')
+    phone = FakePhone()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, 'net.mkv')
+            lst, c = net_cam(tmp, f'http://127.0.0.1:{phone.port}/video', out)
+            c.hold(60)
+            time.sleep(0.8)
+            check('encoder running from the phone feed', c.running and not c.audio and c.error == '', c.status())
+            time.sleep(4.0)
+            check('phone saw exactly one client', phone.hits == 1, phone.hits)
+            c._stop('test')
+            lst._teardown()
+            check('output has H.264 video', ffprobe_start(out, 'v:0') is not None)
+            check('4:3 phone picture fitted into 1280x720 (good tier default)', video_size(out) == (1280, 720), video_size(out))
+            nfr = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_packets', '-show_entries',
+                                  'stream=nb_read_packets', '-of', 'csv=p=0', out], capture_output=True, text=True).stdout.strip()
+            check('about 4 s of 30 fps video was produced', nfr.isdigit() and 60 <= int(nfr) <= 160, nfr)
+    finally:
+        phone.stop()
+    print('cam: network camera that is not there -> gives up with a reason, password not leaked')
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, 'dead.mkv')
+        lst, c = net_cam(tmp, 'http://admin:s3cretpw@127.0.0.1:9/video', out)
+        c.hold(60)
+        t0 = time.time()
+        while time.time() - t0 < 40 and (c.running or not c.error):
+            time.sleep(0.25)
+        check('gives up instead of looping forever', not c.running, c.status())
+        check('error says something', bool(c.error), c.status())
+        check('password not in error / status', 's3cretpw' not in c.error and 's3cretpw' not in str(c.status()), c.error)
+        check('restarts were bounded', 1 <= c.restarts <= 6, c.restarts)
+        lst._teardown()
+
+
 def test_cam_api():
     print('cam: /mixer API, snapshot, saved settings')
     import json
@@ -484,6 +623,8 @@ def main():
     test_cam_video_only_and_idle()
     test_cam_capture_unavailable()
     test_cam_failure()
+    test_cam_net_source_setup()
+    test_cam_net_pipeline()
     test_cam_tiers()
     test_cam_api()
     print()

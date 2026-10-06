@@ -73,6 +73,10 @@ DEFAULTS = {
     'cam': {
         'enabled':       True,
         'device':        '',         # '' = first USB camera under /dev/v4l/by-id
+        'video_url':     '',         # network camera instead of USB (v3.6): http(s):// MJPEG or rtsp:// -- set in
+                                     # mixer_config.json (it may hold a password), e.g. an Android phone running
+                                     # IP Webcam: "http://192.168.1.50:8080/video"
+        'rtsp_transport': 'tcp',     # for rtsp:// sources: tcp (robust on Wi-Fi) | udp (a little lower latency)
         'rtsp':          'rtsp://127.0.0.1:8554/cam',
         'whep':          'http://127.0.0.1:8889/cam/whep',
         'audio_bitrate': '128k',     # Opus for the video's sound (64k | 96k | 128k | 160k)

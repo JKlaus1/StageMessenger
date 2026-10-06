@@ -5,6 +5,12 @@ MediaMTX as one WebRTC stream ("cam" path), separate from the low-latency listen
     webcam (MJPEG) ---------------------------------> ffmpeg (x264 + Opus) -> RTSP -> MediaMTX -> WHEP
     hw:WING -> picker.py (2nd pair, delayed) -> fifo ->/
 
+Network camera (v3.6): set cam.video_url in mixer_config.json (http(s):// MJPEG or rtsp://, e.g. an
+Android phone running IP Webcam / DroidCam on the same Wi-Fi) and that replaces the USB webcam as the
+picture source. The Pi PULLS the stream, so no inbound port is opened. The phone chooses its own
+resolution: the picture is scaled / padded to the chosen tier's size (720p on the phone is cheapest).
+The URL (it may carry a user:password) is config-only -- never exposed in status, logs or API.
+
 Why it is built this way
   * One capture. `arecord -D hw:WING` allows a single opener, so the audio for the video is a second
     pair sliced out of the capture the listen-back already runs (picker.py, PICKER_CAM_CTL). The listen
@@ -22,6 +28,7 @@ Why it is built this way
 """
 import glob
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -50,6 +57,21 @@ DEFAULT_QUALITY = 'good'
 AUDIO_RATES = ['64k', '96k', '128k', '160k']
 DEFAULT_AUDIO_RATE = '128k'
 
+NET_SCHEMES = ('http://', 'https://', 'rtsp://')     # nothing else reaches ffmpeg (file:, concat:, ...)
+NET_TIMEOUT_US = 5_000_000                           # a stalled network read gives up after 5 s
+_CRED = re.compile(r'(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s]+@')
+
+
+def clean_url(u):
+    """The configured network camera URL if it is an allowed scheme, else ''."""
+    u = str(u or '').strip()
+    return u if u.lower().startswith(NET_SCHEMES) else ''
+
+
+def redact(text):
+    """ffmpeg echoes the input URL in errors; keep any user:password out of logs and the page."""
+    return _CRED.sub(r'\1***@', text)
+
 
 def find_device(configured=''):
     """The webcam's capture node: the configured path, else the first USB camera by stable id
@@ -73,6 +95,10 @@ class Cam:
         self.save = save or (lambda d: None)
         self.out_url = out_url
         self._video_input = video_input           # tests: replaces the v4l2 input
+        raw = str(self.cfg.get('video_url') or '').strip()
+        self.url = clean_url(raw)                 # network camera (v3.6); wins over a USB webcam
+        if raw and not self.url:
+            print('[mixer] cam: video_url ignored (must start with http://, https:// or rtsp://)', flush=True)
         self._output = output                     # tests: replaces the RTSP output args
         q = self.cfg.get('quality', DEFAULT_QUALITY)
         self.quality = q if q in QUALITIES else DEFAULT_QUALITY
@@ -171,7 +197,7 @@ class Cam:
         return find_device(self.cfg.get('device', ''))
 
     def available(self):
-        return self.enabled and bool(self._video_input or self.device())
+        return self.enabled and bool(self._video_input or self.url or self.device())
 
     def keepalive(self):
         """Listener watchdog: capture must keep running while the video carries console audio."""
@@ -181,6 +207,7 @@ class Cam:
         return {
             'enabled':   self.enabled,
             'available': self.available(),
+            'source':    'network' if (self.url and not self._video_input) else 'usb',
             'running':   self.running,
             'viewers':   self.readers,
             'audio':     self.audio if self.running else bool(self._pair()),
@@ -248,6 +275,19 @@ class Cam:
             self._restart('console changed')
 
     # ── pipeline ──
+    def _net_input(self):
+        """ffmpeg input args for the network camera. Wall-clock stamps keep A/V alignment the same as the
+        USB webcam's; nobuffer / low_delay keep the extra hop from adding queueing."""
+        if self.url.lower().startswith('rtsp://'):
+            tr = str(self.cfg.get('rtsp_transport') or 'tcp')
+            tr = tr if tr in ('tcp', 'udp') else 'tcp'
+            a = ['-rtsp_transport', tr, '-timeout', str(NET_TIMEOUT_US)]
+        else:                                          # short Wi-Fi dropouts are absorbed without losing the stream
+            a = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '2',
+                 '-rw_timeout', str(NET_TIMEOUT_US)]
+        return a + ['-fflags', 'nobuffer', '-flags', 'low_delay', '-thread_queue_size', '512',
+                    '-use_wallclock_as_timestamps', '1', '-i', self.url]
+
     def _cmd(self, audio):
         q = QUALITIES[self.quality]
         fps = q['fps']
@@ -259,6 +299,8 @@ class Cam:
         c += ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error']
         if self._video_input:
             c += list(self._video_input)
+        elif self.url:
+            c += self._net_input()
         else:
             c += ['-thread_queue_size', '512', '-f', 'v4l2', '-input_format', 'mjpeg',
                   '-video_size', '1280x720', '-framerate', str(q.get('cap', fps)),
@@ -268,7 +310,11 @@ class Cam:
                   '-use_wallclock_as_timestamps', '1', '-i', self._fifo]
         c += ['-copyts', '-start_at_zero']
         vf = f'fps={fps}'                                      # drop frames first: less to scale
-        if (q['w'], q['h']) != (1280, 720):
+        if self.url and not self._video_input:                 # the phone picks its own size: fit it (even dims)
+            w, h = q['w'], q['h']
+            vf += (f',scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bilinear'
+                   f',pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1')
+        elif (q['w'], q['h']) != (1280, 720):
             vf += f",scale={q['w']}:{q['h']}:flags=bilinear"
         c += ['-map', '0:v:0', '-vf', vf,
               '-c:v', 'libx264', '-preset', q.get('preset', 'ultrafast'), '-tune', 'zerolatency',
@@ -329,7 +375,7 @@ class Cam:
 
     def _drain(self, gen, proc):
         for raw in iter(proc.stderr.readline, b''):
-            t = raw.decode(errors='replace').strip()
+            t = redact(raw.decode(errors='replace').strip())
             if t:
                 self._tail.append(t); del self._tail[:-4]
 
