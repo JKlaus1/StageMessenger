@@ -323,7 +323,11 @@ class Cam:
               '-g', str(int(fps * float(self.cfg.get('gop_s', 2)))), '-x264-params', 'scenecut=0',
               '-threads', str(int(self.cfg.get('threads', 2)))]
         if audio:
-            c += ['-map', '1:a:0', '-af', 'aresample=async=1000',
+            # async=1: line the sound up with its timestamps ONCE (pad/trim), never stretch it. The fifo's
+            # wall-clock stamps jitter by tens of ms; stretching to follow them (async=1000, v3.4-3.6)
+            # wobbled the pitch +-2% -- the "warbly cassette" sound. Clock drift beyond 0.3 s still gets
+            # one small hard correction.
+            c += ['-map', '1:a:0', '-af', 'aresample=async=1:min_hard_comp=0.3',
                   '-c:a', 'libopus', '-b:a', self.audio_bitrate,
                   '-application', 'audio', '-ar', '48000']
         else:

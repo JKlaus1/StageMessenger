@@ -74,8 +74,21 @@
     #cam-pip-ph { display: none; margin-top: .6rem; padding: .8rem; border-radius: 10px; border: 1px dashed var(--border);
       font-size: .68rem; color: var(--muted); text-align: center; }
     #cam-pip-ph.on { display: block; }
-    body.pipwin { margin: 0; padding: .5rem; }
-    body.pipwin #cam-video { margin-top: 0; }
+    /* v3.7: the Chrome pop-out window and fullscreen: the picture fills the space, controls pinned below */
+    body.pipwin { margin: 0; padding: .4rem; max-width: none; min-height: 0; height: 100vh; box-sizing: border-box;
+      display: flex; flex-direction: column; overflow: hidden; }
+    body.pipwin #cam-pop { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    body.pipwin #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; }
+    #cam-pop:fullscreen { display: flex; flex-direction: column; min-height: 0; }
+    #cam-pop:fullscreen #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; }
+    #cam-pop:fullscreen { background: #000; padding: .5rem; box-sizing: border-box; }
+    #cam-pop:-webkit-full-screen { display: flex; flex-direction: column; width: 100%; height: 100%; background: #000; padding: .5rem; box-sizing: border-box; }
+    #cam-pop:-webkit-full-screen #cam-video { flex: 1; min-height: 0; width: 100%; height: auto; aspect-ratio: auto; margin-top: 0; }
+    .cam-opts .toggle { flex: none; padding: .3rem .6rem; font-size: .62rem; }
+    .vol-row { display: flex; align-items: center; gap: .5rem; margin-top: .45rem; font-size: .68rem; color: var(--muted); }
+    .vol-row input[type=range] { flex: 1 1 auto; min-width: 0; }
+    .vol-row .vv { flex: none; min-width: 3rem; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+    .vol-row .vv.boost { color: var(--amber); }
     #cam-video { display: none; width: 100%; aspect-ratio: 16 / 9; margin-top: .6rem; border-radius: 10px; background: #000; object-fit: contain; }
     #cam-video.on { display: block; }
     .cam-sync { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; font-size: .68rem; color: var(--muted); }
@@ -520,6 +533,7 @@
     <div class="pk"><div><span id="pk-l"></span></div><div><span id="pk-r"></span></div></div>
     <div id="listen-note"></div>
     <div class="listen-foot"><div id="lag-note"></div><select id="listen-ab" title="Low-latency audio bitrate (applies to everyone listening)"></select><button class="toggle" id="mode-btn" title="Low-latency WebRTC audio, falling back to MP3">Low latency</button></div>
+    <div class="vol-row"><span>Volume</span><input type="range" id="listen-vol" min="0" max="400" step="5" value="100" title="Volume on this device (over 100% boosts it)"><span class="vv" id="listen-vol-val">100%</span></div>
     <audio id="player" preload="none"></audio>
   </section>
 
@@ -533,6 +547,8 @@
     <div class="cam-opts">
       <select id="cam-ab" title="Bitrate of the sound that comes with the video"></select>
       <span class="sp"></span>
+      <button class="toggle" id="cam-pause" title="Freeze the picture; Live jumps back to now">&#10074;&#10074; Pause</button>
+      <button class="toggle" id="cam-fs" title="Fullscreen (or double-tap the picture)">&#9974; Full</button>
       <button class="toggle" id="cam-pip" title="Pop the video out into a floating window">&#10697; Pop out</button>
     </div>
     <div id="cam-pip-ph">Video is in the floating window</div>
@@ -546,6 +562,7 @@
       <span id="cam-delay-val">0 ms</span>
       <button class="toggle" id="cam-snd" title="Sound from the video">Sound off</button>
     </div>
+    <div class="vol-row"><span>Volume</span><input type="range" id="cam-vol" min="0" max="400" step="5" value="100" title="Video sound volume on this device (over 100% boosts it)"><span class="vv" id="cam-vol-val">100%</span></div>
     </div>
     <div id="cam-note"></div>
   </section>
@@ -2036,8 +2053,9 @@
   }
   $('listen-btn').addEventListener('click', () => {
     if (wantPlay) { stopPlay(); return; }
-    if (camWant && camSound) setCamSound(false);       // v3.5: one sound at a time -- Listen takes it back
     listenResume = false;
+    if (camWant) stopCam();                            // v3.7: always one or the other -- Listen closes the video
+    if (VOL.listen !== 1) audioCtx();                  // inside the tap: lets the volume boost start
     startPlay();
   });
   $('resync-btn').addEventListener('click', () => { if (wantPlay) startPlay(); });
@@ -2058,6 +2076,7 @@
     if (rtcSession) { fetch(rtcSession, { method: 'DELETE', keepalive: true }).catch(() => {}); rtcSession = null; }
     if (rtcStream) { rtcStream.getTracks().forEach(t => t.stop()); rtcStream = null; }
     if (player.srcObject) player.srcObject = null;
+    applyVol('listen');
   }
   function iceDone(p, ms) {
     return new Promise(res => {
@@ -2088,6 +2107,7 @@
         if (gen !== rtcGen) return;
         rtcStream.addTrack(e.track);
         player.play().catch(err => setLag('Tap Listen again to start audio (' + err.message + ')'));
+        applyVol('listen');
       };
       p.onconnectionstatechange = () => rtcState(p, gen);
       await p.setLocalDescription(await p.createOffer());
@@ -2225,21 +2245,66 @@
     await camPost({ audio_bitrate: e.target.value });
     if (camWant) startCam();                              // same: new encoder, new stream
   });
-  // One sound at a time: the video's sound on = Listen off (and back on when the video's sound goes).
-  function setCamSound(on, user) {
-    camSound = !!on; camVideo.muted = !camSound;
+  // The video's own sound on/off (a plain mute). Listen and the video never run together (v3.7):
+  // Watch stops Listen (it comes back when the video stops), Listen closes the video.
+  function setCamSound(on) {
+    camSound = !!on;
     $('cam-snd').textContent = camSound ? 'Sound on' : 'Sound off'; $('cam-snd').classList.toggle('on', camSound);
-    if (camSound) {
-      if (wantPlay) { listenResume = true; stopPlay(); }
-      camVideo.play().catch(() => {});
-    } else if (user && listenResume) { listenResume = false; startPlay(); }
+    applyVol('cam');
+    if (camSound) camVideo.play().catch(() => {});
   }
-  $('cam-snd').addEventListener('click', () => setCamSound(!camSound, true));
+  $('cam-snd').addEventListener('click', () => setCamSound(!camSound));
   $('cam-btn').addEventListener('click', () => {
     if (camWant) { stopCam(true); return; }
-    if (camSt && camSt.audio) setCamSound(true);          // take over the sound (inside the tap: may start audio)
+    if (wantPlay) { listenResume = true; stopPlay(); }
+    if (VOL.cam !== 1) audioCtx();                        // inside the tap: lets the volume boost start
+    setCamSound(!!(camSt && camSt.audio));                // the video's sound takes over (inside the tap)
     startCam();
   });
+
+  // ── pause / live (v3.7): freeze the last frame, drop the connection; Live reconnects at now ──
+  let camPaused = false;
+  function paintPause() {
+    $('cam-pause').innerHTML = camPaused ? '&#9654; Live' : '&#10074;&#10074; Pause';
+    $('cam-pause').classList.toggle('on', camPaused);
+  }
+  function freezeFrame() {
+    try {
+      if (!camVideo.videoWidth) return;
+      const cv = document.createElement('canvas');
+      cv.width = camVideo.videoWidth; cv.height = camVideo.videoHeight;
+      cv.getContext('2d').drawImage(camVideo, 0, 0);
+      camVideo.poster = cv.toDataURL('image/jpeg', 0.85);
+    } catch (e) {}
+  }
+  $('cam-pause').addEventListener('click', () => {
+    if (!camWant) { camNote('Start the video first'); return; }
+    if (camPaused) { startCam(); return; }               // back to live (inside the tap: sound may start)
+    freezeFrame();
+    closeCam();
+    camPaused = true; paintPause();
+    camNote('Paused · press Live to jump back to now');
+  });
+
+  // ── fullscreen (v3.7): the picture + sync controls; iPhone falls back to Safari's own player ──
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  function toggleFs() {
+    if (!camWant) { camNote('Start the video first'); return; }
+    if (pipWin) return;                                   // the pop-out window has its own maximise
+    if (fsEl()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} return; }
+    const pop = $('cam-pop');
+    const native = () => { if (camVideo.webkitEnterFullscreen) try { camVideo.webkitEnterFullscreen(); } catch (e) {} };
+    try {
+      if (pop.requestFullscreen) pop.requestFullscreen().catch(native);
+      else if (pop.webkitRequestFullscreen) pop.webkitRequestFullscreen();
+      else native();
+    } catch (e) { native(); }
+  }
+  const paintFs = () => { $('cam-fs').classList.toggle('on', !!fsEl()); };
+  $('cam-fs').addEventListener('click', toggleFs);
+  camVideo.addEventListener('dblclick', toggleFs);
+  document.addEventListener('fullscreenchange', paintFs);
+  document.addEventListener('webkitfullscreenchange', paintFs);
   window.addEventListener('pagehide', () => closeCam());
 
   // ── pop out ──
@@ -2305,12 +2370,18 @@
     if (cSession) { fetch(cSession, { method: 'DELETE', keepalive: true }).catch(() => {}); cSession = null; }
     if (cStream) { cStream.getTracks().forEach(t => t.stop()); cStream = null; }
     if (camVideo.srcObject) camVideo.srcObject = null;
+    applyVol('cam');
+  }
+  function camReset() {                                   // after stop / failure: no pause, no fullscreen
+    camPaused = false; paintPause(); camVideo.removeAttribute('poster');
+    if (fsEl()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} }
   }
   function stopCam(user) {
     camWant = false; cDrops = 0;
     if (pipActive()) popIn();
     closeCam();
     camVideo.classList.remove('on');
+    camReset();
     if (camSound) setCamSound(false);
     if (listenResume) { listenResume = false; if (user) startPlay(); }
     $('cam-btn').classList.remove('on'); $('cam-btn').innerHTML = '&#9654; Watch';
@@ -2324,7 +2395,9 @@
     closeCam();
     const gen = cGen;
     cStream = new MediaStream();
-    camVideo.srcObject = cStream; camVideo.muted = !camSound; camVideo.classList.add('on');
+    if (camPaused) { camPaused = false; paintPause(); }
+    camVideo.srcObject = cStream; camVideo.classList.add('on');
+    applyVol('cam');
     camVideo.play().catch(() => {});                      // inside the tap: allowed to start
     camNote('Starting camera…');
     try {
@@ -2338,7 +2411,9 @@
       p.ontrack = e => {
         if (gen !== cGen) return;
         cStream.addTrack(e.track);
+        if (camVideo.poster) camVideo.removeAttribute('poster');
         camVideo.play().catch(() => {});
+        applyVol('cam');
       };
       p.onconnectionstatechange = () => camState(p, gen);
       await p.setLocalDescription(await p.createOffer());
@@ -2377,6 +2452,7 @@
     if (pipActive()) popIn();
     closeCam();
     camWant = false;
+    camReset();
     if (camSound) setCamSound(false);
     if (listenResume) { listenResume = false; startPlay(); }      // give the sound back to Listen
     camVideo.classList.remove('on');
@@ -2416,6 +2492,75 @@
   }
   setInterval(pollCam, 1000);
 
+  // ── volume (v3.7): per-device level for Listen and for the video, 0-400 %. At 100 % nothing changes
+  // (the media element plays as before). Any other level routes the WebRTC stream through Web Audio:
+  // gain -> limiter -> speakers, with the element muted (Chrome needs the element to keep the remote
+  // stream flowing). iPad Safari ignores element volume, so this is also its only volume control.
+  // Web Audio may be suspended in the background (iOS): then the element plays again at normal level.
+  // MP3 fallback: plain element volume, no boost.
+  var VOL = { listen: 1, cam: 1 }, actx = null, boost = {};
+  try { ['listen', 'cam'].forEach(k => { const v = parseFloat(localStorage.getItem('mixer.vol.' + k)); if (v >= 0 && v <= 4) VOL[k] = v; }); } catch (e) {}
+  function audioCtx() {
+    try {
+      if (!actx) {
+        const C = window.AudioContext || window.webkitAudioContext;
+        if (!C) return null;
+        actx = new C();
+        actx.onstatechange = () => ['listen', 'cam'].forEach(applyVol);
+      }
+      if (actx.state !== 'running') actx.resume().catch(() => {});
+    } catch (e) { return null; }
+    return actx;
+  }
+  const VOLSPEC = {
+    listen: { el: () => player, stream: () => (wantPlay && mode === 'rtc' ? rtcStream : null), on: () => true },
+    cam:    { el: () => camVideo, stream: () => (camWant ? cStream : null), on: () => camSound },
+  };
+  function unrouteBoost(k) {
+    const b = boost[k];
+    if (!b) return;
+    try { b.src.disconnect(); b.gain.disconnect(); b.comp.disconnect(); } catch (e) {}
+    delete boost[k];
+  }
+  function routeBoost(k, stream) {
+    if (!actx || actx.state !== 'running') return false;      // never mute the element into a silent context
+    try {
+      const src = actx.createMediaStreamSource(stream), gain = actx.createGain(), comp = actx.createDynamicsCompressor();
+      comp.threshold.value = -2; comp.knee.value = 0; comp.ratio.value = 20; comp.attack.value = 0.002; comp.release.value = 0.15;
+      src.connect(gain); gain.connect(comp); comp.connect(actx.destination);
+      boost[k] = { src, gain, comp, stream };
+      return true;
+    } catch (e) { return false; }
+  }
+  function applyVol(k) {
+    const sp = VOLSPEC[k], el = sp.el(), st = sp.stream(), v = VOL[k];
+    const tracks = st && st.getAudioTracks ? st.getAudioTracks().length : 0;
+    const want = v !== 1 && tracks > 0 && !document.hidden;
+    if (boost[k] && (!want || boost[k].stream !== st)) unrouteBoost(k);
+    if (want && !boost[k]) routeBoost(k, st);
+    if (boost[k]) { boost[k].gain.gain.value = sp.on() ? v : 0; el.muted = true; }
+    else { el.muted = !sp.on(); try { el.volume = Math.min(1, v); } catch (e) {} }
+  }
+  function paintVol(k) {
+    const pct = Math.round(VOL[k] * 100);
+    $(k + '-vol').value = pct;
+    $(k + '-vol-val').textContent = pct + '%';
+    $(k + '-vol-val').classList.toggle('boost', pct > 100);
+  }
+  ['listen', 'cam'].forEach(k => {
+    paintVol(k);
+    $(k + '-vol').addEventListener('input', e => {
+      VOL[k] = Math.max(0, Math.min(4, (+e.target.value) / 100));
+      try { localStorage.setItem('mixer.vol.' + k, String(VOL[k])); } catch (e2) {}
+      paintVol(k);
+      const ctx = VOL[k] !== 1 ? audioCtx() : null;           // inside the gesture: may start Web Audio
+      applyVol(k);
+      if (ctx && ctx.state !== 'running') ctx.resume().then(() => applyVol(k)).catch(() => {});
+    });
+    $(k + '-vol').addEventListener('dblclick', () => { $(k + '-vol').value = 100; $(k + '-vol').dispatchEvent(new Event('input')); });
+  });
+  document.addEventListener('visibilitychange', () => ['listen', 'cam'].forEach(applyVol));
+
   // ── MP3 fallback (v1.10 latency control). Each stream gets an id so the Pi can say where it
   // started; the page measures how far behind live it plays, keeps only listenTarget seconds
   // buffered (plays 5% fast or jumps ahead to shed the rest), and reconnects if audio piles up
@@ -2431,6 +2576,7 @@
     playStartAt = Date.now(); netMin = Infinity; netHigh = 0;
     setLag(listenPref === 'mp3' ? '' : (rtcWhy && Date.now() - rtcLastFail < 60000 ? 'MP3 · low latency unavailable: ' + rtcWhy : ''));
     player.src = '/mixer/stream.mp3?id=' + streamId;
+    applyVol('listen');                          // MP3 fallback: plain volume (no boost)
     player.play().catch(err => { $('listen-note').textContent = 'Playback blocked: ' + err.message; });
   }
   const aheadOf = () => { const b = player.buffered; return b.length ? Math.max(0, b.end(b.length - 1) - player.currentTime) : 0; };

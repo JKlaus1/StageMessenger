@@ -296,7 +296,7 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   const hd = H.d, hel = id => hd.getElementById(id), calls = [], seen = [];
   H.w.MediaStream = class { constructor() { this.t = []; } addTrack(t) { this.t.push(t); } getTracks() { return this.t; } };
   H.w.RTCPeerConnection = class {
-    constructor(cfg) { this.cfg = cfg; this.iceGatheringState = 'complete'; this.connectionState = 'new'; }
+    constructor(cfg) { this.cfg = cfg; this.iceGatheringState = 'complete'; this.connectionState = 'new'; H.w._pc = this; }
     addTransceiver(kind, o) { calls.push([kind, o.direction]); }
     async createOffer() { return { type: 'offer', sdp: 'v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\n' }; }
     async setLocalDescription(d) { this.localDescription = d; }
@@ -318,24 +318,101 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   hel('cam-btn').click(); await tick(30);
   check('stop closes the connection and deletes the cam session', calls.some(c => c[0] === 'close') && seen.some(c => c[1] === 'DELETE' && c[0] === '/mixer/api/cam/session/0123456789abcdef0123456789abcdef0123'), seen.slice(-2));
   check('stop resets the button + hides the picture', !hel('cam-btn').classList.contains('on') && !hel('cam-video').classList.contains('on'));
-  // v3.5: watching takes the sound over from Listen, and gives it back
+  // v3.7: always one or the other -- Watch stops Listen (back when the video stops), Listen closes the video
   hel('listen-btn').click(); await tick(40);
   check('listening before the video', hel('listen-btn').classList.contains('on'));
   hel('cam-btn').click(); await tick(60);
   check('Watch stops Listen and turns the video sound on', !hel('listen-btn').classList.contains('on') && hel('cam-snd').textContent === 'Sound on' && hel('cam-video').muted === false);
   hel('cam-snd').click(); await tick(40);
-  check('video sound off -> Listen comes back', hel('listen-btn').classList.contains('on') && hel('cam-video').muted === true);
+  check('video Sound off is a plain mute (Listen stays off)', !hel('listen-btn').classList.contains('on') && hel('cam-video').muted === true && hel('cam-btn').classList.contains('on'));
   hel('cam-snd').click(); await tick(40);
-  check('video sound on again -> Listen stops again', !hel('listen-btn').classList.contains('on') && hel('cam-video').muted === false);
+  check('video Sound on again', hel('cam-video').muted === false);
+  hel('listen-btn').click(); await tick(60);
+  check('Listen pressed while watching -> the video closes, Listen plays',
+        hel('listen-btn').classList.contains('on') && !hel('cam-btn').classList.contains('on') && !hel('cam-video').classList.contains('on')
+        && seen.some(c => c[1] === 'DELETE' && c[0].includes('/api/cam/session/')));
   hel('listen-btn').click(); await tick(40);
-  check('Listen pressed while watching -> video sound muted, picture stays', hel('listen-btn').classList.contains('on') && hel('cam-video').muted === true && hel('cam-btn').classList.contains('on'));
-  hel('listen-btn').click(); hel('cam-snd').click(); await tick(40);
+  hel('cam-btn').click(); await tick(60);
   hel('cam-btn').click(); await tick(40);
-  check('Stop video when Listen was off before the sound took over -> stays quiet', !hel('listen-btn').classList.contains('on') && hel('cam-snd').textContent === 'Sound off');
+  check('Stop video when Listen was off before -> stays quiet', !hel('listen-btn').classList.contains('on') && hel('cam-snd').textContent === 'Sound off');
   hel('listen-btn').click(); await tick(40);
   hel('cam-btn').click(); await tick(60);
   hel('cam-btn').click(); await tick(40);
   check('Stop video -> Listen resumes', hel('listen-btn').classList.contains('on') && !hel('cam-btn').classList.contains('on'));
+  hel('listen-btn').click(); await tick(20);
+
+  // pause / live
+  hel('cam-btn').click(); await tick(60);
+  const before = calls.filter(c => c[0] === 'answer').length;
+  hel('cam-pause').click(); await tick(30);
+  check('Pause: connection closed, picture kept on screen, button says Live',
+        calls.filter(c => c[0] === 'close').length > 0 && hel('cam-btn').classList.contains('on') && hel('cam-video').classList.contains('on')
+        && hel('cam-pause').textContent.includes('Live') && hel('cam-note').textContent.startsWith('Paused'), hel('cam-pause').textContent);
+  hel('cam-pause').click(); await tick(60);
+  check('Live: a fresh connection (now, not a backlog), button back to Pause',
+        calls.filter(c => c[0] === 'answer').length === before + 1 && hel('cam-pause').textContent.includes('Pause'));
+  hel('cam-pause').click(); await tick(30);
+  hel('cam-btn').click(); await tick(40);
+  check('Stop while paused resets Pause', hel('cam-pause').textContent.includes('Pause') && !hel('cam-video').classList.contains('on'));
+
+  // fullscreen: the picture + controls block goes fullscreen; stopping leaves it
+  let fsReq = 0, fsExit = 0;
+  const pop0 = hel('cam-pop');
+  pop0.requestFullscreen = async () => { fsReq++; Object.defineProperty(H.w.document, 'fullscreenElement', { value: pop0, configurable: true }); };
+  H.w.document.exitFullscreen = async () => { fsExit++; Object.defineProperty(H.w.document, 'fullscreenElement', { value: null, configurable: true }); };
+  hel('cam-fs').click(); await tick(10);
+  check('Full before the video starts -> asks to start it first', fsReq === 0 && hel('cam-note').textContent.includes('Start the video'));
+  hel('cam-btn').click(); await tick(60);
+  hel('cam-fs').click(); await tick(10);
+  check('Full -> the video block requests fullscreen', fsReq === 1);
+  hel('cam-video').dispatchEvent(new H.w.MouseEvent('dblclick', { bubbles: true })); await tick(10);
+  check('double-tap the picture -> leaves fullscreen', fsExit === 1);
+  hel('cam-video').dispatchEvent(new H.w.MouseEvent('dblclick', { bubbles: true })); await tick(10);
+  hel('cam-btn').click(); await tick(40);
+  check('stopping the video leaves fullscreen', fsReq === 2 && fsExit === 2);
+
+  // volume: no Web Audio -> plain element volume (capped at 100 %), saved per device
+  const lv = hel('listen-vol');
+  check('volume sliders start at 100 %', lv.value === '100' && hel('listen-vol-val').textContent === '100%' && hel('cam-vol-val').textContent === '100%');
+  lv.value = '60'; lv.dispatchEvent(new H.w.Event('input', { bubbles: true })); await tick(10);
+  check('Listen volume 60 % -> element volume 0.6, saved', Math.abs(hel('player').volume - 0.6) < 1e-6 && H.w.localStorage.getItem('mixer.vol.listen') === '0.6', hel('player').volume);
+  lv.value = '250'; lv.dispatchEvent(new H.w.Event('input', { bubbles: true })); await tick(10);
+  check('250 % without Web Audio: element at full, readout amber', hel('player').volume === 1 && hel('listen-vol-val').textContent === '250%' && hel('listen-vol-val').classList.contains('boost'));
+  // volume boost with Web Audio: the video's audio track goes through gain -> limiter; element muted
+  const nodes = [];
+  class FakeNode { constructor(kind) { this.kind = kind; this.gain = { value: 1 }; ['threshold', 'knee', 'ratio', 'attack', 'release'].forEach(k => this[k] = { value: 0 }); this.out = []; nodes.push(this); }
+    connect(n) { this.out.push(n); return n; } disconnect() { this.out = []; this.gone = true; } }
+  H.w.AudioContext = class { constructor() { this.state = 'running'; this.destination = new FakeNode('dest'); }
+    resume() { return Promise.resolve(); }
+    createMediaStreamSource(st) { const n = new FakeNode('src'); n.stream = st; return n; }
+    createGain() { return new FakeNode('gain'); } createDynamicsCompressor() { return new FakeNode('comp'); } };
+  H.w.MediaStream.prototype.getAudioTracks = function () { return this.t.filter(t => t.kind === 'audio'); };
+  const cv = hel('cam-vol');
+  cv.value = '300'; cv.dispatchEvent(new H.w.Event('input', { bubbles: true })); await tick(10);
+  hel('cam-btn').click(); await tick(60);
+  H.w._pc.ontrack({ track: { kind: 'audio', stop() {} } }); await tick(10);
+  const gain = nodes.find(n => n.kind === 'gain' && !n.gone), comp = nodes.find(n => n.kind === 'comp' && !n.gone);
+  check('video at 300 %: stream -> gain 3.0 -> limiter -> speakers, element muted',
+        gain && gain.gain.value === 3 && comp && comp.out[0] && comp.out[0].kind === 'dest' && comp.ratio.value === 20 && hel('cam-video').muted === true, gain && gain.gain.value);
+  hel('cam-snd').click(); await tick(10);
+  check('Sound off while boosted -> gain 0', gain.gain.value === 0);
+  hel('cam-snd').click(); await tick(10);
+  cv.value = '100'; cv.dispatchEvent(new H.w.Event('input', { bubbles: true })); await tick(10);
+  check('back to 100 % -> Web Audio released, element plays unmuted', gain.gone && hel('cam-video').muted === false);
+  cv.value = '200'; cv.dispatchEvent(new H.w.Event('input', { bubbles: true })); await tick(10);
+  const g2 = nodes.filter(n => n.kind === 'gain' && !n.gone).pop();
+  check('raised again -> boosted again (2.0)', g2 && g2.gain.value === 2 && hel('cam-video').muted === true);
+  Object.defineProperty(H.w.document, 'hidden', { value: true, configurable: true });
+  H.w.document.dispatchEvent(new H.w.Event('visibilitychange')); await tick(10);
+  check('page in the background -> plain playback (keeps playing if Web Audio is suspended)', g2.gone && hel('cam-video').muted === false);
+  Object.defineProperty(H.w.document, 'hidden', { value: false, configurable: true });
+  H.w.document.dispatchEvent(new H.w.Event('visibilitychange')); await tick(10);
+  check('back in front -> boosted again', nodes.filter(n => n.kind === 'gain' && !n.gone).length === 1 && hel('cam-video').muted === true);
+  hel('cam-btn').click(); await tick(40);
+  check('stop -> boost released', nodes.filter(n => n.kind === 'gain' && !n.gone).length === 0);
+  cv.value = '100'; cv.dispatchEvent(new H.w.Event('input', { bubbles: true }));
+  delete H.w.AudioContext;
+
   // pop out: a browser with standard Picture-in-Picture
   let pipCalls = 0;
   H.w.document.pictureInPictureEnabled = true;

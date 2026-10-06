@@ -1,5 +1,5 @@
 """
-Cam feed (v3.4/v3.5): picker cam output + delay line (off-hardware).
+Cam feed (v3.4-v3.7): picker cam output + delay line (off-hardware).
 
 The picker slices a second stereo pair out of the same capture for the video encoder, delays it, and
 writes it to a fifo through a bounded queue. The listen-back output must stay bit-exact and never wait
@@ -566,6 +566,54 @@ def test_cam_api():
         fake.stop()
 
 
+# A steady 1 kHz tone on USB 5/6, delivered with scheduling hiccups like a busy Pi (bursty fifo writes).
+FAKE_TONE = r"""
+import sys, time, math, random
+secs = float(sys.argv[1]); CH = 48; N = 480
+w = sys.stdout.buffer
+t0 = time.monotonic(); n = 0
+random.seed(1)
+while n * 0.01 < secs:
+    b = bytearray(CH * 3 * N)
+    for f in range(N):
+        bb = int(3000000 * math.sin(2 * math.pi * 1000 * (n * N + f) / 48000)).to_bytes(3, 'little', signed=True)
+        o = f * CH * 3
+        b[o + 12:o + 15] = bb; b[o + 15:o + 18] = bb
+    w.write(b); w.flush(); n += 1
+    d = t0 + n * 0.01 - time.monotonic()
+    if random.random() < 0.03:
+        d += random.uniform(0.02, 0.08)
+    if d > 0:
+        time.sleep(d)
+"""
+
+
+def test_cam_pitch_steady():
+    print('cam: sound keeps its pitch when the fifo delivers in bursts (v3.7: no stretching -> no warble)')
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, 'tone.mkv')
+        ctl = os.path.join(tmp, 'cam.ctl')
+        lst = Listener(capture_cmd=[sys.executable, '-c', FAKE_TONE, '14'], bitrate='64k', cam_ctl=ctl)
+        c = Cam({'enabled': True, 'delay_ms': 0, 'feed': 'main1', 'idle_s': 60}, lst, lambda: [{'id': 'main1', 'usb': [5, 6]}],
+                probe=lambda: (False, False, 0), ctl_path=ctl, video_input=LAVFI, output=['-y', '-f', 'matroska', out])
+        c.hold(60)
+        time.sleep(10)
+        c._stop('test')
+        lst._teardown()
+        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', out, '-map', '0:a:0', '-f', 's16le', '-ac', '1', '-ar', '48000', '-'],
+                             capture_output=True).stdout
+        smp = [int.from_bytes(raw[i:i + 2], 'little', signed=True) for i in range(0, len(raw) - 1, 2)][48000:]
+        W = 9600                                       # 200 ms windows: 400 zero crossings at 1 kHz, 2.5 Hz resolution
+        freqs = []
+        for k in range(0, len(smp) - W, W):
+            seg = smp[k:k + W]
+            z = sum(1 for i in range(1, W) if (seg[i - 1] < 0) != (seg[i] < 0))
+            freqs.append(z / 2 / 0.2)
+        bad = [f for f in freqs if abs(f - 1000) > 6]
+        check('tone encoded for several seconds', len(freqs) >= 25, len(freqs))
+        check('pitch steady at 1 kHz in every 200 ms window (no +-2 % warble)', not bad, (min(freqs or [0]), max(freqs or [0]), len(bad)))
+
+
 def test_cam_tiers():
     print('cam: picture tiers (v3.5) -- frame rate, size, preset, bitrate really end up in the stream')
     from mixer.cam import QUALITIES
@@ -625,6 +673,7 @@ def main():
     test_cam_failure()
     test_cam_net_source_setup()
     test_cam_net_pipeline()
+    test_cam_pitch_steady()
     test_cam_tiers()
     test_cam_api()
     print()
