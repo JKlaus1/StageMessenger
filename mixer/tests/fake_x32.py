@@ -100,6 +100,18 @@ def seed():
         st.update({b + '/config/name': nm, b + '/config/color': 7 if nm else 0, b + '/mix/fader': 0.749756, b + '/mix/on': 0})
     for k in range(1, 81):
         st[f'/-stat/solosw/{k:02d}'] = 0
+    # v4.0 console view: DCAs, pan, LR / M/C assigns, matrix sends (bus / main -> mtx 1-6)
+    for i in range(1, 9):
+        st.update({f'/dca/{i}/fader': 0.75 if i < 3 else 0.0, f'/dca/{i}/on': 1,
+                   f'/dca/{i}/config/name': {1: 'Drums', 2: 'Vox'}.get(i, ''), f'/dca/{i}/config/color': 2 if i == 1 else 0})
+    for pre, cnt in (('/ch', 32), ('/auxin', 8), ('/bus', 16)):
+        for i in range(1, cnt + 1):
+            b = f'{pre}/{i:02d}'
+            st.update({b + '/mix/pan': 0.5, b + '/mix/st': 1, b + '/mix/mono': 0, b + '/mix/mlevel': 0.0})
+    for b in [f'/bus/{i:02d}' for i in range(1, 17)] + ['/main/st', '/main/m']:
+        for m in range(1, 7):
+            st[f'{b}/mix/{m:02d}/level'] = 0.75 if (b, m) == ('/bus/01', 2) else 0.0
+            st[f'{b}/mix/{m:02d}/on'] = 1
     st['/-stat/solo'] = 0
     # v3.1: input stage, headamps (no stagebox: every /-ha index -1), processing = probed Ch 1 values
     eq = {'on': 1}

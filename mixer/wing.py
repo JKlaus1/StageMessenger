@@ -44,6 +44,12 @@ Protocol facts verified against a WING Rack, fw 3.1 (Oct 2026 probes):
     re-read the list); $ctl/deletemarker N deletes marker N. N is 1-based; all three self-reset to 0
     and write to the SD card. Max 100 markers per session (param ranges are 0..100).
     Display strings for times are inconsistent ('0:02:90', '1:56:30:40') -- use the native ms.
+  * Console view (probed Oct 2026, fw 3.1): /ch/N/send/1-16 and /ch/N/send/MX1-8 (on, lvl, pon, mode
+    PRE/POST/GRP, plink, pan); buses and mains send to matrices only (/bus/N/send/MX1-8, /main/N/send/MX1-8;
+    /bus/N/send/1-16 is r/o). Main sends /ch|aux|bus/N/main/1-4 (on, lvl, pre) are separate from the
+    channel fader. /dca/1-16: name, col, icon, mute, fdr, $solo (no '$name' / '$col'). Every strip kind has
+    a writable $solo and a pan (lin -100..+100). Channel filter /ch/N/flt: lc, lcf (20..2k), lcs list
+    6/12/18/24, hc, hcf (50..20k), hcs list 6/12, tf + mdl TILT/MAX/AP1/AP2 + tilt. Aux strips have no flt.
   * /io/out/USB/N/grp accepts MAIN BUS MTX AUX LCL A B ... (CH and DCA are not groups).
     /io/out/USB/N/in is 1-based on write (int or str); readback display string is 1-based.
 """
@@ -100,9 +106,13 @@ def osc_parse(b):
 
 # ── Address model ───────────────────────────────────────────────────────────────
 
-N_CH, N_AUX, N_BUS, N_MTX, N_MAIN, N_MGRP = 40, 8, 16, 8, 2, 8
+N_CH, N_AUX, N_BUS, N_MTX, N_MAIN, N_MGRP = 40, 8, 16, 8, 4, 8
+N_DCA = 16
 # Float leaves written in native units, clamped to the console's ranges
-FLOAT_RANGES = {'g': (-2.5, 45.0), 'trim': (-18.0, 18.0), 'lcf': (20.0, 2000.0), 'hcf': (200.0, 20000.0)}
+FLOAT_RANGES = {'g': (-2.5, 45.0), 'trim': (-18.0, 18.0), 'lcf': (20.0, 2000.0), 'hcf': (50.0, 20000.0),
+                'pan': (-100.0, 100.0)}
+# v4.0: channel filter slopes (list params, dB/oct as text)
+SLOPES = {'lcs': ('6', '12', '18', '24'), 'hcs': ('6', '12')}
 # Physical input groups and sizes (WING Rack fw 3.1, from /io/in '?')
 SRC_GROUPS = [('LCL', 24), ('A', 48), ('B', 48), ('C', 48), ('SC', 32), ('USB', 48),
               ('CRD', 64), ('MOD', 64), ('PLAY', 4), ('AES', 2)]
@@ -135,23 +145,39 @@ def strip_addrs():
                   f'/{kind}/{i}/col', f'/{kind}/{i}/$col', f'/{kind}/{i}/tags',
                   f'/{kind}/{i}/in/conn/altgrp', f'/{kind}/{i}/in/conn/altin', f'/{kind}/{i}/in/set/altsrc',
                   f'/{kind}/{i}/in/set/trim', f'/{kind}/{i}/in/set/inv',
-                  f'/{kind}/{i}/flt/lc', f'/{kind}/{i}/flt/lcf', f'/{kind}/{i}/flt/hc', f'/{kind}/{i}/flt/hcf']
+                  f'/{kind}/{i}/flt/lc', f'/{kind}/{i}/flt/lcf', f'/{kind}/{i}/flt/hc', f'/{kind}/{i}/flt/hcf',
+                  f'/{kind}/{i}/pan']
+            if kind == 'ch':                                   # v4.0: filter slopes for the EQ graph (aux: no filter)
+                a += [f'/ch/{i}/flt/lcs', f'/ch/{i}/flt/hcs']
     for i in range(1, N_BUS + 1):
         a += [f'/bus/{i}/name', f'/bus/{i}/$name', f'/bus/{i}/fdr', f'/bus/{i}/mute',
-              f'/bus/{i}/col', f'/bus/{i}/$col']
+              f'/bus/{i}/col', f'/bus/{i}/$col', f'/bus/{i}/$solo', f'/bus/{i}/pan']
     for i in range(1, N_MAIN + 1):
         a += [f'/main/{i}/name', f'/main/{i}/$name', f'/main/{i}/fdr', f'/main/{i}/mute',
-              f'/main/{i}/col', f'/main/{i}/$col']
+              f'/main/{i}/col', f'/main/{i}/$col', f'/main/{i}/$solo', f'/main/{i}/pan']
     for i in range(1, N_MGRP + 1):
         a += [f'/mgrp/{i}/name', f'/mgrp/{i}/mute']
     for i in range(1, N_MTX + 1):
-        a += [f'/mtx/{i}/name', f'/mtx/{i}/$name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute']
+        a += [f'/mtx/{i}/name', f'/mtx/{i}/$name', f'/mtx/{i}/fdr', f'/mtx/{i}/mute',
+              f'/mtx/{i}/col', f'/mtx/{i}/$col', f'/mtx/{i}/$solo', f'/mtx/{i}/pan']
+    for i in range(1, N_DCA + 1):                              # v4.0: DCAs (no '$' name / colour on a DCA)
+        a += [f'/dca/{i}/name', f'/dca/{i}/col', f'/dca/{i}/fdr', f'/dca/{i}/mute', f'/dca/{i}/$solo']
     a += rec_addrs()
     # Sends last: the page is usable (LR mode) before these finish loading.
     for kind, n in (('ch', N_CH), ('aux', N_AUX)):
         for i in range(1, n + 1):
             for b in range(1, N_BUS + 1):
                 a += [f'/{kind}/{i}/send/{b}/lvl', f'/{kind}/{i}/send/{b}/on']
+    # v4.0 (console view): sends to the mains (ch / aux / bus -> Main 1-4) and to the matrices
+    # (ch / aux / bus / main -> MX1-8). Last of all: only sends-on-fader for a main / matrix needs them.
+    for kind, n in (('ch', N_CH), ('aux', N_AUX), ('bus', N_BUS)):
+        for i in range(1, n + 1):
+            for m in range(1, N_MAIN + 1):
+                a += [f'/{kind}/{i}/main/{m}/lvl', f'/{kind}/{i}/main/{m}/on']
+    for kind, n in (('ch', N_CH), ('aux', N_AUX), ('bus', N_BUS), ('main', N_MAIN)):
+        for i in range(1, n + 1):
+            for m in range(1, N_MTX + 1):
+                a += [f'/{kind}/{i}/send/MX{m}/lvl', f'/{kind}/{i}/send/MX{m}/on']
     return a
 
 
@@ -314,6 +340,11 @@ class Wing:
             self._send(addr, v)
         elif leaf in ('grp',):
             v = str(value); self._send(addr, v)
+        elif leaf in SLOPES:
+            v = str(value).strip()
+            if v not in SLOPES[leaf]:
+                return None
+            self._send(addr, v)
         elif leaf in ('in',):
             v = int(value); self._send(addr, v)
         elif addr == '/io/altsw':

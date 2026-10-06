@@ -62,10 +62,13 @@ PORT = 10023
 NEG_INF = -144.0
 
 N_CH, N_AUX, N_BUS, N_MTX, N_MAIN, N_MGRP = 32, 8, 16, 6, 2, 6
+N_DCA = 8
 BLOCKS = ('1-8', '9-16', '17-24', '25-32')
 # X32 colour -> WING palette index used by the page (1..18; 0 = none)
 COLOR_MAP = {0: 0, 1: 9, 2: 5, 3: 7, 4: 2, 5: 11, 6: 4, 7: 18}
-KINDS = {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'mtx': N_MTX, 'main': N_MAIN}
+KINDS = {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'mtx': N_MTX, 'main': N_MAIN, 'dca': N_DCA}
+PAN_KINDS = ('ch', 'aux', 'bus')                 # v4.0: mix/pan 0..1 -> canonical -100..+100
+MTX_SRC = ('bus', 'main')                        # v4.0: who sends to a matrix (mix/01-06)
 GAIN_RANGE, LCF_RANGE = (-12.0, 60.0), (20.0, 400.0)
 SRC_LABEL = {'LCL': 'Local', 'A': 'AES A', 'B': 'AES B', 'CRD': 'Card', 'AUX': 'Aux', 'USB': 'USB', 'FX': 'FX',
              'BUS': 'Bus', 'TB': 'Talkback'}
@@ -202,12 +205,20 @@ def raw_base(kind, n):
     """canonical (kind, n) -> raw strip prefix"""
     if kind == 'main':
         return '/main/st' if n == 1 else '/main/m'
+    if kind == 'dca':
+        return f'/dca/{n}'                        # DCAs are not zero-padded
     pre = {'ch': '/ch', 'aux': '/auxin', 'bus': '/bus', 'mtx': '/mtx'}[kind]
     return f'{pre}/{n:02d}'
 
 
+def mix_raw(kind, n, leaf):
+    """fader / on / pan of a strip: '/ch/03/mix/fader' ... but '/dca/3/fader' (a DCA has no 'mix')."""
+    rb = raw_base(kind, n)
+    return f'{rb}/{leaf}' if kind == 'dca' else f'{rb}/mix/{leaf}'
+
+
 def solo_index(kind, n):
-    return {'ch': 0, 'aux': 32, 'bus': 48, 'mtx': 64}.get(kind, 70) + n
+    return {'ch': 0, 'aux': 32, 'bus': 48, 'mtx': 64, 'dca': 72}.get(kind, 70) + n
 
 
 def fader_db(f):
@@ -334,14 +345,27 @@ class X32:
                 rb, cb = raw_base(kind, n), f'/{kind}/{n}'
                 add(f'{rb}/config/name', lambda r=rb, c=cb: self._d_name(r, c))
                 add(f'{rb}/config/color', lambda r=rb, c=cb: self._d_color(r, c))
-                add(f'{rb}/mix/fader', lambda r=rb, c=cb: [(c + '/fdr', fader_db(self.raw.get(r + '/mix/fader')))])
-                add(f'{rb}/mix/on', lambda k=kind, n=n: self._d_mute(k, n))
+                fr = mix_raw(kind, n, 'fader')
+                add(fr, lambda r=fr, c=cb: [(c + '/fdr', fader_db(self.raw.get(r)))])
+                add(mix_raw(kind, n, 'on'), lambda k=kind, n=n: self._d_mute(k, n))
                 if kind in ('ch', 'aux', 'bus'):
                     add(f'{rb}/grp/mute', lambda k=kind, n=n: self._d_mute(k, n))
+                add(f'/-stat/solosw/{solo_index(kind, n):02d}',            # v4.0: every strip kind has a solo
+                    lambda k=kind, n=n, c=cb: [(c + '/$solo', 1 if self.raw.get(
+                        f'/-stat/solosw/{solo_index(k, n):02d}') else 0)])
+                if kind in PAN_KINDS:
+                    add(f'{rb}/mix/pan', lambda r=rb, c=cb: [(c + '/pan', self._pan(r))])
+                if kind in MTX_SRC:                                         # v4.0: matrix sends
+                    for m in range(1, N_MTX + 1):
+                        add(f'{rb}/mix/{m:02d}/level', lambda r=rb, c=cb, m=m: [
+                            (f'{c}/send/MX{m}/lvl', fader_db(self.raw.get(f'{r}/mix/{m:02d}/level')))])
+                        add(f'{rb}/mix/{m:02d}/on', lambda r=rb, c=cb, m=m: [
+                            (f'{c}/send/MX{m}/on', 1 if self.raw.get(f'{r}/mix/{m:02d}/on') else 0)])
+                if kind in ('ch', 'aux', 'bus'):                            # v4.0: LR assign, M/C assign + level
+                    add(f'{rb}/mix/st', lambda r=rb, c=cb: [(c + '/main/1/on', 1 if self.raw.get(r + '/mix/st') else 0)])
+                    add(f'{rb}/mix/mono', lambda r=rb, c=cb: [(c + '/main/2/on', 1 if self.raw.get(r + '/mix/mono') else 0)])
+                    add(f'{rb}/mix/mlevel', lambda r=rb, c=cb: [(c + '/main/2/lvl', fader_db(self.raw.get(r + '/mix/mlevel')))])
                 if kind in ('ch', 'aux'):
-                    add(f'/-stat/solosw/{solo_index(kind, n):02d}',
-                        lambda k=kind, n=n, c=cb: [(c + '/$solo', 1 if self.raw.get(
-                            f'/-stat/solosw/{solo_index(k, n):02d}') else 0)])
                     add(f'{rb}/config/source', lambda k=kind, n=n: self._d_source(k, n))
                     for b in range(1, N_BUS + 1):
                         add(f'{rb}/mix/{b:02d}/level', lambda r=rb, c=cb, b=b: [
@@ -380,11 +404,14 @@ class X32:
         for kind, cnt in KINDS.items():
             for n in range(1, cnt + 1):
                 rb = raw_base(kind, n)
-                a += [f'{rb}/config/name', f'{rb}/config/color', f'{rb}/mix/fader', f'{rb}/mix/on']
+                a += [f'{rb}/config/name', f'{rb}/config/color', mix_raw(kind, n, 'fader'), mix_raw(kind, n, 'on'),
+                      f'/-stat/solosw/{solo_index(kind, n):02d}']
                 if kind in ('ch', 'aux', 'bus'):
-                    a.append(f'{rb}/grp/mute')
+                    a += [f'{rb}/grp/mute', f'{rb}/mix/st', f'{rb}/mix/mono', f'{rb}/mix/mlevel']
+                if kind in PAN_KINDS:
+                    a.append(f'{rb}/mix/pan')
                 if kind in ('ch', 'aux'):
-                    a += [f'{rb}/config/source', f'/-stat/solosw/{solo_index(kind, n):02d}',
+                    a += [f'{rb}/config/source',
                           f'{rb}/preamp/trim', f'{rb}/preamp/invert', f'/-ha/{ha_slot(kind, n):02d}/index']
                 if kind == 'ch':
                     a += [f'{rb}/preamp/hpon', f'{rb}/preamp/hpf']
@@ -395,6 +422,11 @@ class X32:
                 rb = raw_base(kind, n)
                 for b in range(1, N_BUS + 1):
                     a += [f'{rb}/mix/{b:02d}/level', f'{rb}/mix/{b:02d}/on']
+        for kind in MTX_SRC:                                   # v4.0: matrix sends last of all
+            for n in range(1, KINDS[kind] + 1):
+                rb = raw_base(kind, n)
+                for m in range(1, N_MTX + 1):
+                    a += [f'{rb}/mix/{m:02d}/level', f'{rb}/mix/{m:02d}/on']
         return a
 
     # ── derivations (raw -> canonical) ──
@@ -416,7 +448,7 @@ class X32:
         'tags' = '#Mn' group membership. Muted-and-in-an-engaged-group counts as group-muted (the
         M32 can't tell an own mute apart while the group holds it)."""
         rb, cb = raw_base(kind, n), f'/{kind}/{n}'
-        on = self.raw.get(rb + '/mix/on')
+        on = self.raw.get(mix_raw(kind, n, 'on'))
         if on is None:
             return []
         if kind not in ('ch', 'aux', 'bus'):
@@ -466,6 +498,10 @@ class X32:
     def _trim(self, rb):
         t = self.raw.get(rb + '/preamp/trim')
         return round(t * 36 - 18, 2) if isinstance(t, (int, float)) else None
+
+    def _pan(self, rb):
+        p = self.raw.get(rb + '/mix/pan')
+        return round(p * 200 - 100) if isinstance(p, (int, float)) else None
 
     def _lcf(self, rb):
         f = self.raw.get(rb + '/preamp/hpf')
@@ -689,11 +725,19 @@ class X32:
         if leaf in ('col', '$col'):
             return [rb + '/config/color']
         if leaf == 'fdr':
-            return [rb + '/mix/fader']
+            return [mix_raw(kind, n, 'fader')]
         if leaf in ('mute', '$mute', 'tags'):
-            return [rb + '/mix/on'] + ([rb + '/grp/mute'] if kind in ('ch', 'aux', 'bus') else []) \
+            return [mix_raw(kind, n, 'on')] + ([rb + '/grp/mute'] if kind in ('ch', 'aux', 'bus') else []) \
                 + [f'/config/mute/{g}' for g in range(1, N_MGRP + 1)]
-        if leaf == '$solo' and kind in ('ch', 'aux'):
+        if leaf == 'pan' and kind in PAN_KINDS:
+            return [rb + '/mix/pan']
+        mt = self._mtx_send(kind, n, leaf)
+        if mt:
+            return [mt[0]]
+        mn = self._main_send(kind, n, leaf)
+        if mn:
+            return [mn]
+        if leaf == '$solo':
             return [f'/-stat/solosw/{solo_index(kind, n):02d}']
         if leaf == 'in/set/trim' and kind in ('ch', 'aux'):
             return [rb + '/preamp/trim']
@@ -703,10 +747,32 @@ class X32:
             return [rb + ('/preamp/hpon' if leaf == 'flt/lc' else '/preamp/hpf')]
         if leaf.startswith('in/') and kind in ('ch', 'aux'):
             return [rb + '/config/source']
-        if leaf.startswith('send/') and kind in ('ch', 'aux'):
+        if leaf.startswith('send/') and kind in ('ch', 'aux') and leaf.split('/')[1].isdigit():
             b = int(leaf.split('/')[1])
             return [f'{rb}/mix/{b:02d}/' + ('level' if leaf.endswith('lvl') else 'on')]
         return []
+
+    @staticmethod
+    def _mtx_send(kind, n, leaf):
+        """'send/MX2/lvl' on a bus / main -> (raw '/bus/03/mix/02/level', 'lvl'), else None."""
+        p = leaf.split('/')
+        if kind not in MTX_SRC or len(p) != 3 or p[0] != 'send' or not p[1].startswith('MX') or p[2] not in ('lvl', 'on'):
+            return None
+        try:
+            m = int(p[1][2:])
+        except ValueError:
+            return None
+        if not 1 <= m <= N_MTX:
+            return None
+        return f'{raw_base(kind, n)}/mix/{m:02d}/' + ('level' if p[2] == 'lvl' else 'on'), p[2]
+
+    @staticmethod
+    def _main_send(kind, n, leaf):
+        """'main/1/on' -> mix/st, 'main/2/on' -> mix/mono, 'main/2/lvl' -> mix/mlevel (ch / aux / bus)."""
+        leafs = {'main/1/on': '/mix/st', 'main/2/on': '/mix/mono', 'main/2/lvl': '/mix/mlevel'}
+        if kind not in ('ch', 'aux', 'bus') or leaf not in leafs:
+            return None
+        return raw_base(kind, n) + leafs[leaf]
 
     def set(self, addr, value):
         """Canonical write -> raw write. Returns the canonical value written, or None if refused."""
@@ -760,17 +826,32 @@ class X32:
             return self._lcf(rb)
         if leaf == 'fdr':
             p = fader_norm(max(NEG_INF, min(10.0, float(value))))
-            self._write(rb + '/mix/fader', float(p))
+            self._write(mix_raw(kind, n, 'fader'), float(p))
             return fader_db(p)
         if leaf == 'mute':
             v = 1 if int(value) else 0
-            self._write(rb + '/mix/on', 0 if v else 1)
+            self._write(mix_raw(kind, n, 'on'), 0 if v else 1)
             return v
-        if leaf == '$solo' and kind in ('ch', 'aux'):
+        if leaf == 'pan' and kind in PAN_KINDS:
+            v = int(round(max(-100.0, min(100.0, float(value)))))
+            self._write(rb + '/mix/pan', float((v + 100) / 200))
+            return v
+        mn = self._main_send(kind, n, leaf)
+        mt = self._mtx_send(kind, n, leaf) or ((mn, leaf.rsplit('/', 1)[-1]) if mn else None)
+        if mt:
+            raw, what = mt
+            if what == 'lvl':
+                p = fader_norm(max(NEG_INF, min(10.0, float(value))))
+                self._write(raw, float(p))
+                return fader_db(p)
+            v = 1 if int(value) else 0
+            self._write(raw, v)
+            return v
+        if leaf == '$solo':
             v = 1 if int(value) else 0
             self._write(f'/-stat/solosw/{solo_index(kind, n):02d}', v)
             return v
-        if leaf.startswith('send/') and kind in ('ch', 'aux'):
+        if leaf.startswith('send/') and kind in ('ch', 'aux') and leaf.split('/')[1].isdigit():
             parts = leaf.split('/')
             b = int(parts[1])
             if not 1 <= b <= N_BUS:

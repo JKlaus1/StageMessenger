@@ -29,7 +29,7 @@ import urllib.request
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory, abort
 
-from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, N_SD, SRC_GROUPS, SRC_LEAVES, parse_describe, osc_msg, osc_parse
+from .wing import Wing, N_BUS, N_MTX, N_CH, N_AUX, N_SD, N_MAIN, N_DCA, SRC_GROUPS, SRC_LEAVES, parse_describe, osc_msg, osc_parse
 from .listen import Listener
 from .cam import Cam
 from .meters import Meters
@@ -184,12 +184,15 @@ CAPS = {
     'wing': {'console': 'wing', 'model': 'WING', 'nch': N_CH, 'naux': N_AUX, 'nbus': N_BUS, 'nmtx': N_MTX,
              'nmg': 8, 'main2': 'Main 2', 'sheet': True, 'recorder': 'wlive', 'listen': True, 'spotify': True,
              'alt': True, 'gain': [-2.5, 45], 'lcf': [20, 2000], 'hc': True, 'spol': True,
-             'auxproc': ['eq', 'gate', 'dyn'], 'grdb': False, 'sd': N_SD, 'movemark': True, 'recauto': True},
+             'auxproc': ['eq', 'gate', 'dyn'], 'grdb': False, 'sd': N_SD, 'movemark': True, 'recauto': True,
+             # v4.0 console view: mains / DCAs, who can send to a matrix, sends-on-fader to Main 2-4
+             'nmain': N_MAIN, 'ndca': N_DCA, 'mtxsrc': ['ch', 'aux', 'bus', 'main'], 'mainsof': True},
     'x32':  {'console': 'x32', 'model': 'X32', 'nch': x32mod.N_CH, 'naux': x32mod.N_AUX, 'nbus': x32mod.N_BUS,
              'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': True, 'recorder': 'xlive',
              'listen': True, 'spotify': False, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
              'lcf': list(x32mod.LCF_RANGE), 'hc': False, 'spol': False, 'auxproc': ['eq'], 'grdb': True,
-             'sd': 1, 'movemark': False, 'recauto': False},
+             'sd': 1, 'movemark': False, 'recauto': False,
+             'nmain': x32mod.N_MAIN, 'ndca': x32mod.N_DCA, 'mtxsrc': ['bus', 'main'], 'mainsof': False},
 }
 
 
@@ -231,6 +234,12 @@ class Hub:
 SETTABLE = re.compile(
     r'^/(?:(?:ch|aux)/\d{1,2}/(?:fdr|mute|\$solo|send/\d{1,2}/(?:lvl|on))'
     r'|(?:bus|main|mtx)/\d{1,2}/(?:fdr|mute)'
+    # v4.0 console view: solo on every strip kind, DCAs, pan, sends to the mains and the matrices
+    r'|(?:bus|main|mtx|dca)/\d{1,2}/\$solo|dca/\d{1,2}/(?:fdr|mute)'
+    r'|(?:ch|aux|bus|main|mtx)/\d{1,2}/pan'
+    r'|(?:ch|aux|bus)/\d{1,2}/main/[1-4]/(?:lvl|on)'
+    r'|(?:ch|aux|bus|main)/\d{1,2}/send/MX[1-8]/(?:lvl|on)'
+    r'|ch/\d{1,2}/flt/(?:lcs|hcs)'
     r'|mgrp/[1-8]/mute'
     r'|(?:ch|aux)/\d{1,2}/(?:in/set/(?:trim|inv)|flt/(?:lc|lcf|hc|hcf))'
     r'|io/in/(?:LCL|A|B|C|SC|USB|CRD|MOD|PLAY|AES)/\d{1,2}/(?:g|vph|pol)'
@@ -238,6 +247,8 @@ SETTABLE = re.compile(
 LOGGED_SETS = ('/io/altsw', '/cards/wlive/auto_')   # console-wide changes: note who made them
 SRC_COUNT = dict(SRC_GROUPS)
 NODE_PATH = re.compile(r'^/(ch|aux)/(\d{1,2})/(eq|gate|dyn)$')
+LAYOUT_ITEM = re.compile(r'^(ch|aux|bus|main|mtx|dca)/(\d{1,2})$')
+N_LAYERS, MAX_PROFILES = 3, 24
 NODE_LOCKED = ('mdl',)          # model changes stay at the console for now
 
 
@@ -590,6 +601,52 @@ class Mixer:
         self.hub.publish({'t': 'order', 'v': self.order})
         return self.order
 
+    # ── console-view layer layouts (v4.0): named profiles kept on the Pi, per console type ──
+    def clean_layers(self, layers):
+        c = self.caps
+        lim = {'ch': c['nch'], 'aux': c['naux'], 'bus': c['nbus'], 'main': c.get('nmain', 2),
+               'mtx': c.get('nmtx', 0), 'dca': c.get('ndca', 0)}
+        out = []
+        for lay in (layers if isinstance(layers, list) else [])[:N_LAYERS]:
+            lay = lay if isinstance(lay, dict) else {}
+            items = []
+            for k in lay.get('items') if isinstance(lay.get('items'), list) else []:
+                m = LAYOUT_ITEM.match(str(k))
+                if m and 1 <= int(m.group(2)) <= lim[m.group(1)] and k not in items:
+                    items.append(k)
+                if len(items) >= 128:
+                    break
+            out.append({'name': str(lay.get('name') or '').strip()[:12], 'items': items})
+        while len(out) < N_LAYERS:
+            out.append({'name': '', 'items': []})
+        return out
+
+    def layouts(self):
+        return dict((self._state_raw.get('layouts') or {}).get(self.console) or {})
+
+    def save_layout(self, profile, layers=None, delete=False, email=''):
+        name = str(profile or '').strip()[:24]
+        if not name:
+            return None, 'profile name required'
+        with self._ovr_lock:
+            allp = dict(self._state_raw.get('layouts') or {})
+            mine = dict(allp.get(self.console) or {})
+            if delete:
+                mine.pop(name, None)
+            else:
+                if name not in mine and len(mine) >= MAX_PROFILES:
+                    return None, 'too many profiles'
+                ent = {'layers': self.clean_layers(layers)}
+                email = str(email or (mine.get(name) or {}).get('email') or '').strip()[:120]
+                if email:
+                    ent['email'] = email
+                mine[name] = ent
+            allp[self.console] = mine
+            self._state_raw = dict(self._state_raw, layouts=allp)
+            self._write_state()
+        self.hub.publish({'t': 'layouts', 'console': self.console, 'v': mine})
+        return mine, None
+
     def _restore_tags(self, b, groups=None):
         """Put removed '#Mn' tags back on strip b (all, or just `groups`). Keeps any other tag edits."""
         with self._ovr_lock:
@@ -757,7 +814,8 @@ class Mixer:
                               'c': [r[:2] for r in lv['ch']], 'a': [r[:2] for r in lv['aux']],
                               # gate key dB, gate GR %, dyn key dB, dyn GR %
                               'cd': [r[2:] for r in lv['ch']], 'ad': [r[2:] for r in lv['aux']],
-                              'b': [r[1] for r in lv['bus']], 'm': [r[1] for r in lv['main']]})
+                              'b': [r[1] for r in lv['bus']], 'm': [r[1] for r in lv['main']],
+                              'x': [r[1] for r in lv.get('mtx') or []]})
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
@@ -1115,6 +1173,7 @@ class Mixer:
             'recm':   self.rec_markers,
             'recs':   self.rec_sessions,
             'sp':     self.spotify.snapshot() if self.spotify else None,
+            'layouts': self.layouts(),
         }
 
 
@@ -1166,19 +1225,25 @@ def page():
     return resp
 
 
+def _email():
+    """Cloudflare Access user (remote requests only) -- picks a console-view layout profile."""
+    return request.headers.get('Cf-Access-Authenticated-User-Email', '') if request.headers.get('Cf-Connecting-Ip') else ''
+
+
 @bp.route('/api/state')
 def api_state():
-    return jsonify(_mixer.snapshot())
+    return jsonify({**_mixer.snapshot(), 'who': _email()})
 
 
 @bp.route('/api/events')
 def api_events():
     q = _mixer.hub.subscribe()
+    who = _email()
 
     def gen():
         try:
             yield 'retry: 2000\n\n'
-            yield 'data: ' + json.dumps({'t': 'snap', **_mixer.snapshot()}, separators=(',', ':')) + '\n\n'
+            yield 'data: ' + json.dumps({'t': 'snap', **_mixer.snapshot(), 'who': who}, separators=(',', ':')) + '\n\n'
             while True:
                 try:
                     yield 'data: ' + q.get(timeout=15) + '\n\n'
@@ -1295,6 +1360,17 @@ def api_order():
     if not isinstance(d.get('order'), list):
         return jsonify(ok=False, err='order must be a list'), 400
     return jsonify(ok=True, order=_mixer.set_order(d['order']))
+
+
+@bp.route('/api/layouts', methods=['GET', 'POST'])
+def api_layouts():
+    if request.method == 'GET':
+        return jsonify(ok=True, console=_mixer.console, profiles=_mixer.layouts(), who=_email())
+    d = request.get_json(silent=True) or {}
+    prof, err = _mixer.save_layout(d.get('profile'), d.get('layers'), bool(d.get('delete')), _email())
+    if err:
+        return jsonify(ok=False, err=err), 400
+    return jsonify(ok=True, profiles=prof)
 
 
 @bp.route('/api/repatch', methods=['POST'])

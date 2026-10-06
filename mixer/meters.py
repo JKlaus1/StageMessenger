@@ -25,7 +25,7 @@ WORDS = 8
 REPORT_ID = 0x4C42004D              # no 0xdf bytes
 
 # (key, token, count) in request order -- the frame comes back in this order
-GROUPS = [('ch', 0xa0, 40), ('aux', 0xa1, 8), ('bus', 0xa2, 16), ('main', 0xa3, 2)]
+GROUPS = [('ch', 0xa0, 40), ('aux', 0xa1, 8), ('bus', 0xa2, 16), ('main', 0xa3, 4), ('mtx', 0xa4, 8)]   # v4.0: Main 1-4 + matrices
 FRAME_LEN = 4 + 2 * WORDS * sum(n for _, _, n in GROUPS)
 
 

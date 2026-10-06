@@ -141,4 +141,8 @@ class X32Meters:
                 main.append((pre, out, pre, 0, pre, 0))
         else:
             main = [(-99, -99, -99, 0, -99, 0)] * 2
-        return {'ch': ch, 'aux': aux, 'bus': bus, 'main': main}
+        mtx = []                                          # v4.0: matrices 1-6 (pre-fader like the buses)
+        for i in range(6):
+            pre = round(_db(m2[16 + i] if m2 else m0[64 + i]))
+            mtx.append((pre, round(self._post('mtx', i + 1, pre)), pre, 0, pre, 0))
+        return {'ch': ch, 'aux': aux, 'bus': bus, 'main': main, 'mtx': mtx}

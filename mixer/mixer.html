@@ -537,12 +537,158 @@
     #link-msg { flex: 1; }
     #link-reload { flex: none; border: 1px solid var(--red); background: var(--red); color: #fff; border-radius: 8px;
       padding: .4rem .8rem; font-size: .72rem; font-weight: 900; letter-spacing: .06em; }
+
+    /* ══ v4.0 console view (Mixing Station style): strips across, two button columns on the right ══ */
+    :root { --cv-bg: #0d1017; --cv-strip: #181c26; --cv-line: #07090d; --cv-btn: #252b39; --cv-btn-b: #343c4f;
+      --cv-dim: #8a92a6; --cv-mute: #4d1717; --cv-mute-on: #ee3b3b; --cv-solo: #4b4416; --cv-solo-on: #f3d70c;
+      --cv-sel: #4cd964; --cv-send: #1d3b28; --cv-send-on: #31c467; }
+    .hb { flex: none; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 7px;
+      padding: .3rem .55rem; font-size: .6rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; line-height: 1.1; }
+    .hb.on { border-color: var(--green); color: var(--green); }
+    .cvo { display: none; }
+    #cv-mode { display: none; }
+    body.cvm { padding: 0; max-width: none; height: 100dvh; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    body.cvm > header { margin: 0; padding: .3rem .4rem; gap: .35rem; border-bottom: 1px solid #000; background: #06080c; flex: none; }
+    body.cvm > header h1 { display: none; }
+    body.cvm #cv-mode { display: block; flex: 1; min-width: 0; font-size: .72rem; font-weight: 900; letter-spacing: .06em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+    #cv-mode small { color: var(--cv-dim); font-size: .6rem; margin-right: .3rem; }
+    body.cvm .hdr-right { gap: .3rem; }
+    body.cvm #status-text { display: none; }
+    body.cvm .cvo { display: inline-block; }
+    body.cvm > .card, body.cvm > footer { display: none !important; }
+    body.cvm #link-banner { margin: .25rem .4rem; }
+    #cv { display: none; }
+    body.cvm #cv { display: flex; flex: 1; min-height: 0; background: var(--cv-bg); touch-action: pan-x; }
+    .cv-strips { flex: 1; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain;
+      scroll-snap-type: x proximity; scrollbar-width: thin; touch-action: pan-x; }
+    .cv-pin { flex: none; display: none; border-left: 2px solid #000; box-shadow: -4px 0 8px rgba(0,0,0,.5); z-index: 1; }
+    .cv-pin.on { display: flex; }
+    .cv-col { flex: none; width: 4.3rem; display: flex; flex-direction: column; gap: 3px; padding: 3px; background: #090b10;
+      border-left: 1px solid #000; }
+    #cv-c2 { overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; width: 4.6rem; }
+    .cvb { flex: 1 1 0; min-height: 2.4rem; border-radius: 6px; border: 1px solid var(--cv-btn-b); background: var(--cv-btn);
+      color: var(--text); font-size: .62rem; font-weight: 800; letter-spacing: .03em; padding: 2px; line-height: 1.15;
+      overflow: hidden; word-break: break-word; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    .cvb small { display: block; font-size: .5rem; color: var(--cv-dim); font-weight: 800; letter-spacing: .06em; }
+    .cvb.sel { border: 2px solid var(--cv-sel); background: #1d2a22; }
+    #cv-muteen.on { background: #b3261e; border-color: #e0453c; color: #fff; }
+    #cv-muteen.on small, #cv-fine.on small { color: inherit; opacity: .85; }
+    #cv-muteen.flash { animation: cvflash .5s ease-in-out 2; }
+    @keyframes cvflash { 50% { background: #fff; color: #000; } }
+    #cv-fine.on { border-color: var(--cv-sel); color: var(--cv-sel); }
+    .cvbus { flex: none; min-height: 2.75rem; border-radius: 6px; border: 1px solid #000; border-left: 5px solid #555;
+      background: var(--cv-btn); color: var(--text); text-align: left; padding: 3px 4px; overflow: hidden;
+      -webkit-user-select: none; user-select: none; }
+    .cvbus b { display: block; font-size: .64rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cvbus small { display: block; font-size: .5rem; color: var(--cv-dim); font-weight: 800; letter-spacing: .05em; }
+    .cvbus.sel { outline: 2px solid var(--cv-sel); outline-offset: -2px; background: #23402c; }
+    .cvbus.sel small { color: var(--cv-sel); }
+    .cvsec { flex: none; font-size: .5rem; font-weight: 900; letter-spacing: .1em; color: var(--cv-dim); text-align: center; padding: 3px 0 0; }
+    /* one strip */
+    .cs { flex: none; width: var(--sw, 72px); display: flex; flex-direction: column; gap: 3px; padding: 3px 2px;
+      background: var(--cv-strip); border-right: 1px solid var(--cv-line); position: relative; scroll-snap-align: start; }
+    .cs-nm { flex: none; height: 2.5rem; border: 0; border-radius: 4px; background: #3a4152; color: #fff; font-weight: 700;
+      font-size: .74rem; line-height: 1.12; padding: 2px; overflow: hidden; display: flex; align-items: center; justify-content: center;
+      text-align: center; word-break: break-word; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    .cs-nm span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .cs-mu, .cs-so { flex: none; height: 2.05rem; border-radius: 4px; border: 1px solid rgba(0,0,0,.45); font-size: .66rem;
+      font-weight: 800; letter-spacing: .02em; padding: 0; }
+    .cs-mu { background: var(--cv-mute); color: #f0caca; }
+    .cs-mu.on { background: var(--cv-mute-on); color: #fff; }
+    .cs-mu.mg { background: #7a1f1f; color: #fff; box-shadow: inset 0 0 0 2px var(--cv-mute-on); }
+    .cs-mu.ovr { box-shadow: inset 0 0 0 2px var(--amber); }
+    .cs-mu.snd { background: #262b37; color: var(--cv-dim); }
+    .cs-mu.snd.on { background: var(--cv-send-on); color: #04180b; }
+    .cs-mu.lock { opacity: .55; }
+    .cs-so { background: var(--cv-solo); color: #ece2b0; }
+    .cs-so.on { background: var(--cv-solo-on); color: #1a1600; }
+    .cs-db { flex: none; height: 1.05rem; text-align: center; font-size: .78rem; font-variant-numeric: tabular-nums; color: #e9ecf3;
+      white-space: nowrap; overflow: hidden; }
+    .cs-fd { flex: 1; min-height: 3rem; position: relative; touch-action: pan-x; --ch: 2.7rem; }
+    .cs-rail { position: absolute; left: 0; right: 0; top: calc(var(--ch) / 2); bottom: calc(var(--ch) / 2); }
+    .cs-tk span { position: absolute; left: 1px; transform: translateY(-50%); font-size: .55rem; color: #6d7488;
+      font-variant-numeric: tabular-nums; line-height: 1; pointer-events: none; }
+    .cs-tk span::after { content: ''; position: absolute; left: 100%; top: 50%; width: 5px; height: 1px; margin-left: 2px; background: #3c4355; }
+    .cs-tr { position: absolute; top: 0; bottom: 0; left: 50%; width: 4px; margin-left: -2px; background: #040508; border-radius: 2px; }
+    .cs-mt { position: absolute; top: 0; bottom: 0; right: 2px; width: 4px; border-radius: 1px; overflow: hidden;
+      background: linear-gradient(to top, #16823b 0%, #3ddc5a 62%, #e9d31a 82%, #ee3b3b 100%); }
+    .cs-mt i { position: absolute; left: 0; right: 0; top: 0; height: 100%; background: #0b0d13; }
+    .cs-mt.off { visibility: hidden; }
+    .cs-cap { position: absolute; left: 50%; top: 100%; width: 56%; max-width: 2.7rem; height: var(--ch); transform: translate(-50%, -50%);
+      border-radius: 3px; background: repeating-linear-gradient(#a3a9b4 0 2px, #6f7581 2px 4px); box-shadow: 0 2px 5px rgba(0,0,0,.7);
+      pointer-events: none; }
+    .cs-cap::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; background: #fff; }
+    .cs.drag .cs-cap { background: repeating-linear-gradient(#c9f5d6 0 2px, #7fb592 2px 4px); }
+    .cs-lb { flex: none; text-align: center; font-size: .68rem; color: var(--cv-dim); white-space: nowrap; overflow: hidden; }
+    .cs.na { opacity: .25; }
+    .cs.na .cs-fd, .cs.na .cs-mu { pointer-events: none; }
+    .cs.chm::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--cv-mute-on); z-index: 1; }
+    #cv.narrow .cs-tk span { font-size: 0; }
+    #cv.narrow .cs-tk span::after { left: 0; margin-left: 0; width: 4px; }
+    #cv.narrow .cs-nm { font-size: .6rem; height: 2.2rem; }
+    #cv.narrow .cs-mu, #cv.narrow .cs-so { font-size: .52rem; letter-spacing: 0; }
+    #cv.narrow .cs-db { font-size: .6rem; }
+    #cv.narrow .cs-lb { font-size: .55rem; }
+    #cv.narrow .cs-mt { right: 1px; width: 3px; }
+    #cv.narrow .cs-cap { width: 72%; }
+    @media (max-height: 520px) {
+      .cs-nm { height: 1.9rem; font-size: .64rem; }
+      .cs-mu, .cs-so { height: 1.65rem; }
+      .cs-fd { --ch: 2.1rem; }
+      .cvb { min-height: 1.9rem; font-size: .56rem; }
+      .cvbus { min-height: 2.2rem; }
+    }
+    /* popovers / overlays */
+    .cv-ov { position: fixed; inset: 0; z-index: 25; background: rgba(3,4,8,.7); display: none; overflow-y: auto; padding: 2.8rem .5rem 1rem; }
+    .cv-ov.open { display: block; }
+    .cv-pop { max-width: 560px; margin: 0 auto; background: #151a24; border: 1px solid #343c4f; border-radius: 12px; padding: .7rem; }
+    .cv-pop .sh-head b { font-size: .95rem; }
+    .cv-pop > .card { margin: 0; border: 0; padding: 0; background: transparent; }
+    .cv-row { display: flex; gap: .4rem; align-items: center; margin: .45rem 0; flex-wrap: wrap; }
+    .cv-row > span { font-size: .62rem; font-weight: 800; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; min-width: 5.5rem; }
+    .cv-row select { flex: 1 1 8rem; }
+    .cv-row output { min-width: 3.2rem; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; }
+    /* layer editor */
+    #cv-ed .cv-pop { max-width: 980px; display: flex; flex-direction: column; gap: .5rem; }
+    .cv-ed-hd { display: flex; gap: .4rem; align-items: center; }
+    .cv-ed-hd input { flex: 1; min-width: 0; background: #0f0f22; color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+      padding: .5rem .6rem; font-size: .95rem; font-weight: 800; user-select: text; -webkit-user-select: text; }
+    .cv-ed-sub { font-size: .64rem; color: var(--muted); font-weight: 700; }
+    .cv-ed-body { display: grid; grid-template-columns: 1fr; gap: .6rem; }
+    @media (min-width: 720px) { .cv-ed-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); } }
+    .cv-ed-cur { max-height: 38vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: .25rem; touch-action: pan-y; }
+    @media (min-width: 720px) { .cv-ed-cur { max-height: 62vh; } }
+    .cv-it { display: grid; grid-template-columns: 2.2rem 6px 1fr 2.2rem; gap: .4rem; align-items: center; padding: .2rem;
+      border-bottom: 1px solid #1c1c38; background: #151a24; }
+    .cv-it .hd { display: flex; height: 2rem; grid-area: auto; }
+    .cv-it i { width: 6px; height: 1.6rem; border-radius: 2px; background: #555; }
+    .cv-it b { font-size: .74rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cv-it b small { color: var(--muted); font-size: .6rem; margin-right: .35rem; }
+    .cv-it button.x { height: 2rem; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 7px; font-weight: 900; }
+    .cv-it.lift { outline: 1px solid var(--green); position: relative; z-index: 2; background: #1d2a22; }
+    .cv-ed-empty { font-size: .7rem; color: var(--muted); padding: .8rem .5rem; text-align: center; }
+    .cv-ed-tabs { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: .4rem; }
+    .cv-ed-tabs .btn.sel { border-color: var(--green); color: var(--green); }
+    .cv-ed-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.6rem, 1fr)); gap: .3rem; max-height: 46vh; overflow-y: auto; }
+    .cv-pk { text-align: left; border: 1px solid var(--border); border-left: 5px solid #555; background: transparent; color: var(--text);
+      border-radius: 7px; padding: .3rem .4rem; min-height: 2.4rem; }
+    .cv-pk small { display: block; font-size: .55rem; color: var(--muted); font-weight: 800; }
+    .cv-pk span { display: block; font-size: .68rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1em; }
+    .cv-pk.in { background: rgba(76,217,100,.16); border-color: var(--cv-sel); }
+    .cv-pk.in small { color: var(--cv-sel); }
+    .cv-ed-foot { display: flex; gap: .4rem; flex-wrap: wrap; }
   </style>
 </head>
 <body>
   <header>
     <h1 id="title">WING Mixer</h1>
+    <div id="cv-mode"></div>
     <div class="hdr-right">
+      <button class="hb" id="view-btn">CONSOLE</button>
+      <button class="hb cvo" id="cv-ls-btn" title="Listen">&#127911;</button>
+      <button class="hb cvo" id="cv-mg-btn" title="Mute groups">MG</button>
+      <button class="hb cvo" id="cv-set-btn" title="Layout, strip width, classic view">&#9881;</button>
       <span id="alt-badge" title="The console is using every channel's ALT input">INPUTS ON ALT</span>
       <button id="solo-clear" title="Clear all solos">SOLO ✕</button>
       <div id="status"><span id="status-dot"></span><span id="status-text">Connecting</span></div>
@@ -802,6 +948,49 @@
     </div>
   </div>
 
+  <!-- v4.0 console view (Mixing Station style). The header stays; everything else of the classic page hides. -->
+  <div id="cv">
+    <div class="cv-strips" id="cv-strips"></div>
+    <div class="cv-pin" id="cv-pin"></div>
+    <div class="cv-col" id="cv-c1">
+      <button class="cvb" id="cv-muteen" title="Mute Enable: when off, MUTE / send ON buttons ignore taps">MUTE<small>ENABLE</small></button>
+      <button class="cvb" id="cv-fine" title="Fine: faders move 1/3 as far as your finger">FINE<small>1:3</small></button>
+      <button class="cvb" id="cv-l1" data-l="1" title="Tap: show this layer. Hold: edit it"></button>
+      <button class="cvb" id="cv-l2" data-l="2" title="Tap: show this layer. Hold: edit it"></button>
+      <button class="cvb" id="cv-l3" data-l="3" title="Tap: show this layer. Hold: edit it"></button>
+      <button class="cvb" id="cv-lmm" data-l="mm">MTX<small>MAIN</small></button>
+      <button class="cvb" id="cv-ldca" data-l="dca">DCA</button>
+    </div>
+    <div class="cv-col" id="cv-c2"></div>
+  </div>
+
+  <div class="cv-ov" id="cv-menu"><div class="cv-pop">
+    <div class="sh-head"><div><b>Console view</b><i>THIS DEVICE</i></div><button class="btn" data-close>&#10005;</button></div>
+    <div class="cv-row"><span>Layout</span><select id="cv-prof"></select><button class="btn" id="cv-prof-new">New</button><button class="btn" id="cv-prof-del">Delete</button></div>
+    <div class="note small" id="cv-prof-note"></div>
+    <div class="cv-row"><span>Strips across</span><button class="btn" id="cv-sw-dn">&minus;</button><output id="cv-sw-val"></output><button class="btn" id="cv-sw-up">+</button><button class="btn" id="cv-sw-auto">Auto</button></div>
+    <div class="note small">Or pinch the faders with two fingers.</div>
+    <div class="cv-row"><button class="btn" id="cv-classic">&#8592; Classic view</button></div>
+    <div class="note small">Hold a layer button (1&ndash;3) to choose what is on it. Double-tap a fader for 0 dB. Tap a bus / matrix name to mix its sends on the faders.</div>
+  </div></div>
+  <div class="cv-ov" id="cv-mgp"><div class="cv-pop">
+    <div class="sh-head"><div><b>Mute groups</b></div><button class="btn" data-close>&#10005;</button></div>
+    <div id="cv-mg-home"></div>
+  </div></div>
+  <div class="cv-ov" id="cv-lsp"><div class="cv-pop">
+    <div class="sh-head"><div><b>Listen</b></div><button class="btn" data-close>&#10005;</button></div>
+    <div id="cv-ls-home"></div>
+  </div></div>
+  <div class="cv-ov" id="cv-ed"><div class="cv-pop">
+    <div class="cv-ed-hd"><button class="btn" id="cv-ed-x">Cancel</button><input id="cv-ed-name" maxlength="12" placeholder="Layer name" autocomplete="off"><button class="btn on" id="cv-ed-ok">Save</button></div>
+    <div class="cv-ed-sub" id="cv-ed-sub"></div>
+    <div class="cv-ed-body">
+      <div><div class="label">On this layer &mdash; drag &#8801; to reorder</div><div class="cv-ed-cur" id="cv-ed-cur"></div></div>
+      <div><div class="label">Tap to add / remove</div><div class="cv-ed-tabs" id="cv-ed-tabs"></div><div class="cv-ed-grid" id="cv-ed-grid"></div></div>
+    </div>
+    <div class="cv-ed-foot"><button class="btn" id="cv-ed-all">Add all of these</button><button class="btn" id="cv-ed-clr">Clear layer</button><button class="btn" id="cv-ed-def">Default</button></div>
+  </div></div>
+
 <script>
 (() => {
   // Console capabilities: the Pi fills CAPS in when it serves this page (mixer/__init__.py page()).
@@ -809,7 +998,8 @@
   const CAP = Object.assign({ console: 'wing', model: 'WING', nch: 40, naux: 8, nbus: 16, nmg: 8, main2: 'Main 2',
                               sheet: true, listen: true, alt: true, gain: [-2.5, 45], lcf: [20, 2000], hc: true,
                               spol: true, auxproc: ['eq', 'gate', 'dyn'], grdb: false, sd: 2, movemark: true,
-                              recauto: true }, CAPS || {});
+                              recauto: true, nmtx: 8, nmain: 4, ndca: 16, mtxsrc: ['ch', 'aux', 'bus', 'main'], mainsof: true },
+                            CAPS || {});
   const X32 = CAP.console === 'x32';
   const NBUS = CAP.nbus, NCH = CAP.nch, NAUX = CAP.naux;
   const ALT_TAG = X32 ? 'PLAY' : 'ALT';      // X32: routing REC/PLAY switch plays the WING's MAIN/ALT role
@@ -1040,23 +1230,26 @@
     r.mb.addEventListener('click', () => {
       const A = addrs(r);
       if (A.on) { const v = S[A.on] ? 0 : 1; S[A.on] = v; postSet(A.on, v); }
-      else if (!r.master) {                       // channel/aux: console semantics incl. group override
-        const b = `/${r.kind}/${r.n}`, st = muteState(r);
-        if (st.piOvr) { OVR.delete(b); S[b + '/$mute'] = 2; }
-        else if (st.grp) { if (!X32) OVR.add(b); S[b + '/$mute'] = 0; }   // X32: a plain unmute is the override
-        else { S[b + '/mute'] = st.own ? 0 : 1; S[b + '/$mute'] = st.own ? 0 : 1; }
-        localSetAt[b + '/$mute'] = localSetAt[b + '/mute'] = Date.now();
-        postJSON('/mixer/api/mute', { kind: r.kind, n: r.n })
-          .then(x => x && x.json()).then(res => {
-            if (res && res.action === 'override-failed') { OVR.delete(b); paintRow(r);
-              alert(`The ${CAP.model} did not unmute this channel - the group mute is unchanged.`); }
-          }).catch(() => {});
-      }
+      else if (!r.master) { toggleChMute(r); return; }
       else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); }
       paintRow(r);
       if (r.master === 'bus') paintBusSum();
     });
     parent.appendChild(el);
+  }
+
+  function toggleChMute(r) {                    // channel/aux: console semantics incl. group override
+    const b = `/${r.kind}/${r.n}`, st = muteState(r);
+    if (st.piOvr) { OVR.delete(b); S[b + '/$mute'] = 2; }
+    else if (st.grp) { if (!X32) OVR.add(b); S[b + '/$mute'] = 0; }   // X32: a plain unmute is the override
+    else { S[b + '/mute'] = st.own ? 0 : 1; S[b + '/$mute'] = st.own ? 0 : 1; }
+    localSetAt[b + '/$mute'] = localSetAt[b + '/mute'] = Date.now();
+    postJSON('/mixer/api/mute', { kind: r.kind, n: r.n })
+      .then(x => x && x.json()).then(res => {
+        if (res && res.action === 'override-failed') { OVR.delete(b); paintRow(r); cvRepaint(b);
+          alert(`The ${CAP.model} did not unmute this channel - the group mute is unchanged.`); }
+      }).catch(() => {});
+    paintRow(r);
   }
 
   function rowTag(r) {
@@ -1129,6 +1322,7 @@
       r.lvc.style.width = (100 - pct) + '%';
     }
     paintSheetMeter();
+    cvMeters();
   }
 
   // ── mix selector ──
@@ -2030,9 +2224,10 @@
   }
 
   // ── solo ──
+  const SOLO_RE = /^\/(ch|aux|bus|main|mtx|dca)\/\d+\/\$solo$/;
   function countSolos() {
     let n = 0;
-    for (const r of rows) if (!r.master && S[`/${r.kind}/${r.n}/$solo`]) n++;
+    for (const a in S) if (S[a] && SOLO_RE.test(a)) n++;
     return n;
   }
   function selectFeed(id) {
@@ -2051,11 +2246,8 @@
     soloCount = n;
   }
   $('solo-clear').addEventListener('click', () => {
-    for (const r of rows) {
-      if (r.master) continue;
-      const a = `/${r.kind}/${r.n}/$solo`;
-      if (S[a]) { S[a] = 0; postSet(a, 0); paintRow(r); }
-    }
+    for (const a of Object.keys(S)) if (S[a] && SOLO_RE.test(a)) { S[a] = 0; postSet(a, 0); }
+    eachRow(paintRow); cvPaintAll();
     soloChanged();
   });
 
@@ -3335,6 +3527,8 @@
   function onUpd(a, v) {
     if (localSetAt[a] && Date.now() - localSetAt[a] < 500) return;
     S[a] = v;
+    cvOnUpd(a);
+    if (a.endsWith('/$solo') && !/^\/(ch|aux)\//.test(a)) soloChanged();
     if (a === '/io/altsw') { paintAlt(); eachRow(paintRow); if (sheetRow) paintSheet(); return; }
     if (a.startsWith('/cards/wlive/auto_')) { paintAlt(); return; }
     if (a.startsWith('/cards/')) {
@@ -3381,6 +3575,7 @@
     for (let n = 1; n <= 2; n++) recSeen[n] = [S[`/cards/wlive/${n}/$stat/etime`] || 0, Date.now()];
     paintRec();
     if (typeof m.listen_target === 'number' && m.listen_target > 0) listenTarget = m.listen_target;
+    cvSnap(m);
   }
 
   // Live updates. If the stream drops (or is bounced to a sign-in page, which kills it for good),
@@ -3424,6 +3619,7 @@
       else if (m.t === 'recm') { recM[m.c] = m.v || []; paintRec(); }
       else if (m.t === 'recs') { recS[m.c] = m.v || []; paintRec(); }
       else if (m.t === 'sp') applySp(m.v);
+      else if (m.t === 'layouts') cvLayoutsMsg(m);
     };
   }
   $('link-reload').addEventListener('click', () => location.reload());
@@ -3445,7 +3641,527 @@
     if (ar.nextElementSibling) ar.nextElementSibling.style.display = 'none';
   }
 
-  buildRec(); buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll(); connect();
+
+  // ══ v4.0 console view (Mixing Station style) ═══════════════════════════════════════════════════
+  // Same page, same state (S), same requests -- only the layout differs, so listen-back / video keep
+  // playing across a switch. Strips: custom layers 1-3 (named layout profiles kept on the Pi, picked per
+  // device), Mtx/Main, DCA. Right column: sends on fader for a bus / matrix (WING: Main 2-4 too).
+  const NMAIN = CAP.nmain || 2, NMTX = CAP.nmtx || 0, NDCA = CAP.ndca || 0, MTXSRC = CAP.mtxsrc || [];
+  const CVK = { ch: NCH, aux: NAUX, bus: NBUS, main: NMAIN, mtx: NMTX, dca: NDCA };
+  const KLBL = { ch: 'Ch', aux: 'Aux', bus: 'Bus', main: 'Main', mtx: 'Mtx', dca: 'DCA' };
+  const CV = { on: false, layer: LS.get('mixer.cvLayer') || '1', sof: null, fine: LS.get('mixer.cvFine') === '1',
+               muteEn: LS.get('mixer.cvMuteEn') !== '0', across: +(LS.get('mixer.cvAcross') || 0) || 0,
+               strips: [], pin: null, idx: {}, profiles: {}, who: '', profile: 'Default', scroll: {}, built: '', pinch: false };
+  const rng = (k, n) => Array.from({ length: n }, (_, i) => `${k}/${i + 1}`);
+  const cvTag = (k, n) => (k === 'main' && X32) ? (n === 1 ? 'LR' : 'M/C') : `${KLBL[k]} ${n}`;
+  const cvOk = key => { const [k, n] = String(key).split('/'); return k in CVK && +n >= 1 && +n <= CVK[k]; };
+  function cvDefaults() {
+    return [{ name: 'CH', items: rng('ch', NCH) }, { name: 'AUX/MAIN', items: rng('aux', NAUX).concat(rng('main', NMAIN)) },
+            { name: 'BUS', items: rng('bus', NBUS) }];
+  }
+  const CV_FIXED = { mm: rng('mtx', NMTX).concat(rng('main', NMAIN)), dca: rng('dca', NDCA) };
+  function cvPickProfile() {
+    const saved = LS.get('mixer.cvProfile');
+    if (saved && CV.profiles[saved]) return saved;
+    if (CV.who) {
+      const p = Object.keys(CV.profiles).find(k => String(CV.profiles[k].email || '').toLowerCase() === CV.who.toLowerCase());
+      if (p) return p;
+    }
+    return 'Default';
+  }
+  function cvLayers() {
+    const p = CV.profiles[CV.profile], L = (p && p.layers) || [], d = cvDefaults();
+    return [0, 1, 2].map(i => {
+      const l = L[i] || {}, items = (l.items || []).filter(cvOk);
+      return { name: l.name || d[i].name, items: items.length ? items : d[i].items };
+    });
+  }
+  function cvItems() {
+    if (CV.layer === 'mm') return CV_FIXED.mm;
+    if (CV.layer === 'dca') return NDCA ? CV_FIXED.dca : CV_FIXED.mm;
+    return cvLayers()[(+CV.layer || 1) - 1].items;
+  }
+  function cvName(k, n) {
+    const b = `/${k}/${n}`;
+    if (k === 'dca') { const v = S[b + '/name']; return typeof v === 'string' && v.trim() ? v : cvTag(k, n); }
+    return nameOf(b + '/name', cvTag(k, n));
+  }
+  function textOn(hex) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || ''); if (!m) return '#fff';
+    const [r, g, b] = [1, 2, 3].map(i => parseInt(m[i], 16) / 255);
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 0.6 ? '#111' : '#fff';
+  }
+
+  // ── who sends where (sends on fader) ──
+  function cvCanSend(k) {
+    const T = CV.sof; if (!T) return true;
+    if (T.k === 'bus') return k === 'ch' || k === 'aux';
+    if (T.k === 'main') return k === 'ch' || k === 'aux' || k === 'bus';
+    if (T.k === 'mtx') return MTXSRC.includes(k);
+    return false;
+  }
+  function cvA(cs) {
+    const b = `/${cs.k}/${cs.n}`, T = cs.pinned ? null : CV.sof, base = { b, solo: b + '/$solo' };
+    if (!T) return { ...base, lvl: b + '/fdr', mute: b + '/mute' };
+    if (!cvCanSend(cs.k)) return null;
+    const leaf = T.k === 'bus' ? `send/${T.n}` : T.k === 'mtx' ? `send/MX${T.n}` : `main/${T.n}`;
+    return { ...base, lvl: `${b}/${leaf}/lvl`, on: `${b}/${leaf}/on`, send: true };
+  }
+
+  // ── strips ──
+  const TICKS = [10, 5, 0, -5, -10, -20, -30, -50];
+  function cvStrip(key, parent, pinned) {
+    const [k, ns] = key.split('/'), n = +ns;
+    const el = document.createElement('div'); el.className = 'cs'; el.dataset.k = key;
+    el.innerHTML = '<button class="cs-nm"><span></span></button><button class="cs-mu">MUTE</button><div class="cs-db"></div>'
+      + '<div class="cs-fd"><div class="cs-rail"><div class="cs-tk"></div><div class="cs-tr"></div><div class="cs-mt"><i></i></div>'
+      + '<div class="cs-cap"></div></div></div><div class="cs-lb"></div><button class="cs-so">SOLO</button>';
+    const q = s => el.querySelector(s);
+    const cs = { key, k, n, pinned, el, nm: q('.cs-nm'), nmt: q('.cs-nm span'), mu: q('.cs-mu'), db: q('.cs-db'), fd: q('.cs-fd'),
+                 rail: q('.cs-rail'), cap: q('.cs-cap'), mt: q('.cs-mt'), mti: q('.cs-mt i'), lb: q('.cs-lb'), so: q('.cs-so'),
+                 pos: 0, drag: false };
+    q('.cs-tk').innerHTML = TICKS.map(d => `<span style="top:${((1 - dbToPos(d)) * 100).toFixed(2)}%">${d > 0 ? '+' + d : d}</span>`).join('');
+    cs.lb.textContent = cvTag(k, n);
+    cvFaderInput(cs);
+    cs.nm.addEventListener('click', () => cvNameTap(cs));
+    cs.mu.addEventListener('click', () => cvMuteTap(cs));
+    cs.so.addEventListener('click', () => cvSoloTap(cs));
+    parent.appendChild(el);
+    return cs;
+  }
+  const cvAll = () => CV.pin ? CV.strips.concat(CV.pin) : CV.strips;
+  function cvSetPos(cs, p) { cs.pos = p; cs.cap.style.top = ((1 - p) * 100) + '%'; }
+  function cvPaint(cs) {
+    const b = `/${cs.k}/${cs.n}`, A = cvA(cs);
+    cs.el.classList.toggle('na', !A);
+    cs.nmt.textContent = cvName(cs.k, cs.n);
+    const col = colorOf(b);
+    cs.nm.style.background = col === 'transparent' ? '' : col;
+    cs.nm.style.color = col === 'transparent' ? '' : textOn(col);
+    if (!A) { cs.db.textContent = ''; cs.el.classList.remove('chm'); cs.so.classList.toggle('on', !!S[b + '/$solo']); return; }
+    const d = S[A.lvl];
+    if (!cs.drag) cvSetPos(cs, dbToPos(typeof d === 'number' ? d : null));
+    cs.db.textContent = fmtDb(typeof d === 'number' ? d : null);
+    const chan = cs.k === 'ch' || cs.k === 'aux', st = chan ? muteState({ kind: cs.k, n: cs.n }) : null;
+    if (A.send) {
+      const on = S[A.on] !== 0;
+      cs.mu.textContent = on ? 'ON' : 'OFF'; cs.mu.className = 'cs-mu snd' + (on ? ' on' : '');
+      cs.el.classList.toggle('chm', st ? (st.own || st.grp) : !!S[b + '/mute']);
+    } else if (st) {
+      const gm = st.grp && !st.own;
+      cs.mu.textContent = gm ? 'MG' : 'MUTE';
+      cs.mu.className = 'cs-mu' + (st.own ? ' on' : '') + (gm ? ' mg' : '') + (st.ovr && !st.own ? ' ovr' : '');
+      cs.el.classList.remove('chm');
+    } else {
+      cs.mu.textContent = 'MUTE'; cs.mu.className = 'cs-mu' + (S[b + '/mute'] ? ' on' : '');
+      cs.el.classList.remove('chm');
+    }
+    cs.mu.classList.toggle('lock', !CV.muteEn);
+    cs.so.classList.toggle('on', !!S[A.solo]);
+  }
+  function cvPaintAll() { if (CV.on) { cvAll().forEach(cvPaint); cvPaintCols(); } }
+  function cvIndex() {
+    CV.idx = {};
+    for (const cs of cvAll()) (CV.idx[`/${cs.k}/${cs.n}/`] = CV.idx[`/${cs.k}/${cs.n}/`] || []).push(cs);
+  }
+  function cvRepaint(base) { (CV.idx[base + '/'] || []).forEach(cvPaint); }
+
+  // ── fader: relative only, vertical drag engages, Fine = 1:3, double-tap = 0 dB ──
+  function cvFaderInput(cs) {
+    const fd = cs.fd; let pid = null, y0 = 0, x0 = 0, p0 = 0, eng = false, lastTap = 0;
+    const stop = final => {
+      if (eng) cvMove(cs, cs.pos, final);
+      pid = null; eng = false; cs.drag = false; cs.el.classList.remove('drag');
+    };
+    fd.addEventListener('pointerdown', e => {
+      if (pid !== null || CV.pinch) return;
+      pid = e.pointerId; y0 = e.clientY; x0 = e.clientX; p0 = cs.pos; eng = false;
+    });
+    fd.addEventListener('pointermove', e => {
+      if (e.pointerId !== pid) return;
+      if (CV.pinch) { stop(true); return; }
+      const dy = e.clientY - y0, dx = e.clientX - x0;
+      if (!eng) {
+        if (Math.abs(dy) > 5 && Math.abs(dy) > Math.abs(dx)) {
+          if (!cvA(cs)) { pid = null; return; }
+          eng = true; cs.drag = true; cs.el.classList.add('drag'); y0 = e.clientY; p0 = cs.pos;
+          try { fd.setPointerCapture(pid); } catch (err) {}
+        } else if (Math.abs(dx) > 8) pid = null;          // a sideways swipe: let the strips scroll
+        return;
+      }
+      const h = cs.rail.getBoundingClientRect().height || 1;
+      cvMove(cs, Math.max(0, Math.min(1, p0 - (e.clientY - y0) / h * (CV.fine ? 1 / 3 : 1))), false);
+    });
+    fd.addEventListener('pointerup', e => {
+      if (e.pointerId !== pid) return;
+      if (!eng) {
+        const now = Date.now();
+        if (now - lastTap < 330) { lastTap = 0; if (cvA(cs)) cvMove(cs, dbToPos(0), true); }
+        else lastTap = now;
+      }
+      stop(true);
+    });
+    fd.addEventListener('pointercancel', e => { if (e.pointerId === pid) stop(true); });
+  }
+  function cvMove(cs, p, final) {
+    const A = cvA(cs); if (!A) return;
+    cvSetPos(cs, p);
+    const d = Math.round(posToDb(p) * 10) / 10;
+    S[A.lvl] = d; cs.db.textContent = fmtDb(d);
+    sendThrottled(A.lvl, d, final);
+    for (const o of cvAll()) if (o !== cs && !o.drag) { const B = cvA(o); if (B && B.lvl === A.lvl) cvPaint(o); }
+  }
+  function cvMuteTap(cs) {
+    const A = cvA(cs); if (!A) return;
+    if (!CV.muteEn) { const b = $('cv-muteen'); b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); return; }
+    const b = `/${cs.k}/${cs.n}`;
+    if (A.send) { const v = S[A.on] === 0 ? 1 : 0; S[A.on] = v; postSet(A.on, v); }
+    else if (cs.k === 'ch' || cs.k === 'aux') { const r = rowIndex[b + '/']; if (r) toggleChMute(r); }
+    else { const v = S[A.mute] ? 0 : 1; S[A.mute] = v; postSet(A.mute, v); if (cs.k === 'bus') paintBusSum(); }
+    cvRepaint(b);
+  }
+  function cvSoloTap(cs) {
+    const a = `/${cs.k}/${cs.n}/$solo`, v = S[a] ? 0 : 1;
+    S[a] = v; postSet(a, v);
+    if (cs.k === 'ch' || cs.k === 'aux') { const r = rowIndex[`/${cs.k}/${cs.n}/`]; if (r) paintRow(r); }
+    cvRepaint(`/${cs.k}/${cs.n}`); soloChanged();
+  }
+  function cvNameTap(cs) {
+    if (cs.k === 'ch' || cs.k === 'aux') { const r = rowIndex[`/${cs.k}/${cs.n}/`]; if (r && CAP.sheet) openSheet(r); return; }
+    if (cs.k === 'bus' || cs.k === 'mtx' || (cs.k === 'main' && CAP.mainsof && cs.n > 1)) cvSelectSof({ k: cs.k, n: cs.n });
+  }
+
+  // ── meters: ch / aux show their output (their input while mixing sends), buses / mains / matrices out ──
+  function cvMeterOf(cs) {
+    if (!M) return null;
+    const i = cs.n - 1;
+    if (cs.k === 'ch' || cs.k === 'aux') { const v = (cs.k === 'ch' ? M.c : M.a)[i]; return v ? v[(CV.sof && !cs.pinned) ? 0 : 1] : null; }
+    if (cs.k === 'bus') return M.b ? M.b[i] : null;
+    if (cs.k === 'main') return M.m ? M.m[i] : null;
+    if (cs.k === 'mtx') return M.x ? M.x[i] : null;
+    return null;
+  }
+  function cvMeters() {
+    if (!CV.on) return;
+    for (const cs of cvAll()) {
+      const d = cvMeterOf(cs);
+      cs.mt.classList.toggle('off', d == null);
+      if (d != null) cs.mti.style.height = ((1 - Math.max(0, Math.min(1, (d + 60) / 60))) * 100) + '%';
+    }
+  }
+
+  // ── build / layout ──
+  function cvBuild(force) {
+    const items = cvItems().filter(cvOk), sig = CV.layer + '|' + items.join();
+    const box = $('cv-strips');
+    if (force || sig !== CV.built) {
+      if (CV.built) CV.scroll[CV.built.split('|')[0]] = box.scrollLeft;
+      box.innerHTML = '';
+      CV.strips = items.map(k => cvStrip(k, box, false));
+      box.scrollLeft = CV.scroll[CV.layer] || 0;
+      CV.built = sig;
+    }
+    cvBuildPin(); cvIndex(); cvSize(); cvPaintAll(); cvMeters();
+  }
+  function cvBuildPin() {
+    const pb = $('cv-pin'), key = CV.sof ? `${CV.sof.k}/${CV.sof.n}` : '';
+    if ((CV.pin && CV.pin.key) !== (key || undefined)) {
+      pb.innerHTML = ''; CV.pin = key ? cvStrip(key, pb, true) : null;
+    }
+    pb.classList.toggle('on', !!CV.pin);
+  }
+  function cvAcross(avail) { return CV.across || Math.max(8, Math.min(12, Math.round(avail / 80))); }
+  function cvSize() {
+    if (!CV.on) return;
+    const cv = $('cv'), avail = cv.clientWidth - $('cv-c1').offsetWidth - $('cv-c2').offsetWidth;
+    if (avail <= 0) return;
+    const n = cvAcross(avail), sw = Math.max(28, Math.floor(avail / n));
+    cv.style.setProperty('--sw', sw + 'px');
+    cv.classList.toggle('narrow', sw < 52);
+    $('cv-sw-val').textContent = CV.across ? String(CV.across) : `Auto (${n})`;
+  }
+  window.addEventListener('resize', () => cvSize());
+  // pinch the strips to change how many fit across (saved on this device)
+  (() => {
+    const box = $('cv'); let d0 = 0, n0 = 0;
+    const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    box.addEventListener('touchstart', e => {
+      if (e.touches.length !== 2 || !CV.on) return;
+      CV.pinch = true; d0 = dist(e.touches) || 1;
+      n0 = cvAcross($('cv').clientWidth - $('cv-c1').offsetWidth - $('cv-c2').offsetWidth);
+    }, { passive: true });
+    box.addEventListener('touchmove', e => {
+      if (!CV.pinch || e.touches.length !== 2) return;
+      const n = Math.max(4, Math.min(24, Math.round(n0 * d0 / (dist(e.touches) || 1))));
+      if (n !== CV.across) { CV.across = n; cvSize(); }
+    }, { passive: true });
+    const end = e => { if (CV.pinch && e.touches.length < 2) { CV.pinch = false; LS.set('mixer.cvAcross', String(CV.across || 0)); } };
+    box.addEventListener('touchend', end); box.addEventListener('touchcancel', end);
+  })();
+
+  // ── right-hand columns ──
+  function cvBuildCols() {
+    const c2 = $('cv-c2'); c2.innerHTML = '';
+    const sec = t => { const d = document.createElement('div'); d.className = 'cvsec'; d.textContent = t; c2.appendChild(d); };
+    const add = (k, n) => {
+      const b = document.createElement('button'); b.className = 'cvbus'; b.dataset.k = k; b.dataset.n = n;
+      b.innerHTML = '<b></b><small></small>';
+      b.addEventListener('click', () => cvSelectSof(k ? { k, n } : null));
+      c2.appendChild(b);
+    };
+    add('', 0);
+    if (CAP.mainsof) for (let m = 2; m <= NMAIN; m++) add('main', m);
+    sec('BUSES'); for (let b = 1; b <= NBUS; b++) add('bus', b);
+    if (NMTX) { sec('MATRIX'); for (let m = 1; m <= NMTX; m++) add('mtx', m); }
+    $('cv-ldca').style.display = NDCA ? '' : 'none';
+  }
+  function cvPaintCols() {
+    const L = cvLayers();
+    for (let i = 1; i <= 3; i++) {
+      const b = $('cv-l' + i);
+      b.innerHTML = ''; b.append(document.createTextNode(L[i - 1].name));
+      const sm = document.createElement('small'); sm.textContent = 'LAYER ' + i; b.append(sm);
+    }
+    document.querySelectorAll('#cv-c1 [data-l]').forEach(b => b.classList.toggle('sel', b.dataset.l === CV.layer));
+    $('cv-muteen').classList.toggle('on', CV.muteEn);
+    $('cv-fine').classList.toggle('on', CV.fine);
+    document.querySelectorAll('#cv-c2 .cvbus').forEach(b => {
+      const k = b.dataset.k, n = +b.dataset.n;
+      const sel = k ? !!(CV.sof && CV.sof.k === k && CV.sof.n === n) : !CV.sof;
+      b.classList.toggle('sel', sel);
+      b.querySelector('b').textContent = k ? cvName(k, n) : nameOf('/main/1/name', X32 ? 'LR' : 'Main 1');
+      b.querySelector('small').textContent = k ? cvTag(k, n).toUpperCase() : 'FADERS';
+      const col = colorOf(k ? `/${k}/${n}` : '/main/1');
+      b.style.borderLeftColor = col === 'transparent' ? '#555' : col;
+    });
+    const T = CV.sof, md = $('cv-mode');
+    md.innerHTML = '';
+    const sm = document.createElement('small'); sm.textContent = T ? 'SENDS ON FADER ▸' : CAP.model;
+    md.append(sm, document.createTextNode(T ? `${cvTag(T.k, T.n).toUpperCase()} · ${cvName(T.k, T.n)}` : (CV.layer === 'mm' ? 'MTX / MAIN'
+      : CV.layer === 'dca' ? 'DCA' : L[(+CV.layer || 1) - 1].name)));
+    md.style.color = T ? 'var(--cv-sel)' : '';
+  }
+  function cvSelectSof(T) {
+    CV.sof = (T && !(CV.sof && CV.sof.k === T.k && CV.sof.n === T.n)) ? T : null;
+    cvBuildPin(); cvIndex(); cvSize(); cvPaintAll(); cvMeters();
+    if (CV.sof) {                          // scroll the first strip that can send here into view
+      const first = CV.strips.find(cs => cvCanSend(cs.k)), box = $('cv-strips');
+      if (first && (first.el.offsetLeft < box.scrollLeft || first.el.offsetLeft > box.scrollLeft + box.clientWidth - 20))
+        box.scrollLeft = first.el.offsetLeft;
+    }
+  }
+  function cvSetLayer(l) {
+    CV.layer = l; LS.set('mixer.cvLayer', l); cvBuild(); cvPaintCols();
+  }
+  $('cv-muteen').addEventListener('click', () => { CV.muteEn = !CV.muteEn; LS.set('mixer.cvMuteEn', CV.muteEn ? '1' : '0'); cvPaintAll(); });
+  $('cv-fine').addEventListener('click', () => { CV.fine = !CV.fine; LS.set('mixer.cvFine', CV.fine ? '1' : '0'); cvPaintCols(); });
+  document.querySelectorAll('#cv-c1 [data-l]').forEach(b => {
+    let t = null, held = false;
+    const custom = /^[123]$/.test(b.dataset.l);
+    b.addEventListener('pointerdown', () => {
+      held = false; clearTimeout(t);
+      if (custom) t = setTimeout(() => { held = true; cvEdit(+b.dataset.l); }, 550);
+    });
+    const cancel = () => clearTimeout(t);
+    b.addEventListener('pointerup', cancel); b.addEventListener('pointerleave', cancel); b.addEventListener('pointercancel', cancel);
+    b.addEventListener('contextmenu', e => { e.preventDefault(); if (custom && !held) { held = true; cvEdit(+b.dataset.l); } });
+    b.addEventListener('click', () => { if (held) { held = false; return; } cvSetLayer(b.dataset.l); });
+  });
+
+  // ── enter / leave (the listen card and the mute-group buttons move into popovers while in here) ──
+  const homes = {};
+  function cvHome(el, into) {                       // remember where an element lived, put it back later
+    if (!homes[el.id]) { homes[el.id] = document.createComment(el.id); el.parentNode.insertBefore(homes[el.id], el); }
+    if (into) into.appendChild(el); else homes[el.id].parentNode.insertBefore(el, homes[el.id].nextSibling);
+  }
+  function cvEnter(on, save) {
+    CV.on = on;
+    document.body.classList.toggle('cvm', on);
+    if (save) LS.set('mixer.view', on ? 'console' : 'classic');
+    $('view-btn').textContent = on ? 'CLASSIC' : 'CONSOLE';
+    $('view-btn').title = on ? 'Back to the classic page' : 'Console view (faders across, layers, sends on fader)';
+    if (on) {
+      cvHome($('listen-card'), $('cv-ls-home')); cvHome($('mg-grid'), $('cv-mg-home'));
+      CV.profile = cvPickProfile();
+      cvBuild(true); cvPaintCols();
+    } else {
+      cvHome($('listen-card'), null); cvHome($('mg-grid'), null);
+      document.querySelectorAll('.cv-ov.open').forEach(o => o.classList.remove('open'));
+      CV.sof = null; paintAll(); paintMeters();
+    }
+  }
+  $('view-btn').addEventListener('click', () => cvEnter(!CV.on, true));
+  $('cv-classic').addEventListener('click', () => cvEnter(false, true));
+  const cvOpen = id => { $(id).classList.add('open'); };
+  document.querySelectorAll('.cv-ov').forEach(o => {
+    o.addEventListener('click', e => { if (e.target === o || e.target.closest('[data-close]')) { if (o.id === 'cv-ed') cvEdClose(); else o.classList.remove('open'); } });
+  });
+  $('cv-mg-btn').addEventListener('click', () => cvOpen('cv-mgp'));
+  $('cv-ls-btn').addEventListener('click', () => cvOpen('cv-lsp'));
+  $('cv-set-btn').addEventListener('click', () => { cvPaintMenu(); cvOpen('cv-menu'); });
+  setInterval(() => {                               // header lights: listening / a mute group engaged
+    if (!CV.on) return;
+    $('cv-ls-btn').classList.toggle('on', $('listen-btn').classList.contains('on'));
+    let mg = false; for (let g = 1; g <= NMG; g++) if (S[`/mgrp/${g}/mute`]) mg = true;
+    $('cv-mg-btn').classList.toggle('on', mg);
+  }, 500);
+
+  // ── settings: layout profile + strip width ──
+  function cvPaintMenu() {
+    const sel = $('cv-prof'); sel.innerHTML = '';
+    const names = ['Default'].concat(Object.keys(CV.profiles).filter(k => k !== 'Default').sort());
+    names.forEach(nm => { const o = document.createElement('option'); o.value = nm; o.textContent = nm + (CV.profiles[nm] && CV.profiles[nm].email ? ' · ' + CV.profiles[nm].email : ''); sel.appendChild(o); });
+    sel.value = CV.profile;
+    $('cv-prof-del').disabled = CV.profile === 'Default' || !CV.profiles[CV.profile];
+    $('cv-prof-note').textContent = 'Layouts are kept on the Pi (' + CAP.model + '); this device uses "' + CV.profile + '".'
+      + (CV.who ? ' Signed in as ' + CV.who + '.' : '');
+    cvSize();
+  }
+  $('cv-prof').addEventListener('change', e => {
+    CV.profile = e.target.value; LS.set('mixer.cvProfile', CV.profile); cvBuild(); cvPaintCols(); cvPaintMenu();
+  });
+  async function cvSaveProfile(name, layers, del) {
+    const x = await postJSON('/mixer/api/layouts', del ? { profile: name, delete: true } : { profile: name, layers });
+    if (!x) return false;
+    try { const j = await x.json(); if (j.profiles) CV.profiles = j.profiles; } catch (e) {}
+    return true;
+  }
+  $('cv-prof-new').addEventListener('click', async () => {
+    const nm = (prompt('Name for the new layout (e.g. your name):', '') || '').trim().slice(0, 24);
+    if (!nm) return;
+    if (CV.profiles[nm] && !confirm(`"${nm}" exists. Use it on this device?`)) return;
+    if (!CV.profiles[nm] && !(await cvSaveProfile(nm, cvLayers()))) return;
+    CV.profile = nm; LS.set('mixer.cvProfile', nm); cvBuild(); cvPaintCols(); cvPaintMenu();
+  });
+  $('cv-prof-del').addEventListener('click', async () => {
+    const nm = CV.profile;
+    if (nm === 'Default' || !confirm(`Delete the layout "${nm}" for everyone?`)) return;
+    if (!(await cvSaveProfile(nm, null, true))) return;
+    LS.set('mixer.cvProfile', ''); CV.profile = cvPickProfile(); cvBuild(); cvPaintCols(); cvPaintMenu();
+  });
+  const cvAvail = () => $('cv').clientWidth - $('cv-c1').offsetWidth - $('cv-c2').offsetWidth;
+  $('cv-sw-dn').addEventListener('click', () => { CV.across = Math.min(24, cvAcross(cvAvail()) + 1); LS.set('mixer.cvAcross', String(CV.across)); cvSize(); });
+  $('cv-sw-up').addEventListener('click', () => { CV.across = Math.max(4, cvAcross(cvAvail()) - 1); LS.set('mixer.cvAcross', String(CV.across)); cvSize(); });
+  $('cv-sw-auto').addEventListener('click', () => { CV.across = 0; LS.set('mixer.cvAcross', '0'); cvSize(); });
+
+  // ── layer editor (hold a layer button) ──
+  const ED = { i: 0, items: [], tab: 'ch', open: false };
+  const ED_TABS = [['ch', 'Channels'], ['aux', 'Aux'], ['bus', 'Buses'], ['main', 'Mains'], ['mtx', 'Matrix'], ['dca', 'DCA']]
+    .filter(([k]) => CVK[k] > 0);
+  function cvEdit(i) {
+    const L = cvLayers()[i - 1];
+    ED.i = i; ED.items = L.items.slice(); ED.open = true;
+    $('cv-ed-name').value = L.name;
+    $('cv-ed-sub').textContent = `Layer ${i} · layout "${CV.profile}" (shared by everyone using it; make your own in ⚙)`;
+    const tabs = $('cv-ed-tabs'); tabs.innerHTML = '';
+    ED_TABS.forEach(([k, lab]) => {
+      const b = document.createElement('button'); b.className = 'btn'; b.dataset.t = k; b.textContent = lab;
+      b.addEventListener('click', () => { ED.tab = k; cvEdPaint(); }); tabs.appendChild(b);
+    });
+    cvEdPaint(); cvOpen('cv-ed');
+  }
+  function cvEdClose() { ED.open = false; $('cv-ed').classList.remove('open'); }
+  function cvEdLabel(key) { const [k, n] = key.split('/'); return [cvTag(k, +n), cvName(k, +n), colorOf(`/${k}/${n}`)]; }
+  function cvEdPaint() {
+    const cur = $('cv-ed-cur'); cur.innerHTML = '';
+    if (!ED.items.length) cur.innerHTML = '<div class="cv-ed-empty">Empty &mdash; tap items on the right to add them (an empty layer shows its default).</div>';
+    ED.items.forEach(key => {
+      const [tag, nm, col] = cvEdLabel(key);
+      const row = document.createElement('div'); row.className = 'cv-it'; row.dataset.key = key;
+      row.innerHTML = '<div class="hd">&#8801;</div><i></i><b><small></small></b><button class="x">&#10005;</button>';
+      row.querySelector('i').style.background = col === 'transparent' ? '#555' : col;
+      row.querySelector('small').textContent = tag; if (nm !== tag) row.querySelector('b').append(document.createTextNode(nm));
+      row.querySelector('.x').addEventListener('click', () => { ED.items = ED.items.filter(x => x !== key); cvEdPaint(); });
+      row.querySelector('.hd').addEventListener('pointerdown', e => cvEdDrag(row, e));
+      cur.appendChild(row);
+    });
+    document.querySelectorAll('#cv-ed-tabs .btn').forEach(b => b.classList.toggle('sel', b.dataset.t === ED.tab));
+    const grid = $('cv-ed-grid'); grid.innerHTML = '';
+    rng(ED.tab, CVK[ED.tab]).forEach(key => {
+      const [tag, nm, col] = cvEdLabel(key);
+      const b = document.createElement('button'); b.className = 'cv-pk' + (ED.items.includes(key) ? ' in' : '');
+      b.innerHTML = '<small></small><span></span>';
+      b.querySelector('small').textContent = tag + (ED.items.includes(key) ? ' ✓' : '');
+      b.querySelector('span').textContent = nm === tag ? ' ' : nm;
+      b.style.borderLeftColor = col === 'transparent' ? '#555' : col;
+      b.addEventListener('click', () => {
+        ED.items = ED.items.includes(key) ? ED.items.filter(x => x !== key) : ED.items.concat(key);
+        cvEdPaint();
+      });
+      grid.appendChild(b);
+    });
+  }
+  function cvEdDrag(row, e) {                         // reorder: only the neighbours move; the list auto-scrolls
+    e.preventDefault();
+    const box = $('cv-ed-cur'), h = e.currentTarget, pid = e.pointerId;
+    try { h.setPointerCapture(pid); } catch (err) {}
+    row.classList.add('lift');
+    let y = e.clientY, raf = 0;
+    const mid = c => { const r = c.getBoundingClientRect(); return r.top + r.height / 2; };
+    const place = () => {
+      let p, n;
+      while ((p = row.previousElementSibling) && y < mid(p)) box.insertBefore(p, row.nextSibling);
+      while ((n = row.nextElementSibling) && y > mid(n)) box.insertBefore(n, row);
+    };
+    const tick = () => {
+      const r = box.getBoundingClientRect(), edge = 40;
+      const v = y < r.top + edge ? -Math.ceil((r.top + edge - y) / 4) : (y > r.bottom - edge ? Math.ceil((y - (r.bottom - edge)) / 4) : 0);
+      if (v) { box.scrollTop += v; place(); }
+      raf = requestAnimationFrame(tick);
+    };
+    const move = ev => { if (ev.pointerId === pid) { y = ev.clientY; place(); } };
+    const up = ev => {
+      if (ev.pointerId !== pid) return;
+      cancelAnimationFrame(raf); row.classList.remove('lift');
+      h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
+      ED.items = [...box.querySelectorAll('.cv-it')].map(r => r.dataset.key);
+    };
+    h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+    raf = requestAnimationFrame(tick);
+  }
+  $('cv-ed-x').addEventListener('click', cvEdClose);
+  $('cv-ed-all').addEventListener('click', () => { ED.items = ED.items.concat(rng(ED.tab, CVK[ED.tab]).filter(k => !ED.items.includes(k))); cvEdPaint(); });
+  $('cv-ed-clr').addEventListener('click', () => { ED.items = []; cvEdPaint(); });
+  $('cv-ed-def').addEventListener('click', () => { ED.items = cvDefaults()[ED.i - 1].items.slice(); $('cv-ed-name').value = cvDefaults()[ED.i - 1].name; cvEdPaint(); });
+  $('cv-ed-ok').addEventListener('click', async () => {
+    const layers = cvLayers().map(l => ({ name: l.name, items: l.items }));
+    layers[ED.i - 1] = { name: $('cv-ed-name').value.trim().slice(0, 12), items: ED.items.slice() };
+    if (!(await cvSaveProfile(CV.profile, layers))) return;
+    cvEdClose(); CV.layer = String(ED.i); LS.set('mixer.cvLayer', CV.layer); cvBuild(); cvPaintCols();
+  });
+
+  // ── hooks from the classic page's event handling ──
+  function cvOnUpd(a) {
+    if (!CV.on) return;
+    const m = a.match(/^\/(ch|aux|bus|main|mtx|dca)\/(\d+)\//);
+    if (m) {
+      cvRepaint(`/${m[1]}/${m[2]}`);
+      if (CV.sof && m[1] === CV.sof.k && +m[2] === CV.sof.n) cvPaintCols();
+      if (/\/(\$?name|\$?col)$/.test(a)) cvPaintCols();
+      if (/\/\$mute$|\/tags$/.test(a)) cvRepaint(`/${m[1]}/${m[2]}`);
+    } else if (a.startsWith('/mgrp/')) cvAll().forEach(cvPaint);
+  }
+  function cvSnap(m) {
+    if ('layouts' in m) CV.profiles = m.layouts || {};
+    if ('who' in m) CV.who = m.who || '';
+    if (!CV.on) return;
+    if (!ED.open) { CV.profile = cvPickProfile(); cvBuild(); }
+    cvPaintAll();
+  }
+  function cvLayoutsMsg(m) {
+    if (m.console !== CAP.console) return;
+    CV.profiles = m.v || {};
+    if (CV.on && !ED.open) { CV.profile = cvPickProfile(); cvBuild(); cvPaintCols(); }
+  }
+  cvBuildCols();
+
+  buildRec(); buildMixGrid(); buildMuteGroups(); buildStrips(); reindex(); paintAll();
+  {                                                 // v4.0: ?view=console|classic, else this device's last choice
+    const v = new URLSearchParams(location.search).get('view');
+    if (v === 'console' || v === 'classic') LS.set('mixer.view', v);
+    if (LS.get('mixer.view') === 'console') cvEnter(true, false);
+  }
+  connect();
 })();
 </script>
 </body>
