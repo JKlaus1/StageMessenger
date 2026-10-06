@@ -5,6 +5,7 @@ the WING channel order key. Minimal fake WING on 127.0.0.1:2223 (query reply [di
 
     cd ~/stage-messenger && python3 -m mixer.tests.test_wing_regression
 """
+import json
 import os
 import socket
 import sys
@@ -94,8 +95,31 @@ def main():
         check('connected + loaded', wait_for(lambda: mx.wing.loaded, 12))
         st = c.get('/mixer/api/state').get_json()
         check('snapshot has ch 40 and caps', '/ch/40/fdr' in st['state'] and st['caps']['console'] == 'wing')
-        check('feeds present (listen on)', len(st['feeds']) == 23, len(st['feeds']))
+        check('feeds present (listen on)', len(st['feeds']) == 24, len(st['feeds']))
+        usb = {f['id']: f['usb'] for f in st['feeds']}
+        check('v3.9 WING layout: main 43/44, main2 45/46, mon 47/48, bus1 1/2, mtx4 39/40, ambient 42',
+              usb.get('main1') == [43, 44] and usb.get('main2') == [45, 46] and usb.get('mon1') == [47, 48]
+              and usb.get('bus1') == [1, 2] and usb.get('bus16') == [31, 32] and usb.get('mtx4') == [39, 40]
+              and usb.get('ambient') == [42, 42], usb)
         check('USB patch written', wait_for(lambda: any(a.startswith('/io/out/USB/') for a, _ in fake.writes), 4))
+        check('USB patch: 43 = MAIN 1, 45/46 = MAIN 3/4, 1 = BUS 1, 41 untouched',
+              wait_for(lambda: '/io/out/USB/42/grp' in dict(fake.writes), 15)
+              and dict(fake.writes).get('/io/out/USB/46/in') == 4
+              and dict(fake.writes).get('/io/out/USB/43/grp') == 'MAIN' and dict(fake.writes).get('/io/out/USB/43/in') == 1
+              and dict(fake.writes).get('/io/out/USB/45/in') == 3 and dict(fake.writes).get('/io/out/USB/1/grp') == 'BUS'
+              and '/io/out/USB/41/grp' not in dict(fake.writes), {k: v for k, v in fake.writes if '/USB/4' in k or k.endswith(('USB/1/grp', 'USB/1/in'))})
+        r = c.post('/mixer/api/listen/set', json={'sub_on': True, 'sub_db': -6}).get_json()
+        b = r['listen']['blend']
+        check('sub blend on main1: route carries Main 2 USB 45/46 at -6 dB', r['ok'] and b['on'] and b['db'] == -6.0
+              and mx.listener.blend and mx.listener.blend[:2] == (44, 45) and abs(mx.listener.blend[2] - 0.5012) < 1e-3, r)
+        c.post('/mixer/api/feed', json={'id': 'bus3'})
+        check('blend only on main1', mx.listener.blend is None and mx.listener.pair == (4, 5), (mx.listener.pair, mx.listener.blend))
+        c.post('/mixer/api/feed', json={'id': 'main1'})
+        check('back on main1: blend again', mx.listener.blend is not None and mx.listener.pair == (42, 43))
+        r = c.post('/mixer/api/listen/set', json={'ambient_ch': 7}).get_json()
+        check('ambient channel saved per console', r['ok'] and r['ambient_ch'] == 7
+              and json.load(open(os.path.join(tmp, 'mixer_state.json'))).get('ambient', {}).get('wing') == 7)
+        check('listen state keeps opus + blend', json.load(open(os.path.join(tmp, 'mixer_state.json'))).get('listen', {}).get('sub_db') == -6.0)
         n = len(fake.writes)
         r = c.post('/mixer/api/set', json={'a': '/ch/3/fdr', 'v': -6}).get_json()
         check('fader write', r['ok'] and wait_for(lambda: ('/ch/3/fdr', -6.0) in fake.writes[n:]), fake.writes[n:])

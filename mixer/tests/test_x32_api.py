@@ -263,6 +263,43 @@ def rec_suite(c, mx, fake):
     fake.console_set('/-urec/errorcode', 6)
 
 
+def listen_suite(c, mx, fake):
+    """v3.9: X32 listen block -- card 25-32 = User Out 1-8, User Out 3-8 owned by the Pi, capture from the X-LIVE."""
+    print('x32 listen block (v3.9)')
+    uo = lambda u: fake.st.get(f'/config/userrout/out/{u:02d}')
+    check('User Out 4-8 = Out 14 (182), Mon L/R (207/208), Out 15/16 (183/184)',
+          wait_for(lambda: [uo(u) for u in range(4, 9)] == [182, 207, 208, 183, 184], 5), [uo(u) for u in range(1, 9)])
+    # ch 10's input follows its block: the routing tests above moved IN/9-16 to Card 1-8 -> Card 2 -> 128 + 2
+    g10, i10 = mx.wing.get('/ch/10/in/conn/grp'), mx.wing.get('/ch/10/in/conn/in')
+    want10 = {'LCL': 0, 'A': 32, 'B': 80, 'CRD': 128, 'AUX': 160}[g10] + i10
+    check(f'User Out 3 = ambient channel 10 source ({g10} {i10} -> {want10}), follows block re-routes',
+          wait_for(lambda: uo(3) == want10, 3) and (g10, i10) == ('CRD', 2), (uo(3), g10, i10))
+    check('User Out 1/2 and 9+ untouched', uo(1) == 0 and uo(2) == 0 and all(uo(u) == 0 for u in range(9, 49)))
+    check('card blocks 1-24 never written', not any(a.startswith('/config/routing/CARD/') for a, _ in fake.writes))
+    check('capture = X-LIVE 32 ch', mx.listener.capture_cmd[:5] == ['arecord', '-D', 'hw:XLIVE', '-c', '32']
+          and mx.listener.channels == 32, mx.listener.capture_cmd)
+    check('patch note says OK', 'X32 listen block OK' in mx.patch_note, mx.patch_note)
+    r = c.post('/mixer/api/listen/set', json={'sub_on': True, 'sub_db': 3}).get_json()
+    check('sub blend on main1 uses mono sub USB 28 (+3 dB)', r['ok'] and mx.listener.pair == (30, 31)
+          and mx.listener.blend and mx.listener.blend[:2] == (27, 27) and abs(mx.listener.blend[2] - 1.4125) < 1e-3,
+          (mx.listener.pair, mx.listener.blend))
+    with open(mx.listener.ctl) as f:
+        check('picker control file carries the blend', f.read().split()[:4] == ['30', '31', '27', '27'])
+    c.post('/mixer/api/feed', json={'id': 'mon1'})
+    check('monitor feed = USB 29/30, no blend', mx.listener.pair == (28, 29) and mx.listener.blend is None)
+    c.post('/mixer/api/feed', json={'id': 'main1'})
+    r = c.post('/mixer/api/listen/set', json={'ambient_ch': 1}).get_json()
+    # ch 1 source = In01 -> block IN/1-8 = 4 -> AES50 A 1 -> 33
+    check('ambient picker: ch 1 -> User Out 3 = 33, saved for the x32', r['ok'] and wait_for(lambda: uo(3) == 33, 3)
+          and mx._state_raw.get('ambient', {}).get('x32') == 1, (uo(3), mx._state_raw.get('ambient')))
+    check('ambient label names the channel', wait_for(lambda: 'Ch 1 Kick' in mx.ambient_label, 2), mx.ambient_label)
+    check('bad ambient channel refused', c.post('/mixer/api/listen/set', json={'ambient_ch': 99}).status_code == 400)
+    fake.st['/config/userrout/out/05'] = 0          # a scene recall clears a slot -> the Pi puts it back
+    mx.ensure_patch(force=True)
+    check('recall: User Out 5 restored', uo(5) == 207, uo(5))
+    check('repatch allowed on x32 now', c.post('/mixer/api/repatch').status_code == 200)
+
+
 def main():
     sys.path.insert(0, os.path.dirname(PKG))
     from mixer.tests.fake_x32 import FakeX32
@@ -281,7 +318,9 @@ def main():
         check('snapshot caps', st['caps']['nch'] == 32 and st['caps']['nmg'] == 6 and st['caps']['sheet']
               and st['caps']['gain'] == [-12.0, 60.0] and st['caps']['lcf'] == [20.0, 400.0] and not st['caps']['hc'])
         check('snapshot srcgroups = picker groups', [g for g, _ in st['srcgroups']] == ['IN', 'AUX', 'USB', 'FX', 'BUS'])
-        check('snapshot sp None, feeds []', st['sp'] is None and st['feeds'] == [])
+        check('snapshot sp None, X32 listen feeds (v3.9)', st['sp'] is None
+              and [(f['id'], f['usb']) for f in st['feeds']] == [('main1', [31, 32]), ('main2', [28, 28]),
+                                                                 ('mon1', [29, 30]), ('ambient', [27, 27])], st['feeds'])
         s = st['state']
 
         print('canonical values')
@@ -414,11 +453,7 @@ def main():
         sheet_suite(c, mx, fake)
         rec_suite(c, mx, fake)
 
-        print('x32-off features')
-        for path, meth in (('/mixer/stream.mp3', 'get'), ('/mixer/api/repatch', 'post')):
-            code = getattr(c, meth)(path).status_code
-            check(f'{path} -> 409', code == 409, code)
-        check('whep -> 404 on x32', c.post('/mixer/api/rtc/whep', data='v=0').status_code == 404)
+        listen_suite(c, mx, fake)
 
         print('page')
         html = c.get('/mixer').get_data(as_text=True)
@@ -436,7 +471,11 @@ def main():
 
         print('reconnect')
         n_before = len(fake.writes)
-        check('no writes during load / idle', all(not a.startswith('/config/routing') for a, _ in fake.writes[:n_before]))
+        check('no writes during load / idle (except the v3.9 listen block: User Out 3-8 only, card blocks untouched)',
+              all(not a.startswith('/config/routing') for a, _ in fake.writes[:n_before])
+              and {a for a, _ in fake.writes[:n_before] if a.startswith('/config/userrout/out/')}
+              <= {f'/config/userrout/out/{u:02d}' for u in range(3, 9)},
+              [a for a, _ in fake.writes[:n_before] if a.startswith('/config/')])
     finally:
         mx.wing.stop(); mx.meters.stop()
         fake.stop()

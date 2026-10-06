@@ -64,6 +64,10 @@ def seed():
         st[f'/config/routing/PLAY/{b}'] = 0
     for u in range(1, 33):
         st[f'/config/userrout/in/{u:02d}'] = 0
+    for u in range(1, 49):                   # v3.9 listen block: user outs all OFF, card blocks as probed
+        st[f'/config/userrout/out/{u:02d}'] = 0
+    st.update({'/config/routing/CARD/1-8': 0, '/config/routing/CARD/9-16': 1,
+               '/config/routing/CARD/17-24': 25, '/config/routing/CARD/25-32': 26})
     for g in range(1, 7):
         st[f'/config/mute/{g}'] = 0
     names = {1: 'Kick', 2: 'SNARE', 14: 'Bass', 18: 'Singer 1', 21: 'Singer 3', 22: 'TRACK'}

@@ -2,13 +2,20 @@
 Channel-pair picker -- runs as its OWN process so the web server's GIL can never stall
 audio capture (v1 sliced inside the Flask process; heavy fader traffic caused dropouts).
 
-  usage: picker.py <ctl_file> <capture cmd ...>
+  usage: picker.py <ctl_file> <capture cmd ...>      (env PICKER_CHANNELS = channels in the capture, default 48)
 
 stdin : unused
 stdout: raw stereo s24le 48 kHz (piped straight into ffmpeg by the parent)
 stderr: one status line per ~100 ms ->  "S <peakL_dB> <peakR_dB> <overruns>"
         on capture failure           ->  "E <message>"   then exit 1
-ctl   : text file "L R" (zero-based USB channel indices); re-read when its mtime changes.
+ctl   : text file "L R [SL SR GAIN]" (zero-based capture channel indices); re-read when its mtime changes.
+        v3.9 sub blend: with SL SR GAIN (GAIN = linear, > 0) the output is
+            L + GAIN*(SL+SR)/2 , R + GAIN*(SL+SR)/2      (saturating; a mono sub uses SL == SR)
+        Needs numpy; without it the blend is ignored ("W" line on stderr) and plain L/R carries on.
+        Gain changes ramp across one 10 ms block (no zipper noise); blend off ramps down, then the
+        cheap strided copy takes over again.
+
+Capture format: S24_3LE, 48 kHz, PICKER_CHANNELS channels (WING USB: 48; X32 X-LIVE USB: 32).
 
 Cam output (v3.4, optional): when the PICKER_CAM_CTL environment variable names a file, that file may
 hold one line  "L R delay_ms /path/to/fifo"  (or be missing / say "off"). While it is set the picker
@@ -27,18 +34,66 @@ import sys
 import threading
 import time
 
+try:
+    import numpy as np
+except Exception:                       # the blend needs it; plain listen never does
+    np = None
+
 CHANNELS = 48
 FRAME = CHANNELS * 3
 CHUNK = FRAME * 480                     # 10 ms
 FULL = 8388608.0
 
 
-def read_pair(path, cur):
+def configure(channels):
+    """Set the capture width (channels per frame)."""
+    global CHANNELS, FRAME, CHUNK
+    CHANNELS = max(2, int(channels))
+    FRAME = CHANNELS * 3
+    CHUNK = FRAME * 480
+
+
+def _clamp(v):
+    return max(0, min(CHANNELS - 1, int(v)))
+
+
+def read_route(path, cur):
+    """-> ((L, R), blend) where blend is (SL, SR, gain) or None. Keeps `cur` on a bad/missing file."""
     try:
-        l, r = open(path).read().split()[:2]
-        return max(0, min(CHANNELS - 1, int(l))), max(0, min(CHANNELS - 1, int(r)))
+        parts = open(path).read().split()
+        pair = (_clamp(parts[0]), _clamp(parts[1]))
+        blend = None
+        if len(parts) >= 5:
+            g = float(parts[4])
+            if g > 0:
+                blend = (_clamp(parts[2]), _clamp(parts[3]), min(g, 16.0))
+        return pair, blend
     except Exception:
         return cur
+
+
+def read_pair(path, cur):
+    """Kept for callers/tests that only want the pair."""
+    return read_route(path, (cur, None))[0]
+
+
+def s24_to_i32(a):
+    """uint8 array (..., 3) little-endian signed 24-bit -> int32 array (...)."""
+    v = a[..., 0].astype(np.int32) | (a[..., 1].astype(np.int32) << 8) | (a[..., 2].astype(np.int32) << 16)
+    return (v << 8) >> 8                                # sign-extend
+
+
+def blend_block(buf, n, pair, sl, sr, g0, g1):
+    """Stereo s24le of n frames: L/R plus the sub pair's average, gain ramped g0 -> g1, saturated."""
+    a = np.frombuffer(buf, dtype=np.uint8, count=n * FRAME).reshape(n, CHANNELS, 3)
+    v = s24_to_i32(a[:, [pair[0], pair[1], sl, sr], :])
+    g = np.linspace(g0, g1, n, endpoint=False, dtype=np.float32) if g0 != g1 else np.float32(g1)
+    sub = (v[:, 2].astype(np.float32) + v[:, 3].astype(np.float32)) * (np.float32(0.5) * g)
+    out = np.empty((n, 2), dtype=np.float32)
+    out[:, 0] = v[:, 0] + sub
+    out[:, 1] = v[:, 1] + sub
+    o = np.clip(np.rint(out), -8388608, 8388607).astype('<i4')
+    return o.view(np.uint8).reshape(n, 2, 4)[:, :, :3].tobytes()
 
 
 def peak_db(buf, off):
@@ -179,6 +234,7 @@ class CamOut:
 def main():
     ctl, cmd = sys.argv[1], sys.argv[2:]
     err = sys.stderr
+    configure(os.environ.get('PICKER_CHANNELS', '48') or 48)
     try:
         cap = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
     except OSError as e:
@@ -197,7 +253,10 @@ def main():
     threading.Thread(target=drain, daemon=True).start()
 
     out = sys.stdout.buffer
-    pair = read_pair(ctl, (0, 1))
+    pair, blend = read_route(ctl, ((0, 1), None))
+    gain_now = 0.0                       # blend gain actually applied (ramps toward the target)
+    sub = (0, 0)
+    warned = False
     try:
         mtime = os.stat(ctl).st_mtime_ns
     except OSError:
@@ -243,11 +302,30 @@ def main():
         buf = rest + data
         n = len(buf) // FRAME
         rest = buf[n * FRAME:]
-        lo, ro = pair[0] * 3, pair[1] * 3
-        st = bytearray(n * 6)
-        for k in range(3):               # C-speed strided copies, no per-sample Python
-            st[k::6] = buf[lo + k:n * FRAME:FRAME]
-            st[3 + k::6] = buf[ro + k:n * FRAME:FRAME]
+        target = blend[2] if blend else 0.0
+        if blend:
+            sub = blend[:2]
+        if (target > 0 or gain_now > 0) and np is None:
+            if not warned:
+                warned = True
+                err.write('W sub blend needs numpy -- playing plain L/R\n'); err.flush()
+            target = gain_now = 0.0
+        if target > 0 or gain_now > 0:
+            try:
+                st = blend_block(buf, n, pair, sub[0], sub[1], gain_now, target)
+            except Exception as e:       # never let the blend take listen down
+                err.write(f'W blend failed: {e}\n'); err.flush()
+                blend, target = None, 0.0
+                st = None
+            gain_now = target
+        else:
+            st = None
+        if st is None:
+            lo, ro = pair[0] * 3, pair[1] * 3
+            st = bytearray(n * 6)
+            for k in range(3):           # C-speed strided copies, no per-sample Python
+                st[k::6] = buf[lo + k:n * FRAME:FRAME]
+                st[3 + k::6] = buf[ro + k:n * FRAME:FRAME]
         try:
             out.write(st); out.flush()
         except (BrokenPipeError, OSError):
@@ -270,7 +348,7 @@ def main():
             try:
                 m = os.stat(ctl).st_mtime_ns
                 if m != mtime:
-                    mtime = m; pair = read_pair(ctl, pair)
+                    mtime = m; pair, blend = read_route(ctl, (pair, blend))
             except OSError:
                 pass
             if cam_ctl:

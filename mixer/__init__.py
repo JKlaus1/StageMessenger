@@ -47,10 +47,16 @@ DEFAULTS = {
     'mixer_scan':      [],       # extra addresses to ask (unicast) -- normally empty
     'watch_s':         3,        # console watcher: how often to look while no console is connected
     'remote_enabled':  False,
-    'usb_patch':       True,     # the Pi owns WING USB outs 1-43 and 47-48
-    'ambient': {                 # USB 43: room/stage ambient mic
-        'follow_channel': 10,    # use this channel's input source if the WING reports it
-        'grp': 'B', 'in': 4,     # fallback when it doesn't
+    'usb_patch':       True,     # the Pi owns WING USB outs 1-40, 42-48 (v3.9 layout, see feed_table)
+                                 # and, on an X32, User Out 3-8 + the Card out 25-32 block (blocks 1-24 untouched)
+    'ambient': {                 # WING USB 42 / X32 User Out 3: room/stage ambient mic
+        'follow_channel': 10,    # default channel whose input source is used (the page can pick another, v3.9)
+        'grp': 'B', 'in': 4,     # WING fallback when that channel reports no source
+    },
+    # listen-back capture per console (v3.9): ALSA device + channel count (both S24_3LE 48 kHz)
+    'capture': {
+        'wing': {'device': 'hw:WING', 'channels': 48},
+        'x32':  {'device': 'hw:XLIVE', 'channels': 32},
     },
     'bitrate':         '128k',
     # listen-back latency (v1.10)
@@ -124,21 +130,48 @@ def load_config():
 
 
 # ── USB patch / listen feeds ────────────────────────────────────────────────────
-# Assumption (verify by ear): stereo sources occupy consecutive 'in' indices,
-# e.g. BUS in 1/2 = Bus 1 L/R, 3/4 = Bus 2 L/R.
+# WING (v3.9 layout -- the last 8 USB outs are the "listen block", same idea as the X32's card 25-32):
+#   1-32 Bus 1-16 L/R | 33-40 Mtx 1-4 L/R | 41 free | 42 ambient | 43/44 Main 1 (LR) | 45/46 Main 2 (subs)
+#   | 47/48 Monitor 1 (phones / solo)
+# Assumption (verify by ear): stereo sources occupy consecutive 'in' indices, e.g. BUS in 1/2 = Bus 1 L/R,
+# MAIN in 3/4 = Main 2 L/R.
+# X32 / M32 (X-LIVE USB, 32 ch): the Card out 25-32 block carries User Out 1-8 (block value 26 = UOUT1-8);
+# the Pi owns User Out 3-8. Source codes verified with the oscillator on an X32 Rack fw 4.15 (2026-10-06):
+#   169-184 = Local Out 1-16 (182 = Out 14), 207/208 = Monitor L/R; inputs 1-32 local, 33-80 AES50 A,
+#   81-128 AES50 B, 129-160 card, 161-166 aux in.
 
-def feed_table():
-    """[(feed_id, usb_left_1based, usb_right_1based, grp, in_left, in_right)]"""
-    t = [('main1', 1, 2, 'MAIN', 1, 2), ('mon1', 47, 48, 'MON', 1, 2)]
+def feed_table(console='wing'):
+    """[(feed_id, usb_left_1based, usb_right_1based, grp, in_left, in_right)] -- WING patch sources;
+    X32 rows carry the User Out source codes instead (grp 'UOUT')."""
+    if console == 'x32':
+        return [('main1', 31, 32, 'UOUT', X32_UOUT['main_l'], X32_UOUT['main_r']),
+                ('main2', 28, 28, 'UOUT', X32_UOUT['sub'], X32_UOUT['sub']),
+                ('mon1', 29, 30, 'UOUT', X32_UOUT['mon_l'], X32_UOUT['mon_r'])]
+    t = [('main1', 43, 44, 'MAIN', 1, 2), ('main2', 45, 46, 'MAIN', 3, 4), ('mon1', 47, 48, 'MON', 1, 2)]
     for b in range(1, N_BUS + 1):
-        u = 3 + 2 * (b - 1)
+        u = 1 + 2 * (b - 1)
         t.append((f'bus{b}', u, u + 1, 'BUS', 2 * b - 1, 2 * b))
     for m in range(1, 5):
-        u = 35 + 2 * (m - 1)
+        u = 33 + 2 * (m - 1)
         t.append((f'mtx{m}', u, u + 1, 'MTX', 2 * m - 1, 2 * m))
     return t
 
-AMBIENT_USB = 43
+AMBIENT_USB = 42                    # WING USB out (v3.9; was 43)
+X32_AMBIENT_USB = 27                # X-LIVE USB 27 = Card out 27 = User Out 3
+X32_CARD_BLOCK = '25-32'
+X32_CARD_UOUT18 = 26                # /config/routing/CARD/25-32 value for "UOUT1-8"
+X32_UOUT = {'main_l': 183, 'main_r': 184, 'sub': 182, 'mon_l': 207, 'mon_r': 208}   # Out 15/16, Out 14, Mon L/R
+X32_UOUT_SLOTS = {3: 'ambient', 4: 'sub', 5: 'mon_l', 6: 'mon_r', 7: 'main_l', 8: 'main_r'}
+X32_SRC_BASE = {'LCL': 0, 'A': 32, 'B': 80, 'CRD': 128, 'AUX': 160}
+X32_SRC_MAX = {'LCL': 32, 'A': 48, 'B': 48, 'CRD': 32, 'AUX': 6}
+SUB_DB_RANGE = (-30.0, 12.0)
+
+
+def x32_input_code(grp, idx):
+    """Physical input (driver group code + 1-based index) -> User Out source code, or 0."""
+    if grp in X32_SRC_BASE and isinstance(idx, int) and 1 <= idx <= X32_SRC_MAX[grp]:
+        return X32_SRC_BASE[grp] + idx
+    return 0
 
 # WING input-source group codes -> labels shown in the UI
 SRC_NAMES = {'LCL': 'Local', 'A': 'AES A', 'B': 'AES B', 'C': 'AES C', 'SC': 'StageCon',
@@ -154,7 +187,7 @@ CAPS = {
              'auxproc': ['eq', 'gate', 'dyn'], 'grdb': False, 'sd': N_SD, 'movemark': True, 'recauto': True},
     'x32':  {'console': 'x32', 'model': 'X32', 'nch': x32mod.N_CH, 'naux': x32mod.N_AUX, 'nbus': x32mod.N_BUS,
              'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': True, 'recorder': 'xlive',
-             'listen': False, 'spotify': False, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
+             'listen': True, 'spotify': False, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
              'lcf': list(x32mod.LCF_RANGE), 'hc': False, 'spol': False, 'auxproc': ['eq'], 'grdb': True,
              'sd': 1, 'movemark': False, 'recauto': False},
 }
@@ -257,13 +290,21 @@ class Mixer:
         cam_cfg.update({k: v for k, v in (self._state_raw.get('cam') or {}).items()
                         if k in ('quality', 'feed', 'delay_ms', 'audio_bitrate', 'source', 'rot', 'cams')})
         cam_cfg['enabled'] = bool(cam_cfg.get('enabled', True)) and self.rtc_enabled
-        self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
+        lst = self._state_raw.get('listen') or {}
+        self.sub_on = bool(lst.get('sub_on', False))            # v3.9 sub blend (shared, like the feed)
+        try:
+            self.sub_db = max(SUB_DB_RANGE[0], min(SUB_DB_RANGE[1], float(lst.get('sub_db', 0.0))))
+        except (TypeError, ValueError):
+            self.sub_db = 0.0
+        cap_cmd, cap_ch = self._capture()
+        self.listener = Listener(capture_cmd=cap_cmd, channels=cap_ch, bitrate=cfg.get('bitrate', '128k'),
                                  rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
                                  opus_bitrate=(self._state_raw.get('listen') or {}).get('opus_bitrate')
                                  or rtc.get('opus_bitrate', '128k'), rtc_probe=self.rtc_probe,
                                  cushion_s=cfg.get('cushion_s', 0.5), max_queue_s=cfg.get('max_queue_s', 1.0),
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}),
                                  cam_ctl=self._cam_ctl if cam_cfg['enabled'] else '')
+        self.select_feed(self.feed_id, publish=False)               # writes the route (blend) for the start
         self.cam = Cam(cam_cfg, self.listener, self.feeds, self.cam_probe, self._cam_ctl,
                        on_status=lambda st: self.hub.publish({'t': 'cam', 's': st}),
                        save=self._save_cam, out_url=cam_cfg.get('rtsp', 'rtsp://127.0.0.1:8554/cam'))
@@ -271,6 +312,49 @@ class Mixer:
             self.cam.start_probe()                    # Wi-Fi cameras online / offline, auto-rotate (v3.8)
         self.spotify = None                           # the Spotify card is optional: never blocks the mixer
         self._ensure_spotify()
+
+    # ── listen capture per console (v3.9) ──
+    def _capture(self):
+        from .listen import capture_cmd_for
+        c = (self.cfg.get('capture') or {}).get(self.console) or DEFAULTS['capture'].get(self.console) \
+            or DEFAULTS['capture']['wing']
+        ch = int(c.get('channels', 48))
+        return capture_cmd_for(c.get('device', 'hw:WING'), ch), ch
+
+    def ambient_channel(self):
+        """Channel whose input source feeds the ambient listen slot (page choice per console, else config)."""
+        ch = (self._state_raw.get('ambient') or {}).get(self.console)
+        if ch is None:
+            ch = (self.cfg.get('ambient') or {}).get('follow_channel')
+        try:
+            ch = int(ch)
+        except (TypeError, ValueError):
+            return None
+        return ch if 1 <= ch <= self.caps['nch'] else None
+
+    def set_ambient_channel(self, ch):
+        ch = int(ch)
+        if not 1 <= ch <= self.caps['nch']:
+            return False
+        with self._ovr_lock:
+            amb = dict(self._state_raw.get('ambient') or {})
+            amb[self.console] = ch
+            self._state_raw = {**self._state_raw, 'ambient': amb}
+            self._write_state()
+        threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
+        return True
+
+    def set_sub_blend(self, on=None, db=None):
+        if on is not None:
+            self.sub_on = bool(on)
+        if db is not None:
+            self.sub_db = max(SUB_DB_RANGE[0], min(SUB_DB_RANGE[1], round(float(db), 1)))
+        with self._ovr_lock:
+            lst = dict(self._state_raw.get('listen') or {})
+            lst.update(sub_on=self.sub_on, sub_db=self.sub_db)
+            self._state_raw = {**self._state_raw, 'listen': lst}
+            self._write_state()
+        self.select_feed(self.feed_id, publish=False)
 
     # ── console: find / attach / watch / swap (v3.3) ──
     def _find(self, sweep=True):
@@ -377,6 +461,7 @@ class Mixer:
             self._ensure_spotify()
             self.wing.start(); self.meters.start()
             self.patch_note = ''
+            self.listener.set_capture(*self._capture())
             if self.caps['listen']:
                 self.select_feed(self.feed_id if any(f['id'] == self.feed_id for f in self.feeds()) else 'main1')
         self.cam.console_changed()                    # its audio feed may have appeared or gone with the console
@@ -404,9 +489,18 @@ class Mixer:
         """The WING pushes nothing when a channel is re-patched, so re-read every strip's input
         patch and the physical-input settings (gain/48V/name) behind it every few seconds.
         (The X32 pushes re-patches and mutes -- nothing to poll.)"""
+        n = 0
         while True:
             time.sleep(3)
-            if self.x32 or not self.wing.loaded:
+            n += 1
+            if self.x32:
+                if self.wing.loaded and n % 5 == 0:             # X32 listen block: re-check every ~15 s
+                    try:
+                        self.ensure_patch()
+                    except Exception as e:
+                        print(f'[mixer] x32 listen patch: {e}', flush=True)
+                continue
+            if not self.wing.loaded:
                 continue
             self.wing.poke([f'/{k}/{n}/in/conn/{leaf}' for k, n in self._strips()
                             for leaf in ('grp', 'in', 'altgrp', 'altin')]
@@ -594,6 +688,8 @@ class Mixer:
         if self.x32:
             ok = self.wing.patch_source(kind, n, grp, idx)
             print(f'[mixer] patched {kind} {n} -> {grp} {idx} ({"ok" if ok else "NOT confirmed"})', flush=True)
+            if kind == 'ch' and n == self.ambient_channel():
+                threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
             return ok
         base = f'/{kind}/{n}/in/conn'
         self.wing.set(base + '/grp', grp); time.sleep(0.03)
@@ -603,8 +699,7 @@ class Mixer:
         for a, v in got.items():
             if v is not None:
                 self.hub.publish({'t': 'upd', 'a': a, 'v': v})
-        follow = (self.cfg.get('ambient') or {}).get('follow_channel')
-        if kind == 'ch' and n == follow:
+        if kind == 'ch' and n == self.ambient_channel():
             threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
         print(f'[mixer] patched {kind} {n} -> {grp} {idx}', flush=True)
         return got.get(base + '/grp') == grp and got.get(base + '/in') == idx
@@ -679,9 +774,18 @@ class Mixer:
             elif addr.endswith(('/markers', '/sessions', '/state', '/sessionpos')) and self.wing.loaded:
                 self.refresh_markers(int(addr.split('/')[3]), delay=0.3)
         self.hub.publish({'t': 'upd', 'a': addr, 'v': v})
-        if self.x32 or not self.wing.loaded:
-            return                                   # initial load: one snapshot at the end (X32: nothing more to do)
-        follow = (self.cfg.get('ambient') or {}).get('follow_channel')
+        if not self.wing.loaded:
+            return                                   # initial load: one snapshot at the end
+        if self.x32:                                 # X32 pushes re-patches: keep the ambient User Out on its channel
+            follow = self.ambient_channel()
+            if follow and addr.startswith(f'/ch/{follow}/in/conn/'):
+                threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
+            if follow and addr == f'/ch/{follow}/name':        # label carries the channel name
+                threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
+            elif addr.startswith('/main/') and addr.endswith('name'):
+                self.hub.publish({'t': 'feeds', 'feeds': self.feeds()})
+            return
+        follow = self.ambient_channel()
         if addr.startswith('/io/out/USB/') or (follow and addr.startswith(f'/ch/{follow}/in/conn/')):
             threading.Thread(target=self.ensure_patch, daemon=True).start()
         if addr.endswith('name'):
@@ -702,6 +806,7 @@ class Mixer:
             if st.get('/cards/$type') == 'WLIVE':
                 self.refresh_markers(1, publish=False)
             self.hub.publish({'t': 'snap', **self.snapshot()})
+            threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
             return
         self.wing.query_many(self._source_addrs(), timeout=1.5)     # physical-input settings
         if self.overrides:                                          # after a restart / reconnect
@@ -726,58 +831,90 @@ class Mixer:
         if not self.caps['listen']:
             return []
         out = []
-        for fid, ul, ur, grp, il, ir in feed_table():
+        if self.x32:
+            labels = {'main1': f"Main {self._name('/main/1/name', 'LR')} (Out 15/16)",
+                      'main2': 'Sub (Out 14 \u00b7 mono)',
+                      'mon1': 'Monitor (phones / solo)'}
+            for fid, ul, ur, *_ in feed_table('x32'):
+                out.append({'id': fid, 'label': labels[fid], 'usb': [ul, ur]})
+            out.append({'id': 'ambient', 'label': self.ambient_label, 'usb': [X32_AMBIENT_USB, X32_AMBIENT_USB]})
+            return out
+        for fid, ul, ur, grp, il, ir in feed_table('wing'):
             if fid == 'main1':
                 label = f"Main {self._name('/main/1/name', 'LR')}"
+            elif fid == 'main2':
+                label = f"Main 2 \u2013 {self._name('/main/2/name', 'Subs')}"
             elif fid == 'mon1':
                 label = 'Monitor 1 (phones / solo)'
             elif fid.startswith('bus'):
-                b = fid[3:]; label = f"Bus {b} – {self._name(f'/bus/{b}/name', '')}".rstrip(' –')
+                b = fid[3:]; label = f"Bus {b} \u2013 {self._name(f'/bus/{b}/name', '')}".rstrip(' \u2013')
             else:
-                m = fid[3:]; label = f"Mtx {m} – {self._name(f'/mtx/{m}/name', '')}".rstrip(' –')
+                m = fid[3:]; label = f"Mtx {m} \u2013 {self._name(f'/mtx/{m}/name', '')}".rstrip(' \u2013')
             out.append({'id': fid, 'label': label, 'usb': [ul, ur]})
         out.append({'id': 'ambient', 'label': self.ambient_label, 'usb': [AMBIENT_USB, AMBIENT_USB]})
         return out
 
-    def select_feed(self, fid):
-        for f in self.feeds():
+    def _blend_for(self, fid, feeds):
+        """Sub blend applies to the main LR feed only, when Main 2 / the sub feed exists."""
+        if fid != 'main1' or not self.sub_on:
+            return None
+        sub = next((f for f in feeds if f['id'] == 'main2'), None)
+        if not sub:
+            return None
+        return (sub['usb'][0] - 1, sub['usb'][1] - 1, 10 ** (self.sub_db / 20.0))
+
+    def select_feed(self, fid, publish=True):
+        feeds = self.feeds()
+        for f in feeds:
             if f['id'] == fid:
                 self.feed_id = fid
-                self.listener.set_pair(f['usb'][0] - 1, f['usb'][1] - 1)
-                self.hub.publish({'t': 'feed', 'id': fid})
+                self.listener.set_route(f['usb'][0] - 1, f['usb'][1] - 1, self._blend_for(fid, feeds),
+                                        info={'on': self.sub_on, 'db': self.sub_db})
+                if publish:
+                    self.hub.publish({'t': 'feed', 'id': fid})
                 return True
         return False
 
     # ── USB patch ownership ──
     def _ambient_source(self):
-        amb = self.cfg.get('ambient') or {}
-        ch = amb.get('follow_channel')
+        ch = self.ambient_channel()
         if ch:
             g = self.wing.query(f'/ch/{ch}/in/conn/grp')
             i = self.wing.query(f'/ch/{ch}/in/conn/in')
             if isinstance(g, str) and g and g != 'OFF' and isinstance(i, int) and i > 0:
                 return g, i, f'follows Ch {ch}'
+        if self.x32:
+            return None, None, f'Ch {ch} has no physical input' if ch else 'no channel chosen'
+        amb = self.cfg.get('ambient') or {}
         return amb.get('grp', 'B'), int(amb.get('in', 4)), 'fixed'
 
     def _set_ambient_label(self, g, i):
-        src = self.wing.query(f'/io/in/{g}/{i}/name')
-        lab = f'Ambient \u00b7 {SRC_NAMES.get(g, g)} {i}'
-        if isinstance(src, str) and src.strip():
-            lab += f' ({src.strip()})'
+        ch = self.ambient_channel()
+        lab = 'Ambient'
+        if ch:
+            nm = self._name(f'/ch/{ch}/name', '')
+            lab += f' \u00b7 Ch {ch}' + (f' {nm.strip()}' if isinstance(nm, str) and nm.strip() else '')
+        if g:
+            lab += f' ({SRC_NAMES.get(g, g)} {i})'
+        elif ch:
+            lab += ' (no input)'
         if lab != self.ambient_label:
             self.ambient_label = lab
             self.hub.publish({'t': 'feeds', 'feeds': self.feeds()})
 
     def ensure_patch(self, force=False):
-        """Make WING USB outs match feed_table + ambient. Writes only what differs."""
-        if self.x32 or not self.cfg.get('usb_patch', True) or not self.wing.connected:
+        """Make the console's listen outputs match feed_table + ambient. Writes only what differs.
+        WING: USB outs. X32: User Out 3-8 + the Card out 25-32 block (blocks 1-24 are never touched)."""
+        if not self.cfg.get('usb_patch', True) or not self.wing.connected:
             return
+        if self.x32:
+            return self._ensure_x32_patch(force)
         with self._patch_lock:
             if not force and time.time() - self._last_patch < 10:   # never fight a recall loop
                 return
             self._last_patch = time.time()
             want = []
-            for _, ul, ur, grp, il, ir in feed_table():
+            for _, ul, ur, grp, il, ir in feed_table('wing'):
                 want += [(ul, grp, il), (ur, grp, ir)]
             ag, ai, how = self._ambient_source()
             self._set_ambient_label(ag, ai)
@@ -794,6 +931,38 @@ class Mixer:
             self.patch_note = (f'USB patch OK ({fixed} writes); ambient {ag} {ai} ({how})')
             print(f'[mixer] {self.patch_note}', flush=True)
             self.hub.publish({'t': 'patch', 'note': self.patch_note})
+
+    def _ensure_x32_patch(self, force=False):
+        with self._patch_lock:
+            if not force and time.time() - self._last_patch < 10:
+                return
+            self._last_patch = time.time()
+            ag, ai, how = self._ambient_source()
+            self._set_ambient_label(ag, ai)
+            want = {f'/config/userrout/out/{slot:02d}': (x32_input_code(ag, ai) if key == 'ambient' else X32_UOUT[key])
+                    for slot, key in X32_UOUT_SLOTS.items()}
+            card = f'/config/routing/CARD/{X32_CARD_BLOCK}'
+            want[card] = X32_CARD_UOUT18
+            cur = self.wing._query_raw(list(want), timeout=0.8)
+            fixed = []
+            for addr, v in want.items():
+                if cur.get(addr) != v:
+                    self.wing._write(addr, v); time.sleep(0.02); fixed.append(addr.rsplit('/', 1)[1])
+            if fixed:
+                got = self.wing._query_raw([a for a in want if a.rsplit('/', 1)[1] in fixed], timeout=0.8)
+                bad = [a for a in got if got[a] != want[a]]
+            else:
+                bad = []
+            note = (f'X32 listen block {"OK" if not bad else "NOT confirmed"} ({len(fixed)} writes): '
+                    f'card 25-32 = User Out 1-8; UO3 ambient '
+                    + (f'{SRC_NAMES.get(ag, ag)} {ai}' if ag else 'off') + f' ({how})')
+            if bad:
+                note += ' -- console did not take ' + ', '.join(a.rsplit('/', 2)[-2] + '/' + a.rsplit('/', 1)[1] for a in bad)
+            if fixed or note != self.patch_note:
+                print(f'[mixer] {note}' + (f' [wrote {", ".join(fixed)}]' if fixed else ''), flush=True)
+            if note != self.patch_note:
+                self.patch_note = note
+                self.hub.publish({'t': 'patch', 'note': note})
 
     # ── snapshot ──
     # ── WING-LIVE SD recorder ──
@@ -877,7 +1046,7 @@ class Mixer:
     def save_listen_bitrate(self, rate):
         """The Listen card's low-latency (Opus) bitrate survives restarts (v3.5)."""
         with self._ovr_lock:
-            self._state_raw = {**self._state_raw, 'listen': {'opus_bitrate': rate}}
+            self._state_raw = {**self._state_raw, 'listen': {**(self._state_raw.get('listen') or {}), 'opus_bitrate': rate}}
             self._write_state()
 
     def _save_cam(self, d):
@@ -932,6 +1101,7 @@ class Mixer:
             'state':  self.wing.snapshot(),
             'feeds':  self.feeds(),
             'feed':   self.feed_id,
+            'ambient_ch': self.ambient_channel(),
             'listen': self.listener.status(),
             'cam':    self.cam.status(),
             'patch':  self.patch_note,
@@ -1538,7 +1708,21 @@ def api_listen_set():
         if not _mixer.listener.set_opus_bitrate(rate):
             return jsonify(ok=False, err='unknown bitrate'), 400
         _mixer.save_listen_bitrate(rate)
-    return jsonify(ok=True, listen=_mixer.listener.status())
+    if 'sub_on' in d or 'sub_db' in d:                 # v3.9 sub blend (shared by every listener)
+        try:
+            db = float(d['sub_db']) if 'sub_db' in d else None
+        except (TypeError, ValueError):
+            return jsonify(ok=False, err='bad sub_db'), 400
+        _mixer.set_sub_blend(on=bool(d['sub_on']) if 'sub_on' in d else None, db=db)
+    if 'ambient_ch' in d:                             # v3.9 ambient source = this channel's input
+        try:
+            ok = _mixer.set_ambient_channel(int(d['ambient_ch']))
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            return jsonify(ok=False, err='bad channel'), 400
+        _mixer.hub.publish({'t': 'amb', 'ch': _mixer.ambient_channel()})
+    return jsonify(ok=True, listen=_mixer.listener.status(), ambient_ch=_mixer.ambient_channel())
 
 
 @bp.route('/api/cam/whep', methods=['POST'])

@@ -25,6 +25,11 @@ Cam feed (v3.4): the video feed's audio is a second pair sliced out of this same
 hw:WING allows one opener). picker.py does that when cam_ctl names its control file; cam.py owns that
 file and tells this class, through `keepalive`, that capture must keep running while video is active.
 Nothing on the listen path changes.
+
+Console-generic capture + sub blend (v3.9): the capture device and its channel count come from the
+console (WING USB hw:WING 48 ch; X32 X-LIVE USB hw:XLIVE 32 ch -- both S24_3LE 48 kHz). set_capture()
+swaps them (a running pipeline is respawned; MP3 listeners carry on). set_route() writes the pair plus
+an optional sub pair and linear gain; picker.py blends them (see its docstring).
 """
 import collections
 import os
@@ -107,13 +112,16 @@ _BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
 _RATES = [44100, 48000, 32000]
 
 
+def capture_cmd_for(device, channels):
+    return ['arecord', '-D', device, '-c', str(int(channels)),
+            '-f', 'S24_3LE', '-r', '48000', '-t', 'raw', '--buffer-time=500000']
+
+
 class Listener:
     def __init__(self, capture_cmd=None, bitrate='128k', on_status=None, cushion_s=0.5, max_queue_s=1.0,
-                 rtc_url='', opus_bitrate='96k', rtc_probe=None, cam_ctl=''):
-        self.capture_cmd = capture_cmd or [
-            'arecord', '-D', 'hw:WING', '-c', str(CHANNELS),
-            '-f', 'S24_3LE', '-r', '48000', '-t', 'raw', '--buffer-time=500000',
-        ]
+                 rtc_url='', opus_bitrate='96k', rtc_probe=None, cam_ctl='', channels=CHANNELS):
+        self.channels = int(channels)
+        self.capture_cmd = capture_cmd or capture_cmd_for('hw:WING', self.channels)
         self.bitrate = bitrate
         self.bps = _bytes_per_sec(bitrate)
         self.cushion_bytes = int(self.bps * max(0.0, float(cushion_s)))
@@ -131,6 +139,9 @@ class Listener:
         self._restarts = 0
         self.on_status = on_status or (lambda st: None)
         self.pair = (0, 1)
+        self.blend = None                     # (sub_l, sub_r, gain_linear) or None   (v3.9)
+        self.blend_info = {'on': False, 'db': 0.0}
+        self.numpy_ok = True                  # cleared when picker says it can't blend
         shm = '/dev/shm' if os.path.isdir('/dev/shm') else tempfile.gettempdir()
         self.ctl = os.path.join(shm, f'wing_pair_{os.getpid()}')
         self._write_ctl()
@@ -164,13 +175,42 @@ class Listener:
     # ── feed selection ──
     def _write_ctl(self):
         tmp = self.ctl + '.tmp'
+        line = f'{self.pair[0]} {self.pair[1]}'
+        if self.blend:
+            line += f' {self.blend[0]} {self.blend[1]} {self.blend[2]:.6f}'
         with open(tmp, 'w') as f:
-            f.write(f'{self.pair[0]} {self.pair[1]}\n')
+            f.write(line + '\n')
         os.replace(tmp, self.ctl)
 
+    def _clamp(self, v):
+        return max(0, min(self.channels - 1, int(v)))
+
     def set_pair(self, left, right):
-        self.pair = (max(0, min(CHANNELS - 1, int(left))), max(0, min(CHANNELS - 1, int(right))))
+        self.set_route(left, right, None)
+
+    def set_route(self, left, right, blend=None, info=None):
+        """Pair plus optional sub blend (sub_l, sub_r, gain_linear). info -> status ('on', 'db')."""
+        self.pair = (self._clamp(left), self._clamp(right))
+        self.blend = (self._clamp(blend[0]), self._clamp(blend[1]), float(blend[2])) \
+            if blend and float(blend[2]) > 0 else None
+        if info is not None:
+            self.blend_info = dict(info)
         self._write_ctl()
+        self._status()
+
+    def set_capture(self, cmd, channels):
+        """Switch capture device / width (console swap). Respawns a running pipeline."""
+        cmd, channels = list(cmd), int(channels)
+        if cmd == self.capture_cmd and channels == self.channels:
+            return
+        self.capture_cmd, self.channels = cmd, channels
+        self.pair = (self._clamp(self.pair[0]), self._clamp(self.pair[1]))
+        self.blend = None
+        self._write_ctl()
+        with self.lock:
+            running = self.running
+        if running:
+            self._restart_encoder('capture device ' + ' '.join(cmd[1:3]))
 
     # ── listener management ──
     def add_client(self, cid=''):
@@ -239,6 +279,8 @@ class Listener:
             'rtc':       self.rtc_readers,
             'error':     self.error,
             'pair':      list(self.pair),
+            'blend':     {**self.blend_info, 'active': bool(self.blend), 'numpy': self.numpy_ok},
+            'device':    self.capture_cmd[2] if len(self.capture_cmd) > 2 else '',
             'peak':      [round(p, 1) for p in self.peak],
             'overruns':  self.overruns,
             'opus_bitrate': self.opus_bitrate,
@@ -277,6 +319,7 @@ class Listener:
         try:
             env = dict(os.environ)
             env.pop('PICKER_CAM_CTL', None)
+            env['PICKER_CHANNELS'] = str(self.channels)
             if self.cam_ctl:
                 env['PICKER_CAM_CTL'] = self.cam_ctl
             pick = subprocess.Popen([sys.executable, os.path.join(HERE, 'picker.py'), self.ctl]
@@ -325,6 +368,9 @@ class Listener:
                     pass
             elif line.startswith('E '):
                 self.error = line[2:][:200]
+            elif line.startswith('W ') and 'numpy' in line:
+                self.numpy_ok = False
+                print('[mixer] listen: ' + line[2:], flush=True)
         if gen == self._gen:
             self.error = self.error or 'capture stopped'
             self._teardown(); self._status()

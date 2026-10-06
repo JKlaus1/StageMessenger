@@ -50,8 +50,29 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   check('16 bus strips', d.querySelectorAll('#bus-strips .strip').length === 16);
   check('6 mute group buttons', d.querySelectorAll('.mgbtn').length === 6);
   check('MG 1 lit', d.querySelector('.mgbtn[data-g="1"]').classList.contains('on'));
-  check('listen card hidden', d.getElementById('listen-card').classList.contains('none'));
-  check('USB re-patch footer hidden', d.getElementById('patch-foot').classList.contains('none'));
+  // v3.9: X32 listen (X-LIVE card 25-32 = User Out 1-8)
+  check('listen card shown on x32 (v3.9)', !d.getElementById('listen-card').classList.contains('none'));
+  check('re-patch footer shown on x32 (listen block)', !d.getElementById('patch-foot').classList.contains('none'));
+  check('x32 feeds: main, sub, monitor, ambient', [...d.querySelectorAll('#feed-sel option')].map(o => o.value).join() === 'main1,main2,mon1,ambient',
+        [...d.querySelectorAll('#feed-sel option')].map(o => o.value));
+  check('sub blend row shown on Main LR', !d.getElementById('blend-row').hidden);
+  check('ambient row hidden on Main LR', d.getElementById('amb-row').hidden);
+  P.posts.length = 0;
+  d.getElementById('blend-btn').click(); await tick();
+  check('+ Subs posts sub_on', P.posts.some(p => p.url === '/mixer/api/listen/set' && p.body && p.body.sub_on === true), P.posts);
+  check('+ Subs lights at once', d.getElementById('blend-btn').classList.contains('on'));
+  P.push({ t: 'listen', s: Object.assign({}, snap.listen, { blend: { on: true, db: -4.5, active: true, numpy: true } }) }); await tick();
+  check('blend level from status', d.getElementById('blend-db').value === '-4.5' && d.getElementById('blend-val').textContent === '-4.5 dB',
+        [d.getElementById('blend-db').value, d.getElementById('blend-val').textContent]);
+  const bdb = d.getElementById('blend-db'); bdb.value = '6'; bdb.dispatchEvent(new P.w.Event('change')); await tick();
+  check('slider posts sub_db', P.posts.some(p => p.body && p.body.sub_db === 6));
+  const fs2 = d.getElementById('feed-sel'); fs2.value = 'ambient'; fs2.dispatchEvent(new P.w.Event('change')); await tick();
+  check('ambient feed: mic picker shown, blend hidden', !d.getElementById('amb-row').hidden && d.getElementById('blend-row').hidden);
+  check('mic picker lists 32 channels with names', d.querySelectorAll('#amb-sel option').length === 32
+        && d.querySelector('#amb-sel option[value="1"]').textContent === 'Ch 1 \u2013 Kick', d.querySelector('#amb-sel option[value="1"]').textContent);
+  const as = d.getElementById('amb-sel'); as.value = '14'; as.dispatchEvent(new P.w.Event('change')); await tick();
+  check('mic picker posts ambient_ch', P.posts.some(p => p.body && p.body.ambient_ch === 14));
+  fs2.value = 'main1'; fs2.dispatchEvent(new P.w.Event('change')); await tick();
   check('status shows model', d.getElementById('status-text').textContent === 'M32C', d.getElementById('status-text').textContent);
   const r1 = rowOf(d, 'ch/1');
   check('ch1 name', r1.querySelector('.nm b').textContent === 'Kick');

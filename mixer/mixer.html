@@ -92,6 +92,11 @@
     .vol-row input[type=range] { flex: 1 1 auto; min-width: 0; }
     .vol-row .vv { flex: none; min-width: 3rem; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
     .vol-row .vv.boost { color: var(--amber); }
+    /* v3.9: sub blend (shared) + ambient source rows */
+    #blend-row[hidden], #amb-row[hidden] { display: none; }
+    .blend-row .toggle { flex: none; padding: .3rem .6rem; font-size: .62rem; }
+    .blend-row.off input[type=range], .blend-row.off .vv { opacity: .45; }
+    .amb-row select { flex: 1 1 auto; min-width: 0; padding: .25rem .4rem; font-size: .68rem; border-radius: 8px; }
     #cam-video { display: none; width: 100%; aspect-ratio: var(--ar, 16 / 9); max-height: 75vh; margin-top: .6rem; border-radius: 10px; background: #000; object-fit: contain; }
     #cam-video.on { display: block; }
     /* v3.8: controls on the picture (card, fullscreen, pop-out window); they fade after a few seconds */
@@ -555,6 +560,8 @@
     <div class="pk"><div><span id="pk-l"></span></div><div><span id="pk-r"></span></div></div>
     <div id="listen-note"></div>
     <div class="listen-foot"><div id="lag-note"></div><select id="listen-ab" title="Low-latency audio bitrate (applies to everyone listening)"></select><button class="toggle" id="mode-btn" title="Low-latency WebRTC audio, falling back to MP3">Low latency</button></div>
+    <div class="vol-row blend-row off" id="blend-row" hidden title="Blend the sub feed into Main LR (applies to everyone listening)"><button class="toggle" id="blend-btn">+ Subs</button><input type="range" id="blend-db" min="-30" max="12" step="0.5" value="0" title="Sub level relative to the console's sub feed"><span class="vv" id="blend-val">0.0 dB</span></div>
+    <div class="vol-row amb-row" id="amb-row" hidden title="Which channel's input feeds the ambient listen (applies to everyone)"><span>Mic</span><select id="amb-sel"></select></div>
     <div class="vol-row"><span>Volume</span><input type="range" id="listen-vol" min="0" max="400" step="5" value="100" title="Volume on this device (over 100% boosts it)"><span class="vv" id="listen-vol-val">100%</span></div>
     <audio id="player" preload="none"></audio>
   </section>
@@ -813,7 +820,7 @@
   let S = {};                 // addr -> value (mirror of the WING cache)
   let mix = 'lr';             // 'lr' or bus number (1..16)
   let hideInf = false;
-  let feeds = [], feedId = 'main1';
+  let feeds = [], feedId = 'main1', blendSt = null, ambCh = null;
   let wantPlay = false;
   let soloCount = 0, feedBeforeSolo = null;
   let M = null;               // latest meters {c:[[in,out]..], a:[..], b:[out..], m:[out..]}
@@ -2031,6 +2038,7 @@
   function selectFeed(id) {
     feedId = id; $('feed-sel').value = id;
     postJSON('/mixer/api/feed', { id });
+    paintListenRows();
   }
   function soloChanged() {          // listening follows solo: Monitor 1 carries the solo bus
     const n = countSolos();
@@ -2057,8 +2065,63 @@
     const sel = $('feed-sel'); sel.innerHTML = '';
     feeds.forEach(f => { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label; sel.appendChild(o); });
     sel.value = feedId;
+    paintListenRows();
   }
   $('feed-sel').addEventListener('change', e => { feedBeforeSolo = null; selectFeed(e.target.value); });
+
+  // ── v3.9: sub blend (Main LR + the sub feed, shared like the feed) and the ambient mic source ──
+  const fmtSubDb = v => (v > 0 ? '+' : '') + Number(v).toFixed(1) + ' dB';
+  let blendDrag = false, blendTimer = null;
+  function paintListenRows() {
+    const showBlend = feedId === 'main1' && feeds.some(f => f.id === 'main2');
+    $('blend-row').hidden = !showBlend;
+    if (blendSt) {
+      $('blend-btn').classList.toggle('on', !!blendSt.on);
+      $('blend-row').classList.toggle('off', !blendSt.on);
+      if (document.activeElement !== $('blend-db') && !blendDrag) $('blend-db').value = blendSt.db;
+      $('blend-val').textContent = blendSt.numpy === false && blendSt.on ? 'unavailable' : fmtSubDb($('blend-db').value);
+    }
+    const showAmb = feedId === 'ambient';
+    $('amb-row').hidden = !showAmb;
+    if (showAmb) paintAmb();
+  }
+  function paintAmb() {
+    const sel = $('amb-sel');
+    if (document.activeElement === sel) return;
+    const opts = [];
+    for (let n = 1; n <= CAP.nch; n++) opts.push([n, `Ch ${n}` + ((nm => nm ? ' \u2013 ' + nm : '')(nameOf(`/ch/${n}/name`, '')))]);
+    const sig = opts.map(o => o[1]).join('|');
+    if (sel.dataset.sig !== sig) {
+      sel.innerHTML = '';
+      opts.forEach(([n, t]) => { const o = document.createElement('option'); o.value = n; o.textContent = t; sel.appendChild(o); });
+      sel.dataset.sig = sig;
+    }
+    if (ambCh) sel.value = ambCh;
+  }
+  $('blend-btn').addEventListener('click', () => {
+    const on = !(blendSt && blendSt.on);
+    blendSt = Object.assign({}, blendSt || {}, { on }); paintListenRows();
+    postJSON('/mixer/api/listen/set', { sub_on: on });
+  });
+  $('blend-db').addEventListener('input', e => {
+    blendDrag = true;
+    $('blend-val').textContent = fmtSubDb(e.target.value);
+    clearTimeout(blendTimer);
+    blendTimer = setTimeout(() => postJSON('/mixer/api/listen/set', { sub_db: parseFloat(e.target.value) }), 120);
+  });
+  $('blend-db').addEventListener('change', e => {
+    blendDrag = false; clearTimeout(blendTimer);
+    postJSON('/mixer/api/listen/set', { sub_db: parseFloat(e.target.value) });
+  });
+  $('blend-db').addEventListener('dblclick', () => {           // back to unity
+    $('blend-db').value = 0; $('blend-val').textContent = fmtSubDb(0);
+    postJSON('/mixer/api/listen/set', { sub_db: 0 });
+  });
+  $('amb-sel').addEventListener('change', e => {
+    ambCh = parseInt(e.target.value, 10);
+    postJSON('/mixer/api/listen/set', { ambient_ch: ambCh });
+    e.target.blur();
+  });
   // ── Low-latency listen (v2.0): WebRTC first (Opus via MediaMTX, ~0.3-0.8 s), MP3 as fallback ──
   // The page asks the Pi for ICE servers (Cloudflare TURN when configured), sends a complete offer
   // through /mixer/api/rtc/whep (no trickle), and plays the track in the same <audio> element.
@@ -2784,6 +2847,7 @@
   let listenAbSig = '';
   function paintListen(st) {
     if (!st) return;
+    if (st.blend) { blendSt = st.blend; paintListenRows(); }
     if (st.opus_rates) {                          // v3.5: low-latency bitrate (one encode, shared by every listener)
       const sig = st.opus_rates.join();
       if (sig !== listenAbSig) {
@@ -2798,6 +2862,7 @@
     $('pk-r').style.width = st.running ? pct(st.peak[1]) : '0%';
     $('listen-note').textContent = st.error ? st.error
       : st.running ? `Streaming · ${st.listeners + (st.rtc || 0)} listener${st.listeners + (st.rtc || 0) === 1 ? '' : 's'} · USB ${st.pair[0] + 1}/${st.pair[1] + 1}`
+        + (st.blend && st.blend.active ? ` + subs ${fmtSubDb(st.blend.db)}` : '')
         + (feedBeforeSolo ? ' · following solo' : '')
         + (st.overruns ? ` · ${st.overruns} capture overrun${st.overruns === 1 ? '' : 's'}` : '')
       : (wantPlay ? 'Starting…' : '');
@@ -3303,6 +3368,7 @@
     } else SS.set('mixer.capsReload', '');
     consoleFound = m.found !== false;
     S = m.state || {}; feeds = m.feeds || []; feedId = m.feed || feedId; srcGroups = m.srcgroups || srcGroups;
+    if ('ambient_ch' in m) ambCh = m.ambient_ch;
     paintSheet();
     setStatus(m.conn, m.loaded); paintFeeds(); paintAll(); paintListen(m.listen);
     if ('cam' in m) paintCam(m.cam);
@@ -3350,7 +3416,8 @@
       else if (m.t === 'listen') paintListen(m.s);
       else if (m.t === 'cam') paintCam(m.s);
       else if (m.t === 'feeds') { feeds = m.feeds; paintFeeds(); }
-      else if (m.t === 'feed') { feedId = m.id; $('feed-sel').value = feedId; }
+      else if (m.t === 'feed') { feedId = m.id; $('feed-sel').value = feedId; paintListenRows(); }
+      else if (m.t === 'amb') { ambCh = m.ch; paintListenRows(); }
       else if (m.t === 'patch') $('patch-note').textContent = m.note;
       else if (m.t === 'ovr') { OVR = new Set(m.v || []); eachRow(paintRow); }
       else if (m.t === 'order') { ORDER = m.v || []; applyOrder(); }
