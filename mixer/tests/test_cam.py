@@ -774,16 +774,22 @@ def test_cam_sources():
             c.feed = 'mic'
             check('mic chosen + camera has one -> mic sound', c._audio_plan(c._active) == 'mic')
             c.delay_ms = 150
+            c._fifo = '/dev/shm/x.pcm'
             cmd = c._cmd('mic', c._active)
-            check('mic: phone audio.wav as 2nd input, delayed, stereo', f'http://127.0.0.1:{phone.port}/audio.wav' in cmd and cmd[cmd.index('-map', cmd.index('-map') + 1) + 1] == '1:a:0'
-                  and cmd[cmd.index('-af') + 1].startswith('adelay=150:all=1,') and cmd[cmd.index('-ac', cmd.index('-c:a')) + 1] == '2', cmd)
-            usb = {'id': 'usb:x', 'kind': 'usb', 'dev': '/dev/video0', 'mic': 'hw:CARD=Webcam', 'name': 'x'}
-            cmd = c._cmd('mic', usb)
-            check('USB webcam mic: ALSA card input, mono 48 kHz (alsa demuxer options)', 'alsa' in cmd and 'hw:CARD=Webcam' in cmd
-                  and cmd[cmd.index('-channels') + 1] == '1' and cmd[cmd.index('-sample_rate') + 1] == '48000' and '-ac' not in cmd[:cmd.index('hw:CARD=Webcam')][-8:], cmd)
+            check('mic (v3.8.2): encoder reads a steady fifo (not the phone directly), no filter delay, stereo',
+                  f'http://127.0.0.1:{phone.port}/audio.wav' not in cmd and '/dev/shm/x.pcm' in cmd and cmd[cmd.index('-map', cmd.index('-map') + 1) + 1] == '1:a:0'
+                  and 'adelay' not in cmd[cmd.index('-af') + 1] and cmd[cmd.index('-ac', cmd.index('-c:a')) + 1] == '2', cmd)
+            rc = c._mic_reader_cmd(c._active['mic'])
+            check('mic decoder: phone audio.wav -> raw 48 kHz stereo on stdout', f'http://127.0.0.1:{phone.port}/audio.wav' in rc and rc[-1] == 'pipe:1'
+                  and rc[rc.index('-f', rc.index('-i')) + 1] == 's24le', rc)
+            rc = c._mic_reader_cmd('hw:CARD=Webcam')
+            check('USB webcam mic decoder: ALSA card, mono 48 kHz (alsa demuxer options)', 'alsa' in rc and 'hw:CARD=Webcam' in rc
+                  and rc[rc.index('-channels') + 1] == '1' and rc[rc.index('-sample_rate') + 1] == '48000', rc)
+            c._fifo = ''
             rt = {'id': 'net0', 'kind': 'net', 'url': 'rtsp://10.1.1.1/x', 'mic': 'same', 'name': 'x'}
             cmd = c._cmd('mic', rt)
-            check('rtsp camera mic: optional audio from the same input', '0:a:0?' in cmd and cmd.count('-i') == 1, cmd)
+            check('rtsp camera mic: optional audio from the same input, delay as a filter', '0:a:0?' in cmd and cmd.count('-i') == 1
+                  and cmd[cmd.index('-af') + 1].startswith('adelay=150:all=1,'), cmd)
             check('mic chosen but the built-in camera has none -> no console here -> picture only', c._audio_plan(c.sources()[0]) == '')
             c._stop('test')
             c.delay_ms = 0
@@ -810,18 +816,71 @@ def test_cam_mic_end_to_end():
             out = os.path.join(tmp, 'mic.mkv')
             lst, c = net_cam(tmp, f'http://127.0.0.1:{phone.port}/video', out, feed='mic', idle_s=30)
             c.hold(60)
-            time.sleep(4.5)
+            time.sleep(5.5)
             check('running with the camera mic', c.running and c.audio_kind == 'mic' and phone.audio_hits == 1, (c.status(), phone.audio_hits))
             c._stop('test')
             lst._teardown()
             raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', out, '-map', '0:a:0', '-f', 's16le', '-ac', '1', '-ar', '48000', '-'],
                                  capture_output=True).stdout
             smp = [int.from_bytes(raw[i:i + 2], 'little', signed=True) for i in range(0, len(raw) - 1, 2)]
-            seg = smp[-48000:]
-            z = sum(1 for i in range(1, len(seg)) if (seg[i - 1] < 0) != (seg[i] < 0)) / 2 if seg else 0
-            check('the phone\'s 440 Hz tone is in the encoded sound', abs(z - 440) < 8 and len(smp) > 2 * 48000, (z, len(smp)))
+            fr = []
+            for k in range(max(0, len(smp) - 48000), len(smp) - 4800 + 1, 4800):   # last second, 100 ms windows
+                seg = smp[k:k + 4800]
+                fr.append(sum(1 for i in range(1, 4800) if (seg[i - 1] < 0) != (seg[i] < 0)) / 2 / 0.1)
+            good = sum(1 for f in fr if abs(f - 440) <= 10)
+            check('the phone\'s 440 Hz tone is in the encoded sound (steady in the last second)', len(smp) > 2 * 48000 and good >= 7, (fr, len(smp)))
     finally:
         phone.stop()
+
+
+def test_mic_relay():
+    print('cam (v3.8.2): MicRelay turns a bursty mic into a steady 10 ms stream, live delay, gaps -> silence')
+    from mixer.cam import MicRelay
+    # a "phone" that delivers 1 kHz tone in 100 ms bursts (like IP Webcam's audio.wav), 4 s
+    BURSTY = r"""
+import sys, time, math
+w = sys.stdout.buffer
+t0 = time.monotonic()
+for k in range(40):
+    b = bytearray()
+    for f in range(4800):
+        n = k * 4800 + f
+        v = int(4000000 * math.sin(2 * math.pi * 1000 * n / 48000)).to_bytes(3, 'little', signed=True)
+        b += v + v
+    w.write(b); w.flush()
+    d = t0 + (k + 1) * 0.1 - time.monotonic()
+    if d > 0:
+        time.sleep(d)
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        fifo = os.path.join(tmp, 'm.pcm')
+        os.mkfifo(fifo)
+        holder = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+        rd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        delay = {'ms': 0}
+        r = MicRelay([sys.executable, '-c', BURSTY], fifo, lambda: delay['ms'])
+        time.sleep(0.3)
+        r.go()
+        arrivals, data = [], bytearray()
+        t_end = time.time() + 3.0
+        while time.time() < t_end:
+            select.select([rd], [], [], 0.05)
+            try:
+                b = os.read(rd, 65536)
+            except BlockingIOError:
+                continue
+            if b:
+                arrivals.append((time.time(), len(b))); data += b
+        r.stop(); os.close(rd); os.close(holder)
+        # steadiness: bytes delivered per 100 ms window stay near 28800 (10 x 10 ms chunks)
+        t0 = arrivals[0][0] if arrivals else 0
+        win = {}
+        for t, n in arrivals:
+            win[int((t - t0) / 0.1)] = win.get(int((t - t0) / 0.1), 0) + n
+        vals = [win.get(i, 0) for i in range(2, 28)]
+        check('relay delivers ~10 ms every 10 ms (no 100 ms bursts)', vals and min(vals) >= 0.6 * 28800 and max(vals) <= 1.4 * 28800, vals)
+        check('3 s of audio came through', abs(len(data) - 3 * 288000) < 0.15 * 3 * 288000, len(data))
+        check('mic decoder ran (got data), not dead', r.got > 0 and not r.dead)
 
 
 def test_wait_fifo_open():
@@ -902,6 +961,7 @@ def main():
     test_cam_helpers()
     test_cam_sources()
     test_cam_mic_end_to_end()
+    test_mic_relay()
     test_wait_fifo_open()
     test_cam_pitch_steady()
     test_cam_tiers()

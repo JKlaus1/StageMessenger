@@ -52,6 +52,8 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+from .picker import DelayLine
+
 MAX_DELAY_MS = 3000
 
 # Picture tiers (v3.5). The camera always delivers 1280x720 MJPEG (cap = its frame rate); lower tiers
@@ -216,6 +218,114 @@ def local_subnets():
     return out[:3]
 
 
+class MicRelay:
+    """Camera mic -> the encoder's fifo as a STEADY 10 ms stream (v3.8.2).
+
+    Fed to the encoder directly, a phone's /audio.wav arrives in ~85 ms bursts; stamped with the wall
+    clock on arrival, those stamps trail the picture's, and ffmpeg's input scheduler then holds the video
+    input back to keep the two in step -- frames pile up, get stamped together and the fps filter throws
+    most away: the picture drops to a few fps whenever the camera mic is on. So a small ffmpeg decodes the
+    mic to raw PCM, this relay buffers ~120 ms and hands the encoder exactly 10 ms every 10 ms (silence if
+    the mic is late, one jump back to the cushion if it runs >200 ms ahead), like the console feed from the picker. The A/V delay
+    is applied here too (sample-accurate, live), so changing it no longer restarts anything."""
+    CHUNK = 480 * 6                                      # 10 ms of s24le stereo @ 48 kHz
+
+    def __init__(self, cmd, fifo, delay_ms, prefill_ms=120, slack_ms=200):
+        self.fifo, self.delay_ms = fifo, delay_ms
+        self.prefill = int(prefill_ms / 10) * self.CHUNK
+        self.limit = self.prefill + int(slack_ms / 10) * self.CHUNK
+        self.buf = bytearray()
+        self.lock = threading.Lock()
+        self.stop_ev, self.go_ev = threading.Event(), threading.Event()
+        self.dead, self.got, self.tail = False, 0, []
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, bufsize=0)
+        for fn, name in ((self._read, 'mic-read'), (self._err, 'mic-err'), (self._write, 'mic-write')):
+            threading.Thread(target=fn, daemon=True, name=name).start()
+
+    def go(self):
+        """The encoder has the fifo open: start handing it audio."""
+        self.go_ev.set()
+
+    def stop(self):
+        self.stop_ev.set(); self.go_ev.set()
+        try:
+            self.proc.kill()
+        except Exception:
+            pass
+
+    def _err(self):
+        for raw in iter(self.proc.stderr.readline, b''):
+            t = redact(raw.decode(errors='replace').strip())
+            if t:
+                self.tail.append(t); del self.tail[:-3]
+
+    def _read(self):
+        fd = self.proc.stdout.fileno()
+        while not self.stop_ev.is_set():
+            try:
+                b = os.read(fd, 16384)
+            except OSError:
+                b = b''
+            if not b:
+                break
+            with self.lock:
+                self.buf += b
+                self.got += len(b)
+                over = len(self.buf) - 2 * 48000 * 6             # never hold more than 2 s
+                if over > 0:
+                    del self.buf[:over - over % 6]
+        if not self.stop_ev.is_set():
+            self.dead = True
+
+    def _write(self):
+        self.go_ev.wait()
+        if self.stop_ev.is_set():
+            return
+        try:
+            fd = os.open(self.fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError:
+            self.dead = True
+            return
+        dl = DelayLine()
+        with self.lock:                                    # whatever piled up before the encoder was ready is stale
+            extra = len(self.buf) - self.prefill
+            if extra > 0:
+                del self.buf[:extra - extra % 6]
+        primed, t0 = False, time.monotonic()
+        t = t0
+        try:
+            while not self.stop_ev.is_set():
+                t += 0.01
+                d = t - time.monotonic()
+                if d > 0:
+                    time.sleep(d)
+                elif d < -0.2:                             # fell far behind (Pi busy): don't rush to catch up
+                    t = time.monotonic()
+                chunk = None
+                with self.lock:
+                    n = len(self.buf)
+                    primed = primed or n >= self.prefill or time.monotonic() - t0 > 1.0
+                    if primed and n >= self.CHUNK:
+                        chunk = bytes(self.buf[:self.CHUNK]); del self.buf[:self.CHUNK]
+                        extra = len(self.buf) - self.limit
+                        if extra > 0:                      # running ahead (a burst, or the mic's clock):
+                            cut = len(self.buf) - self.prefill   # one jump back to the normal cushion
+                            del self.buf[:cut - cut % 6]
+                out = dl.process(chunk or bytes(self.CHUNK), int(self.delay_ms()) * 48 * 6)
+                try:
+                    os.write(fd, out)
+                except BlockingIOError:
+                    pass                                   # encoder behind: drop rather than block
+                except OSError:
+                    break
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def find_device(configured=''):
     """The webcam's capture node: the configured path, else the first USB camera by stable id
     (/dev/video numbers shift around the Pi 5's other video nodes), else ''."""
@@ -268,6 +378,7 @@ class Cam:
         self.audio_kind = ''                      # '' | 'console' | 'mic'
         self.epoch = 0                            # +1 per encoder start: pages reconnect when it changes
         self._delay_timer = None
+        self._relay = None                        # MicRelay while the camera mic is on air
         self._probing = False
         self._output = output                     # tests: replaces the RTSP output args
         q = self.cfg.get('quality', DEFAULT_QUALITY)
@@ -342,7 +453,7 @@ class Cam:
         self.delay_ms = self._clamp_delay(ms)
         self._write_ctl()                                         # console sound: the picker applies it live
         self._saved(); self._publish()
-        if self.running and self.audio_kind == 'mic':             # camera mic: a short restart, once dragging stops
+        if self.running and self.audio_kind == 'mic' and not self._relayed('mic', self._active):   # rtsp sound: short restart
             if self._delay_timer:
                 self._delay_timer.cancel()
             self._delay_timer = threading.Timer(0.8, lambda: self.running and self.audio_kind == 'mic'
@@ -702,16 +813,20 @@ class Cam:
         return a + ['-fflags', 'nobuffer', '-flags', 'low_delay', '-thread_queue_size', '512',
                     '-use_wallclock_as_timestamps', '1', '-i', url]
 
-    def _mic_input(self, mic):
-        """Second ffmpeg input for the camera's own mic ([] when it rides in the video input)."""
-        if mic == 'same':
-            return []
+    def _mic_reader_cmd(self, mic):
+        """The small decoder feeding MicRelay: the camera's mic -> raw s24le stereo 48 kHz on stdout."""
+        c = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error']
         if mic.startswith('hw:'):                                  # USB webcam mic: its own ALSA card
-            return ['-thread_queue_size', '1024', '-f', 'alsa', '-channels', '1', '-sample_rate', '48000',
-                    '-use_wallclock_as_timestamps', '1', '-i', mic]
-        return ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '2',
-                '-rw_timeout', str(NET_TIMEOUT_US), '-fflags', 'nobuffer', '-thread_queue_size', '1024',
-                '-use_wallclock_as_timestamps', '1', '-i', mic]      # IP Webcam /audio.wav
+            c += ['-f', 'alsa', '-channels', '1', '-sample_rate', '48000', '-i', mic]
+        else:                                                      # IP Webcam /audio.wav
+            c += ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '2',
+                  '-rw_timeout', str(NET_TIMEOUT_US), '-fflags', 'nobuffer', '-i', mic]
+        return c + ['-vn', '-f', 's24le', '-ar', '48000', '-ac', '2', 'pipe:1']
+
+    @staticmethod
+    def _relayed(audio, src):
+        """Sound that reaches the encoder through the fifo (console via picker, camera mic via MicRelay)."""
+        return audio == 'console' or (audio == 'mic' and bool(src) and src.get('mic', '') not in ('', 'same'))
 
     def _cmd(self, audio, src=None):
         if audio is True:
@@ -735,13 +850,11 @@ class Cam:
                   '-video_size', '1280x720', '-framerate', str(q.get('cap', fps)),
                   '-use_wallclock_as_timestamps', '1', '-i', src.get('dev', '')]
         amap = '1:a:0'
-        if audio == 'console':
+        if self._relayed(audio, src):                          # steady 10 ms stream from picker / MicRelay
             c += ['-thread_queue_size', '1024', '-f', 's24le', '-ar', '48000', '-ac', '2',
                   '-use_wallclock_as_timestamps', '1', '-i', self._fifo]
-        elif audio == 'mic':
-            extra = self._mic_input(src.get('mic', ''))
-            c += extra
-            amap = '1:a:0' if extra else '0:a:0?'
+        elif audio == 'mic':                                   # rtsp camera: its sound rides in the video input
+            amap = '0:a:0?'
         c += ['-copyts', '-start_at_zero']
         rot = self._eff_rot(src) if src.get('id') else '0'
         portrait = rot in ('90', '270')
@@ -764,9 +877,10 @@ class Cam:
             # wall-clock stamps jitter by tens of ms; stretching to follow them (async=1000, v3.4-3.6)
             # wobbled the pitch +-2% -- the "warbly cassette" sound. Clock drift beyond 0.3 s still gets
             # one small hard correction.
-            # Camera mic: its delay is a filter (the encoder restarts when it changes), mono -> both sides.
+            # rtsp camera's own sound: its delay is a filter (restart on change); everything else is
+            # delayed live upstream (picker / MicRelay).
             af = 'aresample=async=1:min_hard_comp=0.3'
-            if audio == 'mic' and self.delay_ms:
+            if audio == 'mic' and not self._relayed(audio, src) and self.delay_ms:
                 af = f'adelay={self.delay_ms}:all=1,' + af
             c += ['-map', amap, '-af', af,
                   '-c:a', 'libopus', '-b:a', self.audio_bitrate,
@@ -797,7 +911,7 @@ class Cam:
             self._tail = []
             self._started_at = time.time()
             try:
-                if audio == 'console':
+                if self._relayed(audio, src):
                     self._fifo = f'{self._fifo_base}_{gen}.pcm'      # fresh fifo per run: no stale audio
                     try:
                         os.remove(self._fifo)
@@ -805,6 +919,8 @@ class Cam:
                         pass
                     os.mkfifo(self._fifo, 0o600)
                     self._holder = os.open(self._fifo, os.O_RDWR | os.O_NONBLOCK)   # keeps a reader present
+                if audio == 'mic' and self._relayed(audio, src):
+                    self._relay = MicRelay(self._mic_reader_cmd(src['mic']), self._fifo, lambda: self.delay_ms)
                 self._proc = subprocess.Popen(self._cmd(audio, src), stdin=subprocess.DEVNULL,
                                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             except OSError as e:
@@ -828,7 +944,10 @@ class Cam:
                 self._tail.append(t); del self._tail[:-4]
 
     def _cleanup(self):
-        """Release the fifo, holder and ctl (no process handling). Caller holds the lock."""
+        """Release the fifo, holder, mic relay and ctl. Caller holds the lock."""
+        if self._relay:
+            self._relay.stop()
+            self._relay = None
         if self._holder >= 0:
             try:
                 os.close(self._holder)
@@ -893,10 +1012,13 @@ class Cam:
         # in the pipe (up to ~0.22 s) and would be stamped late when finally read -- a constant A/V
         # offset after every start (worst with a Wi-Fi camera, whose input opens slowly). So wait until
         # ffmpeg really holds the fifo (/proc/<pid>/fd), then switch the picker's cam output on.
-        if audio == 'console':
+        if self._relayed(audio, self._active):
             self._wait_fifo_open(proc, gen)
         else:
             time.sleep(0.4)
+        relay = self._relay
+        if relay and gen == self._gen:
+            relay.go()
         if gen == self._gen and proc.poll() is None:
             self._write_ctl()
             self._publish()
@@ -922,6 +1044,13 @@ class Cam:
                     if now - audio_bad > 1.0 and not retried:
                         retried = True
                         self.listener.ensure_capture()
+            if relay and relay.dead and gen == self._gen:      # the camera mic stopped / never opened
+                why = ' | '.join(relay.tail[-2:]) or 'camera mic stopped'
+                if now - self._started_at < 10 or not relay.got:
+                    self._mic_bad[(self._active or {}).get('id')] = now + 60
+                    self._audio_issue = ('camera mic unavailable: ' + why)[:120]
+                self._restart('camera mic: ' + why)
+                return
             if proc.poll() is not None:                       # ffmpeg exited by itself
                 if gen != self._gen:
                     return
