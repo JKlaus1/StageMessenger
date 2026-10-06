@@ -140,6 +140,15 @@ def seed():
     for b in [f'/bus/{i:02d}' for i in range(1, 17)] + [f'/mtx/{i:02d}' for i in range(1, 7)] + ['/main/st', '/main/m']:
         st.update({f'{b}/eq/{k}': v for k, v in eq6.items()})
         st.update({f'{b}/dyn/{k}': v for k, v in dyn.items()})
+    for i in range(1, 9):                         # v4.0.4: FX returns
+        b = f'/fxrtn/{i:02d}'
+        st.update({b + '/config/name': {1: 'Verb', 2: 'Delay'}.get(i, ''), b + '/config/color': 5 if i < 3 else 0,
+                   b + '/mix/fader': 0.75 if i < 3 else 0.0, b + '/mix/on': 1, b + '/mix/pan': 0.5, b + '/mix/st': 1,
+                   b + '/mix/mono': 0, b + '/mix/mlevel': 0.0, b + '/grp/mute': 0, b + '/grp/dca': 0})
+        for s2 in range(1, 17):
+            st[f'{b}/mix/{s2:02d}/level'] = 0.5 if (i, s2) == (1, 3) else 0.0
+            st[f'{b}/mix/{s2:02d}/on'] = 1
+        st.update({f'{b}/eq/{k}': v for k, v in eq.items()})
     for i in range(1, 9):
         b = f'/auxin/{i:02d}'
         st.update({b + '/preamp/trim': .555556, b + '/preamp/invert': 0})

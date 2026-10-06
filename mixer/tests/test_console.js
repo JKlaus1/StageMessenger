@@ -125,6 +125,13 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   strip(d, 'dca/2').querySelector('.cs-mu').click(); await tick();
   check('DCA mute posts /dca/2/mute', sets(P, '/dca/2/mute').some(p => p.body.v === 1));
   d.getElementById('cv-lmm').click(); await tick();
+  d.getElementById('cv-l2').click(); await tick();
+  check('layer 2 default: 8 aux, 8 FX returns, LR, M/C', keys(d).length === 18 && keys(d)[8] === 'fxr/1' && keys(d)[16] === 'main/1', keys(d));
+  check('FX return 1 name Verb, label FX 1', strip(d, 'fxr/1').querySelector('.cs-nm').textContent === 'Verb' && strip(d, 'fxr/1').querySelector('.cs-lb').textContent === 'FX 1');
+  P.posts.length = 0;
+  strip(d, 'fxr/2').querySelector('.cs-mu').click(); await tick();
+  check('FX return mute posts /fxr/2/mute', sets(P, '/fxr/2/mute').some(p => p.body.v === 1));
+  d.getElementById('cv-lmm').click(); await tick();
   check('Mtx/Main: 6 matrices then LR, M/C', keys(d).join() === 'mtx/1,mtx/2,mtx/3,mtx/4,mtx/5,mtx/6,main/1,main/2', keys(d));
   check('LR label on X32', strip(d, 'main/1').querySelector('.cs-lb').textContent === 'LR');
 
@@ -138,6 +145,10 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   check('ch1 shows its send level', strip(d, 'ch/1').querySelector('.cs-db').textContent === fmt(snap.state['/ch/1/send/1/lvl']),
         [strip(d, 'ch/1').querySelector('.cs-db').textContent, snap.state['/ch/1/send/1/lvl']]);
   check('MUTE becomes send ON', strip(d, 'ch/1').querySelector('.cs-mu').textContent === 'ON' && strip(d, 'ch/1').querySelector('.cs-mu').classList.contains('snd'));
+  d.getElementById('cv-l2').click(); await tick();
+  check('bus SOF: FX returns can send', !strip(d, 'fxr/1').classList.contains('na') && strip(d, 'fxr/1').querySelector('.cs-db').textContent === '−∞');
+  check('bus SOF: mains greyed', strip(d, 'main/1').classList.contains('na'));
+  d.getElementById('cv-l1').click(); await tick();
   check('muted ch21 flagged (red bar)', strip(d, 'ch/21').classList.contains('chm'));
   P.posts.length = 0;
   strip(d, 'ch/1').querySelector('.cs-mu').click(); await tick();
@@ -169,7 +180,7 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   // layer editor (hold = contextmenu here)
   d.getElementById('cv-l2').dispatchEvent(new w.Event('contextmenu', { bubbles: true, cancelable: true })); await tick();
   check('hold opens the editor', d.getElementById('cv-ed').classList.contains('open'));
-  check('editor lists layer 2 default (8 aux + 2 mains)', d.querySelectorAll('#cv-ed-cur .cv-it').length === 10, d.querySelectorAll('#cv-ed-cur .cv-it').length);
+  check('editor lists layer 2 default (8 aux + 8 FX + 2 mains)', d.querySelectorAll('#cv-ed-cur .cv-it').length === 18, d.querySelectorAll('#cv-ed-cur .cv-it').length);
   d.getElementById('cv-ed-clr').click();
   check('clear empties it', d.querySelectorAll('#cv-ed-cur .cv-it').length === 0);
   const pk = k => [...d.querySelectorAll('#cv-ed-grid .cv-pk')].find(b => b.querySelector('small').textContent.replace(' ✓', '') === k);

@@ -145,4 +145,6 @@ class X32Meters:
         for i in range(6):
             pre = round(_db(m2[16 + i] if m2 else m0[64 + i]))
             mtx.append((pre, round(self._post('mtx', i + 1, pre)), pre, 0, pre, 0))
-        return {'ch': ch, 'aux': aux, 'bus': bus, 'main': main, 'mtx': mtx}
+        fxr = [(round(_db(m0[40 + i])), round(self._post('fxr', i + 1, round(_db(m0[40 + i])))), 0, 0, 0, 0)
+               for i in range(8)]                                     # v4.0.4: FX returns (pre-fader like the rest)
+        return {'ch': ch, 'aux': aux, 'bus': bus, 'main': main, 'mtx': mtx, 'fxr': fxr}

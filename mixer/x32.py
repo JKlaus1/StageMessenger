@@ -63,11 +63,14 @@ NEG_INF = -144.0
 
 N_CH, N_AUX, N_BUS, N_MTX, N_MAIN, N_MGRP = 32, 8, 16, 6, 2, 6
 N_DCA = 8
+N_FXR = 8                                         # v4.0.4: FX returns /fxrtn/01-08
+GRP_KINDS = ('ch', 'aux', 'bus', 'fxr')           # strips with mute-group / DCA membership
+SEND_KINDS = ('ch', 'aux', 'fxr')                 # strips with bus sends mix/01-16
 BLOCKS = ('1-8', '9-16', '17-24', '25-32')
 # X32 colour -> WING palette index used by the page (1..18; 0 = none)
 COLOR_MAP = {0: 0, 1: 9, 2: 5, 3: 7, 4: 2, 5: 11, 6: 4, 7: 18}
-KINDS = {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'mtx': N_MTX, 'main': N_MAIN, 'dca': N_DCA}
-PAN_KINDS = ('ch', 'aux', 'bus')                 # v4.0: mix/pan 0..1 -> canonical -100..+100
+KINDS = {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'mtx': N_MTX, 'main': N_MAIN, 'dca': N_DCA, 'fxr': N_FXR}
+PAN_KINDS = ('ch', 'aux', 'bus', 'fxr')                 # v4.0: mix/pan 0..1 -> canonical -100..+100
 MTX_SRC = ('bus', 'main')                        # v4.0: who sends to a matrix (mix/01-06)
 HP_SLOPES = ('12', '18', '24')                   # v4.0: preamp/hpslope 0..2 -> canonical flt/lcs (dB/oct)
 GAIN_RANGE, LCF_RANGE = (-12.0, 60.0), (20.0, 400.0)
@@ -119,7 +122,7 @@ NODE_SPECS['eq6'] = [_p('on', 'eq/on', 'int', 0, 1)] + [x for b in range(1, 7) f
     _p(f'{b}f', f'eq/{b}/f', 'log', 20, 20000, 'Hz', 201),
     _p(f'{b}q', f'eq/{b}/q', 'qlog', 0.3, 10, '', 72))]
 NODE_ON = {'ch': ('eq', 'gate', 'dyn'), 'aux': ('eq',),
-           'bus': ('eq', 'dyn'), 'mtx': ('eq', 'dyn'), 'main': ('eq', 'dyn')}     # v4.0.3: output strips (6-band EQ)
+           'bus': ('eq', 'dyn'), 'mtx': ('eq', 'dyn'), 'main': ('eq', 'dyn'), 'fxr': ('eq',)}     # v4.0.3: output strips (6-band EQ)
 
 
 def node_specs(kind, blk):
@@ -218,7 +221,7 @@ def raw_base(kind, n):
         return '/main/st' if n == 1 else '/main/m'
     if kind == 'dca':
         return f'/dca/{n}'                        # DCAs are not zero-padded
-    pre = {'ch': '/ch', 'aux': '/auxin', 'bus': '/bus', 'mtx': '/mtx'}[kind]
+    pre = {'ch': '/ch', 'aux': '/auxin', 'bus': '/bus', 'mtx': '/mtx', 'fxr': '/fxrtn'}[kind]
     return f'{pre}/{n:02d}'
 
 
@@ -229,7 +232,7 @@ def mix_raw(kind, n, leaf):
 
 
 def solo_index(kind, n):
-    return {'ch': 0, 'aux': 32, 'bus': 48, 'mtx': 64, 'dca': 72}.get(kind, 70) + n
+    return {'ch': 0, 'aux': 32, 'fxr': 40, 'bus': 48, 'mtx': 64, 'dca': 72}.get(kind, 70) + n
 
 
 def fader_db(f):
@@ -359,7 +362,7 @@ class X32:
                 fr = mix_raw(kind, n, 'fader')
                 add(fr, lambda r=fr, c=cb: [(c + '/fdr', fader_db(self.raw.get(r)))])
                 add(mix_raw(kind, n, 'on'), lambda k=kind, n=n: self._d_mute(k, n))
-                if kind in ('ch', 'aux', 'bus'):
+                if kind in GRP_KINDS:
                     add(f'{rb}/grp/mute', lambda k=kind, n=n: self._d_mute(k, n))
                     add(f'{rb}/grp/dca', lambda k=kind, n=n: self._d_mute(k, n))
                 add(f'/-stat/solosw/{solo_index(kind, n):02d}',            # v4.0: every strip kind has a solo
@@ -373,12 +376,13 @@ class X32:
                             (f'{c}/send/MX{m}/lvl', fader_db(self.raw.get(f'{r}/mix/{m:02d}/level')))])
                         add(f'{rb}/mix/{m:02d}/on', lambda r=rb, c=cb, m=m: [
                             (f'{c}/send/MX{m}/on', 1 if self.raw.get(f'{r}/mix/{m:02d}/on') else 0)])
-                if kind in ('ch', 'aux', 'bus'):                            # v4.0: LR assign, M/C assign + level
+                if kind in GRP_KINDS:                                       # v4.0: LR assign, M/C assign + level
                     add(f'{rb}/mix/st', lambda r=rb, c=cb: [(c + '/main/1/on', 1 if self.raw.get(r + '/mix/st') else 0)])
                     add(f'{rb}/mix/mono', lambda r=rb, c=cb: [(c + '/main/2/on', 1 if self.raw.get(r + '/mix/mono') else 0)])
                     add(f'{rb}/mix/mlevel', lambda r=rb, c=cb: [(c + '/main/2/lvl', fader_db(self.raw.get(r + '/mix/mlevel')))])
                 if kind in ('ch', 'aux'):
                     add(f'{rb}/config/source', lambda k=kind, n=n: self._d_source(k, n))
+                if kind in SEND_KINDS:
                     for b in range(1, N_BUS + 1):
                         add(f'{rb}/mix/{b:02d}/level', lambda r=rb, c=cb, b=b: [
                             (f'{c}/send/{b}/lvl', fader_db(self.raw.get(f'{r}/mix/{b:02d}/level')))])
@@ -420,7 +424,7 @@ class X32:
                 rb = raw_base(kind, n)
                 a += [f'{rb}/config/name', f'{rb}/config/color', mix_raw(kind, n, 'fader'), mix_raw(kind, n, 'on'),
                       f'/-stat/solosw/{solo_index(kind, n):02d}']
-                if kind in ('ch', 'aux', 'bus'):
+                if kind in GRP_KINDS:
                     a += [f'{rb}/grp/mute', f'{rb}/grp/dca', f'{rb}/mix/st', f'{rb}/mix/mono', f'{rb}/mix/mlevel']
                 if kind in PAN_KINDS:
                     a.append(f'{rb}/mix/pan')
@@ -431,7 +435,7 @@ class X32:
                     a += [f'{rb}/preamp/hpon', f'{rb}/preamp/hpf', f'{rb}/preamp/hpslope']
         a += [f'/headamp/{h:03d}/{k}' for h in range(128) for k in ('gain', 'phantom')]
         a += REC_RAW
-        for kind in ('ch', 'aux'):
+        for kind in SEND_KINDS:
             for n in range(1, KINDS[kind] + 1):
                 rb = raw_base(kind, n)
                 for b in range(1, N_BUS + 1):
@@ -465,7 +469,7 @@ class X32:
         on = self.raw.get(mix_raw(kind, n, 'on'))
         if on is None:
             return []
-        if kind not in ('ch', 'aux', 'bus'):
+        if kind not in GRP_KINDS:
             return [(cb + '/mute', 0 if on else 1)]
         mask = self.raw.get(rb + '/grp/mute') or 0
         groups = [g for g in range(1, N_MGRP + 1) if mask & (1 << (g - 1))]
@@ -486,7 +490,7 @@ class X32:
 
     def _d_group(self, g):
         out = [(f'/mgrp/{g}/mute', 1 if self.raw.get(f'/config/mute/{g}') else 0), (f'/mgrp/{g}/name', '')]
-        for kind in ('ch', 'aux', 'bus'):
+        for kind in GRP_KINDS:
             for n in range(1, KINDS[kind] + 1):
                 out += self._d_mute(kind, n)
         return out
@@ -743,7 +747,7 @@ class X32:
         if leaf == 'fdr':
             return [mix_raw(kind, n, 'fader')]
         if leaf in ('mute', '$mute', 'tags'):
-            return [mix_raw(kind, n, 'on')] + ([rb + '/grp/mute'] if kind in ('ch', 'aux', 'bus') else []) \
+            return [mix_raw(kind, n, 'on')] + ([rb + '/grp/mute'] if kind in GRP_KINDS else []) \
                 + [f'/config/mute/{g}' for g in range(1, N_MGRP + 1)]
         if leaf == 'pan' and kind in PAN_KINDS:
             return [rb + '/mix/pan']
@@ -763,7 +767,7 @@ class X32:
             return [rb + {'flt/lc': '/preamp/hpon', 'flt/lcf': '/preamp/hpf', 'flt/lcs': '/preamp/hpslope'}[leaf]]
         if leaf.startswith('in/') and kind in ('ch', 'aux'):
             return [rb + '/config/source']
-        if leaf.startswith('send/') and kind in ('ch', 'aux') and leaf.split('/')[1].isdigit():
+        if leaf.startswith('send/') and kind in SEND_KINDS and leaf.split('/')[1].isdigit():
             b = int(leaf.split('/')[1])
             return [f'{rb}/mix/{b:02d}/' + ('level' if leaf.endswith('lvl') else 'on')]
         return []
@@ -786,7 +790,7 @@ class X32:
     def _main_send(kind, n, leaf):
         """'main/1/on' -> mix/st, 'main/2/on' -> mix/mono, 'main/2/lvl' -> mix/mlevel (ch / aux / bus)."""
         leafs = {'main/1/on': '/mix/st', 'main/2/on': '/mix/mono', 'main/2/lvl': '/mix/mlevel'}
-        if kind not in ('ch', 'aux', 'bus') or leaf not in leafs:
+        if kind not in GRP_KINDS or leaf not in leafs:
             return None
         return raw_base(kind, n) + leafs[leaf]
 
@@ -873,7 +877,7 @@ class X32:
             v = 1 if int(value) else 0
             self._write(f'/-stat/solosw/{solo_index(kind, n):02d}', v)
             return v
-        if leaf.startswith('send/') and kind in ('ch', 'aux') and leaf.split('/')[1].isdigit():
+        if leaf.startswith('send/') and kind in SEND_KINDS and leaf.split('/')[1].isdigit():
             parts = leaf.split('/')
             b = int(parts[1])
             if not 1 <= b <= N_BUS:
@@ -1040,7 +1044,7 @@ class X32:
 
     def assign(self, kind, n, grp, idx, on):
         """v4.0.3: mute group / DCA membership = bit (idx-1) of /<strip>/grp/mute|dca."""
-        if kind not in ('ch', 'aux', 'bus'):
+        if kind not in GRP_KINDS:
             return None, 'no groups on this strip'
         raw = raw_base(kind, n) + ('/grp/mute' if grp == 'M' else '/grp/dca')
         cur = self._query_raw([raw], timeout=0.5).get(raw)

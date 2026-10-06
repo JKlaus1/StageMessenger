@@ -186,13 +186,14 @@ CAPS = {
              'alt': True, 'gain': [-2.5, 45], 'lcf': [20, 2000], 'hc': True, 'spol': True,
              'auxproc': ['eq', 'gate', 'dyn'], 'grdb': False, 'sd': N_SD, 'movemark': True, 'recauto': True,
              # v4.0 console view: mains / DCAs, who can send to a matrix, sends-on-fader to Main 2-4
-             'nmain': N_MAIN, 'ndca': N_DCA, 'mtxsrc': ['ch', 'aux', 'bus', 'main'], 'mainsof': True},
+             'nmain': N_MAIN, 'ndca': N_DCA, 'mtxsrc': ['ch', 'aux', 'bus', 'main'], 'mainsof': True, 'nfxr': 0},
     'x32':  {'console': 'x32', 'model': 'X32', 'nch': x32mod.N_CH, 'naux': x32mod.N_AUX, 'nbus': x32mod.N_BUS,
              'nmtx': x32mod.N_MTX, 'nmg': x32mod.N_MGRP, 'main2': 'M/C', 'sheet': True, 'recorder': 'xlive',
              'listen': True, 'spotify': False, 'alt': False, 'gain': list(x32mod.GAIN_RANGE),
              'lcf': list(x32mod.LCF_RANGE), 'hc': False, 'spol': False, 'auxproc': ['eq'], 'grdb': True,
              'sd': 1, 'movemark': False, 'recauto': False,
-             'nmain': x32mod.N_MAIN, 'ndca': x32mod.N_DCA, 'mtxsrc': ['bus', 'main'], 'mainsof': False},
+             'nmain': x32mod.N_MAIN, 'ndca': x32mod.N_DCA, 'mtxsrc': ['bus', 'main'], 'mainsof': False,
+             'nfxr': x32mod.N_FXR},
 }
 
 
@@ -236,8 +237,9 @@ SETTABLE = re.compile(
     r'|(?:bus|main|mtx)/\d{1,2}/(?:fdr|mute)'
     # v4.0 console view: solo on every strip kind, DCAs, pan, sends to the mains and the matrices
     r'|(?:bus|main|mtx|dca)/\d{1,2}/\$solo|dca/\d{1,2}/(?:fdr|mute)'
-    r'|(?:ch|aux|bus|main|mtx)/\d{1,2}/pan'
-    r'|(?:ch|aux|bus)/\d{1,2}/main/[1-4]/(?:lvl|on)'
+    r'|(?:ch|aux|bus|main|mtx|fxr)/\d{1,2}/pan'
+    r'|(?:ch|aux|bus|fxr)/\d{1,2}/main/[1-4]/(?:lvl|on)'
+    r'|fxr/\d{1,2}/(?:fdr|mute|\$solo|send/\d{1,2}/(?:lvl|on))'
     r'|(?:ch|aux|bus|main)/\d{1,2}/send/MX[1-8]/(?:lvl|on)'
     r'|ch/\d{1,2}/flt/(?:lcs|hcs)'
     r'|(?:ch|aux)/\d{1,2}/send/\d{1,2}/mode'
@@ -247,8 +249,8 @@ SETTABLE = re.compile(
     r'|io/altsw|cards/wlive/auto_(?:play|rec|stop))$')
 LOGGED_SETS = ('/io/altsw', '/cards/wlive/auto_')   # console-wide changes: note who made them
 SRC_COUNT = dict(SRC_GROUPS)
-NODE_PATH = re.compile(r'^/(ch|aux|bus|main|mtx)/(\d{1,2})/(eq|gate|dyn)$')   # v4.0.3: output strips (eq / dyn)
-LAYOUT_ITEM = re.compile(r'^(ch|aux|bus|main|mtx|dca)/(\d{1,2})$')
+NODE_PATH = re.compile(r'^/(ch|aux|bus|main|mtx|fxr)/(\d{1,2})/(eq|gate|dyn)$')   # v4.0.3: output strips (eq / dyn)
+LAYOUT_ITEM = re.compile(r'^(ch|aux|bus|main|mtx|dca|fxr)/(\d{1,2})$')
 N_LAYERS, MAX_PROFILES = 3, 24
 NODE_LOCKED = ('mdl',)          # model changes stay at the console for now
 
@@ -259,7 +261,7 @@ def _node_ok(path):
     m = NODE_PATH.match(path or '')
     if not m or (m.group(3) == 'gate' and m.group(1) not in ('ch', 'aux')):
         return False
-    return 1 <= int(m.group(2)) <= {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'main': N_MAIN, 'mtx': N_MTX}[m.group(1)]
+    return 1 <= int(m.group(2)) <= {'ch': N_CH, 'aux': N_AUX, 'bus': N_BUS, 'main': N_MAIN, 'mtx': N_MTX, 'fxr': 0}[m.group(1)]
 
 
 class Mixer:
@@ -608,7 +610,7 @@ class Mixer:
     def clean_layers(self, layers):
         c = self.caps
         lim = {'ch': c['nch'], 'aux': c['naux'], 'bus': c['nbus'], 'main': c.get('nmain', 2),
-               'mtx': c.get('nmtx', 0), 'dca': c.get('ndca', 0)}
+               'mtx': c.get('nmtx', 0), 'dca': c.get('ndca', 0), 'fxr': c.get('nfxr', 0)}
         out = []
         for lay in (layers if isinstance(layers, list) else [])[:N_LAYERS]:
             lay = lay if isinstance(lay, dict) else {}
@@ -842,7 +844,8 @@ class Mixer:
                               'x': [r[1] for r in lv.get('mtx') or []],
                               # v4.0.3: dyn key dB / GR % for the output strips (bus / main / mtx detail pages)
                               'bd': [r[4:6] for r in lv['bus']], 'md': [r[4:6] for r in lv['main']],
-                              'xd': [r[4:6] for r in lv.get('mtx') or []]})
+                              'xd': [r[4:6] for r in lv.get('mtx') or []],
+                              'f': [r[1] for r in lv.get('fxr') or []]})
 
     # ── WING callbacks ──
     def _on_update(self, addr, v):
@@ -1389,7 +1392,8 @@ def api_assign():
         n, idx = int(d.get('n')), int(d.get('idx'))
     except (TypeError, ValueError):
         return jsonify(ok=False, err='bad number'), 400
-    lim = {'ch': _mixer.caps['nch'], 'aux': _mixer.caps['naux'], 'bus': _mixer.caps['nbus']}.get(kind)
+    lim = {'ch': _mixer.caps['nch'], 'aux': _mixer.caps['naux'], 'bus': _mixer.caps['nbus'],
+           'fxr': _mixer.caps.get('nfxr', 0)}.get(kind)
     top = {'M': _mixer.caps['nmg'], 'D': _mixer.caps.get('ndca', 0)}.get(grp)
     if not lim or not 1 <= n <= lim or not top or not 1 <= idx <= top:
         return jsonify(ok=False, err='bad assignment'), 400
