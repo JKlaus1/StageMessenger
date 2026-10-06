@@ -764,6 +764,51 @@
       .cp-top .inmeter { display: none; }
       #sh-tabs .tab { flex-basis: 5.2rem; height: 3.6rem; }
     }
+
+    /* ══ v4.0.2 classic page restyle (Mixing Station look: navy panels, dark-red MUTE, olive SOLO, ribbed caps) ══ */
+    :root { --green: #4cd964; --bg: #0d1017; --card: #151a24; --border: #2b3242; --text: #e6e9f0; --muted: #7d8599;
+            --red: #ee3b3b; --solo: #f3d70c; }
+    body { background: var(--bg); }
+    header h1 { color: var(--text); letter-spacing: .12em; }
+    .card { background: var(--card); border-color: #232937; border-radius: 10px; }
+    .label { color: var(--muted); }
+    .btn, .toggle, .tab, #resync-btn, footer button, .mixbtn, .mgbtn, .pin {
+      background: var(--cv-btn); border-color: var(--cv-btn-b); }
+    .btn, .toggle { border-radius: 6px; color: var(--text); }
+    .toggle { color: var(--muted); }
+    .toggle.on { color: var(--green); border: 1px solid var(--green); background: #1a2a20; }
+    .btn.on { background: var(--green); border-color: var(--green); color: #04180b; }
+    .btn.warn.on { background: var(--red); border-color: var(--red); color: #fff; }
+    #listen-btn, #cam-btn { border-radius: 8px; background: #1a2a20; }
+    #listen-btn.on, #cam-btn.on { background: var(--green); color: #04180b; }
+    select { background: #10141d; border-color: var(--cv-btn-b); }
+    /* strips */
+    .strip { border-top-color: #1d2230; border-left-width: 6px; }
+    .strip .nm b { color: var(--text); }
+    .mute, .solo { border-radius: 5px; border: 1px solid rgba(0,0,0,.45); font-weight: 800; }
+    .mute { background: var(--cv-mute); color: #f0caca; }
+    .mute.on { background: var(--cv-mute-on); border-color: var(--cv-mute-on); color: #fff; }
+    .mute.mg { background: #7a1f1f; color: #fff; box-shadow: inset 0 0 0 2px var(--cv-mute-on); border-color: transparent; }
+    .solo { background: var(--cv-solo); color: #ece2b0; }
+    .solo.on { background: var(--cv-solo-on); border-color: var(--cv-solo-on); color: #1a1600; }
+    .fader .track { background: #05070a; height: 4px; margin-top: -2px; }
+    .fader .fill { background: #24543a; height: 4px; margin-top: -2px; }
+    .master .fill { background: #2f7a4c; }
+    .fader .thumb { width: 1.5rem; height: 2rem; margin: -1rem 0 0 -.75rem; border-radius: 3px;
+      background: repeating-linear-gradient(90deg, #a3a9b4 0 2px, #6f7581 2px 4px); box-shadow: 0 2px 5px rgba(0,0,0,.7); }
+    .fader .thumb::after { left: 50%; right: auto; top: 0; bottom: 0; width: 3px; height: auto; margin-left: -1.5px; background: #fff; }
+    .fader.drag .thumb { background: repeating-linear-gradient(90deg, #c9f5d6 0 2px, #7fb592 2px 4px); }
+    .lvl { background: linear-gradient(90deg, #16823b 0%, #3ddc5a 62%, #e9d31a 82%, #ee3b3b 100%); }
+    .lvl i { background: #0b0d13; }
+    /* mixes, mute groups, buses */
+    .mixbtn { border-left-width: 5px; border-radius: 6px; }
+    .mixbtn.sel { outline: 2px solid var(--green); outline-offset: -2px; background: #1d2a22; border-color: var(--cv-btn-b); }
+    .mgbtn { border-radius: 6px; }
+    .mgbtn.on { background: var(--red); border-color: var(--red); }
+    #mix-current { color: var(--green); }
+    .pin.cur { border-color: var(--green); outline: 1px solid var(--green); }
+    .tab.sel { border-color: var(--green); color: var(--green); }
+    #view-btn { border-color: var(--green); color: var(--green); }
   </style>
 </head>
 <body>
