@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Stage Messenger /mixer — one-shot Pi setup for an X32 / M32 console
+# Stage Messenger /mixer — one-shot Pi setup (X32 / M32 / WING, auto-detected)
 # =============================================================================
 # Turns a FRESH Raspberry Pi OS Lite (64-bit, Debian 13 "Trixie") Pi into a
 # remote-mixing box: Stage Messenger (:3000) with the /mixer page, console
@@ -48,14 +48,14 @@ fi
 "${VENV}/bin/pip" install --upgrade pip
 "${VENV}/bin/pip" install -r "${MSG_DIR}/requirements.txt"
 
-log "3/7  mixer_config.json (X32, remote enabled, Spotify off, TURN key if given)"
+log "3/7  mixer_config.json (console auto-detect, remote enabled, Spotify off, TURN key if given)"
 # Merge: keeps anything already there (camera settings, an earlier TURN key, etc.).
 TURN_KEY_ID="${TURN_KEY_ID:-}" TURN_API_TOKEN="${TURN_API_TOKEN:-}" \
 python3 - "${MSG_DIR}/mixer_config.json" <<'PY'
 import json, os, sys
 p = sys.argv[1]
 c = json.load(open(p)) if os.path.exists(p) else {}
-c['mixer_type'] = 'x32'            # X32 / M32 family; found automatically on eth0 (no IP needed)
+c['mixer_type'] = 'auto'           # whichever console answers on eth0 (WING or X32/M32); hot-swaps
 c.pop('mixer_ip', None)            # let auto-detect do it
 c['remote_enabled'] = True         # internet access via the tunnel (Cloudflare Access gates it)
 c.setdefault('spotify', {})['enabled'] = False   # WING-only feature
