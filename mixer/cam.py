@@ -1,5 +1,5 @@
 """
-Video feed for /mixer (v3.4): a USB webcam + a console feed (Main LR by default) published to
+Video feed for /mixer (v3.4, tiers + audio bitrate v3.5): a USB webcam + a console feed (Main LR by default) published to
 MediaMTX as one WebRTC stream ("cam" path), separate from the low-latency listen-back.
 
     webcam (MJPEG) ---------------------------------> ffmpeg (x264 + Opus) -> RTSP -> MediaMTX -> WHEP
@@ -14,7 +14,7 @@ Why it is built this way
     earlier, so the AUDIO is delayed (cam delay_ms, live adjustable, done in the picker with a
     sample-accurate delay line). Both ffmpeg inputs are stamped with the wall clock and `-copyts
     -start_at_zero` keeps their true offset, so the setting survives encoder restarts.
-  * Easy on the Pi. ffmpeg runs niced, on 2 x264 threads, 720p30 @ 1.5 Mbps by default, only while
+  * Easy on the Pi. ffmpeg runs niced, on 2 x264 threads, 720p30 @ 2.5 Mbps by default, only while
     someone is watching (idle_s after the last viewer), and starts the audio pipeline through
     Listener.ensure_capture() / keepalive() without touching it otherwise.
   * Ready for a later YouTube push: constrained-baseline H.264, 2 s keyframes, CBR-ish -- a second
@@ -30,12 +30,25 @@ import time
 
 MAX_DELAY_MS = 3000
 
+# Picture tiers (v3.5). The camera always delivers 1280x720 MJPEG (cap = its frame rate); lower tiers
+# drop frames first and scale after, and spend the time saved on a slower, more efficient x264 preset
+# so a low bitrate still looks like a picture instead of a smear. Every tier is 16:9.
 QUALITIES = {
-    '720p30': {'label': '720p · 30 fps', 'w': 1280, 'h': 720, 'fps': 30, 'bitrate': '1500k'},
-    '720p20': {'label': '720p · 20 fps', 'w': 1280, 'h': 720, 'fps': 20, 'bitrate': '1000k'},
-    '480p30': {'label': '480p · 30 fps', 'w': 640, 'h': 480, 'fps': 30, 'bitrate': '700k'},
+    'high':   {'label': 'High · 720p 30 fps · 3.5 Mbps', 'w': 1280, 'h': 720, 'fps': 30, 'cap': 30,
+               'bitrate': '3500k', 'preset': 'ultrafast'},
+    'good':   {'label': 'Good · 720p 30 fps · 2.5 Mbps', 'w': 1280, 'h': 720, 'fps': 30, 'cap': 30,
+               'bitrate': '2500k', 'preset': 'ultrafast'},
+    'medium': {'label': 'Medium · 720p 15 fps · 1.2 Mbps', 'w': 1280, 'h': 720, 'fps': 15, 'cap': 30,
+               'bitrate': '1200k', 'preset': 'superfast'},
+    'low':    {'label': 'Low · 480p 10 fps · 500 kbps', 'w': 854, 'h': 480, 'fps': 10, 'cap': 20,
+               'bitrate': '500k', 'preset': 'veryfast'},
+    'min':    {'label': 'Minimum · 360p 5 fps · 250 kbps', 'w': 640, 'h': 360, 'fps': 5, 'cap': 20,
+               'bitrate': '250k', 'preset': 'veryfast'},
 }
-DEFAULT_QUALITY = '720p30'
+DEFAULT_QUALITY = 'good'
+# Opus bitrates offered for the sound that goes with the picture (independent of the picture tier).
+AUDIO_RATES = ['64k', '96k', '128k', '160k']
+DEFAULT_AUDIO_RATE = '128k'
 
 
 def find_device(configured=''):
@@ -64,6 +77,8 @@ class Cam:
         q = self.cfg.get('quality', DEFAULT_QUALITY)
         self.quality = q if q in QUALITIES else DEFAULT_QUALITY
         self.feed = str(self.cfg.get('feed') or 'main1')
+        ab = str(self.cfg.get('audio_bitrate') or DEFAULT_AUDIO_RATE)
+        self.audio_bitrate = ab if ab in AUDIO_RATES else DEFAULT_AUDIO_RATE
         self.delay_ms = self._clamp_delay(self.cfg.get('delay_ms', 0))
         self.idle_s = float(self.cfg.get('idle_s', 15))
         self.lock = threading.RLock()
@@ -132,9 +147,22 @@ class Cam:
         self._publish()
         return True
 
+    def set_audio_bitrate(self, rate):
+        rate = str(rate)
+        if rate not in AUDIO_RATES:
+            return False
+        changed = rate != self.audio_bitrate
+        self.audio_bitrate = rate
+        self._saved()
+        if changed and self.running and self.audio:
+            self._restart('audio bitrate change')
+        self._publish()
+        return True
+
     def _saved(self):
         try:
-            self.save({'feed': self.feed, 'delay_ms': self.delay_ms, 'quality': self.quality})
+            self.save({'feed': self.feed, 'delay_ms': self.delay_ms, 'quality': self.quality,
+                       'audio_bitrate': self.audio_bitrate})
         except Exception as e:
             print(f'[mixer] cam: could not save settings: {e}', flush=True)
 
@@ -160,6 +188,8 @@ class Cam:
             'delay_ms':  self.delay_ms,
             'quality':   self.quality,
             'qualities': [{'id': k, 'label': v['label']} for k, v in QUALITIES.items()],
+            'audio_bitrate': self.audio_bitrate,
+            'audio_rates': list(AUDIO_RATES),
             'max_delay': MAX_DELAY_MS,
             'error':     self.error,
             'audio_issue': self._audio_issue if self.running and not self.audio else '',
@@ -231,21 +261,24 @@ class Cam:
             c += list(self._video_input)
         else:
             c += ['-thread_queue_size', '512', '-f', 'v4l2', '-input_format', 'mjpeg',
-                  '-video_size', f"{q['w']}x{q['h']}", '-framerate', str(fps),
+                  '-video_size', '1280x720', '-framerate', str(q.get('cap', fps)),
                   '-use_wallclock_as_timestamps', '1', '-i', self.device()]
         if audio:
             c += ['-thread_queue_size', '1024', '-f', 's24le', '-ar', '48000', '-ac', '2',
                   '-use_wallclock_as_timestamps', '1', '-i', self._fifo]
         c += ['-copyts', '-start_at_zero']
-        c += ['-map', '0:v:0', '-vf', f'fps={fps}',
-              '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        vf = f'fps={fps}'                                      # drop frames first: less to scale
+        if (q['w'], q['h']) != (1280, 720):
+            vf += f",scale={q['w']}:{q['h']}:flags=bilinear"
+        c += ['-map', '0:v:0', '-vf', vf,
+              '-c:v', 'libx264', '-preset', q.get('preset', 'ultrafast'), '-tune', 'zerolatency',
               '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
               '-b:v', q['bitrate'], '-maxrate', q['bitrate'], '-bufsize', f'{2 * kbps}k',
               '-g', str(int(fps * float(self.cfg.get('gop_s', 2)))), '-x264-params', 'scenecut=0',
               '-threads', str(int(self.cfg.get('threads', 2)))]
         if audio:
             c += ['-map', '1:a:0', '-af', 'aresample=async=1000',
-                  '-c:a', 'libopus', '-b:a', str(self.cfg.get('audio_bitrate', '96k')),
+                  '-c:a', 'libopus', '-b:a', self.audio_bitrate,
                   '-application', 'audio', '-ar', '48000']
         else:
             c += ['-an']

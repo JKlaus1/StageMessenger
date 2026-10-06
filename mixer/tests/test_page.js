@@ -244,14 +244,26 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   console.log('Video card');
   check('no camera -> Video card hidden', W.d.getElementById('cam-card').hidden === true);
   const camBase = { enabled: true, available: true, running: false, viewers: 0, audio: true, feed: 'bus1', delay_ms: 240,
-                    quality: '720p20', max_delay: 3000, error: '', restarts: 0,
-                    qualities: [{ id: '720p30', label: '720p · 30 fps' }, { id: '720p20', label: '720p · 20 fps' }, { id: '480p30', label: '480p · 30 fps' }] };
-  const vsnap = { ...wsnap, feeds: [{ id: 'main1', label: 'Main LR', usb: [1, 2] }, { id: 'bus1', label: 'Bus 1', usb: [3, 4] }], cam: camBase };
+                    quality: 'medium', max_delay: 3000, error: '', restarts: 0, audio_bitrate: '128k', audio_rates: ['64k', '96k', '128k', '160k'],
+                    qualities: [{ id: 'high', label: 'High' }, { id: 'good', label: 'Good' }, { id: 'medium', label: 'Medium' }, { id: 'low', label: 'Low' }, { id: 'min', label: 'Minimum' }] };
+  const vsnap = { ...wsnap, feeds: [{ id: 'main1', label: 'Main LR', usb: [1, 2] }, { id: 'bus1', label: 'Bus 1', usb: [3, 4] }], cam: camBase,
+    listen: { running: false, listeners: 0, rtc: 0, error: '', pair: [0, 1], peak: [-120, -120], overruns: 0, opus_bitrate: '128k', opus_rates: ['64k', '96k', '128k', '160k'] } };
   const V = load(fs.readFileSync(path.join(FX, 'wing.html'), 'utf8'), vsnap);
   await tick(80);
   const vd = V.d, el = id => vd.getElementById(id);
   check('camera present -> Video card shown', el('cam-card').hidden === false);
-  check('3 quality choices, saved one selected', el('cam-q').options.length === 3 && el('cam-q').value === '720p20', el('cam-q').value);
+  check('5 picture tiers, saved one selected', el('cam-q').options.length === 5 && el('cam-q').value === 'medium', el('cam-q').value);
+  check('4 sound bitrates for the video, saved one selected', el('cam-ab').options.length === 4 && el('cam-ab').value === '128k' && el('cam-ab').style.display === '', el('cam-ab').value);
+  el('cam-ab').value = '64k'; el('cam-ab').dispatchEvent(new V.w.Event('change', { bubbles: true })); await tick(20);
+  check('video sound bitrate change posts it', V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.audio_bitrate === '64k'));
+  const lab = el('listen-ab');
+  check('Listen card: low-latency bitrate choices, 128k selected', lab.options.length === 4 && lab.value === '128k' && lab.style.display === '', [lab.options.length, lab.value]);
+  lab.value = '96k'; lab.dispatchEvent(new V.w.Event('change', { bubbles: true })); await tick(20);
+  check('Listen bitrate change posts to /mixer/api/listen/set', V.posts.some(p => p.url === '/mixer/api/listen/set' && p.body && p.body.opus_bitrate === '96k'));
+  el('mode-btn').click(); await tick(10);
+  check('MP3-only mode hides the low-latency bitrate', lab.style.display === 'none');
+  el('mode-btn').click(); await tick(10);
+  check('pop-out button hidden where the browser cannot float video', el('cam-pip').style.display === 'none');
   check('audio feed choices follow the listen feeds, saved one selected', el('cam-feed').options.length === 2 && el('cam-feed').value === 'bus1', el('cam-feed').value);
   check('sync slider shows the saved delay and the max', el('cam-delay').value === '240' && el('cam-delay').max === '3000' && el('cam-delay-val').textContent === '240 ms', el('cam-delay-val').textContent);
   el('cam-up').click(); await tick(30);
@@ -264,8 +276,8 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   check('slider drag posts the delay (debounced)', V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.delay_ms === 300));
   el('cam-feed').value = 'main1'; el('cam-feed').dispatchEvent(new V.w.Event('change', { bubbles: true })); await tick(20);
   check('feed change posts the feed', V.posts.some(p => p.url === '/mixer/api/cam/set' && p.body && p.body.feed === 'main1'));
-  V.push({ t: 'cam', s: { ...camBase, feed: 'main1', quality: '480p30', running: true, viewers: 2 } }); await tick(20);
-  check('live status: feed + quality follow the Pi', el('cam-feed').value === 'main1' && el('cam-q').value === '480p30');
+  V.push({ t: 'cam', s: { ...camBase, feed: 'main1', quality: 'low', audio_bitrate: '160k', running: true, viewers: 2 } }); await tick(20);
+  check('live status: feed + quality + sound follow the Pi', el('cam-feed').value === 'main1' && el('cam-q').value === 'low' && el('cam-ab').value === '160k');
   check('live status: viewers shown while not watching', el('cam-note').textContent === 'Camera live · 2 viewers', el('cam-note').textContent);
   el('cam-btn').click(); await tick(30);
   check('no WebRTC in the browser -> says so, resets the button', el('cam-note').textContent.includes('no WebRTC') && !el('cam-btn').classList.contains('on') && !el('cam-video').classList.contains('on'), el('cam-note').textContent);
@@ -306,6 +318,54 @@ const rowOf = (d, key) => d.querySelector(`#strips .strip[data-key="${key}"]`);
   hel('cam-btn').click(); await tick(30);
   check('stop closes the connection and deletes the cam session', calls.some(c => c[0] === 'close') && seen.some(c => c[1] === 'DELETE' && c[0] === '/mixer/api/cam/session/0123456789abcdef0123456789abcdef0123'), seen.slice(-2));
   check('stop resets the button + hides the picture', !hel('cam-btn').classList.contains('on') && !hel('cam-video').classList.contains('on'));
+  // v3.5: watching takes the sound over from Listen, and gives it back
+  hel('listen-btn').click(); await tick(40);
+  check('listening before the video', hel('listen-btn').classList.contains('on'));
+  hel('cam-btn').click(); await tick(60);
+  check('Watch stops Listen and turns the video sound on', !hel('listen-btn').classList.contains('on') && hel('cam-snd').textContent === 'Sound on' && hel('cam-video').muted === false);
+  hel('cam-snd').click(); await tick(40);
+  check('video sound off -> Listen comes back', hel('listen-btn').classList.contains('on') && hel('cam-video').muted === true);
+  hel('cam-snd').click(); await tick(40);
+  check('video sound on again -> Listen stops again', !hel('listen-btn').classList.contains('on') && hel('cam-video').muted === false);
+  hel('listen-btn').click(); await tick(40);
+  check('Listen pressed while watching -> video sound muted, picture stays', hel('listen-btn').classList.contains('on') && hel('cam-video').muted === true && hel('cam-btn').classList.contains('on'));
+  hel('listen-btn').click(); hel('cam-snd').click(); await tick(40);
+  hel('cam-btn').click(); await tick(40);
+  check('Stop video when Listen was off before the sound took over -> stays quiet', !hel('listen-btn').classList.contains('on') && hel('cam-snd').textContent === 'Sound off');
+  hel('listen-btn').click(); await tick(40);
+  hel('cam-btn').click(); await tick(60);
+  hel('cam-btn').click(); await tick(40);
+  check('Stop video -> Listen resumes', hel('listen-btn').classList.contains('on') && !hel('cam-btn').classList.contains('on'));
+  // pop out: a browser with standard Picture-in-Picture
+  let pipCalls = 0;
+  H.w.document.pictureInPictureEnabled = true;
+  hel('cam-video').requestPictureInPicture = async () => { pipCalls++; Object.defineProperty(H.w.document, 'pictureInPictureElement', { value: hel('cam-video'), configurable: true }); };
+  H.w.document.exitPictureInPicture = async () => { Object.defineProperty(H.w.document, 'pictureInPictureElement', { value: null, configurable: true }); };
+  hel('cam-btn').click(); await tick(60);
+  check('pop-out button offered once PiP is available', hel('cam-pip').style.display === '', [hel('cam-pip').style.display, H.w.document.pictureInPictureEnabled, hel('cam-btn').className, typeof hel('cam-video').requestPictureInPicture]);
+  hel('cam-pip').click(); await tick(30);
+  check('Pop out -> Picture-in-Picture requested, button says Pop in', pipCalls === 1 && hel('cam-pip').textContent.includes('Pop in'), hel('cam-pip').textContent);
+  hel('cam-btn').click(); await tick(160);
+  check('stopping the video leaves Picture-in-Picture', !H.w.document.pictureInPictureElement && hel('cam-pip').textContent.includes('Pop out'), hel('cam-pip').textContent);
+  // pop out in Chrome desktop: Document Picture-in-Picture -- the player AND the sync controls move
+  const PW = new JSDOM('<!doctype html><html><head></head><body></body></html>');
+  let pwHide = null;
+  const pw = { document: PW.window.document, addEventListener: (ev, fn) => { if (ev === 'pagehide') pwHide = fn; }, close() { pwHide && pwHide(); } };
+  H.w.documentPictureInPicture = { requestWindow: async () => pw };
+  hel('cam-btn').click(); await tick(60);
+  hel('cam-pip').click(); await tick(40);
+  const pdoc = PW.window.document;
+  check('Chrome pop-out window holds the video + sync controls', !!pdoc.getElementById('cam-video') && !!pdoc.getElementById('cam-delay') && !hd.getElementById('cam-pop')
+        && hel('cam-pip-ph').classList.contains('on') && pdoc.body.className === 'pipwin' && pdoc.querySelectorAll('style').length > 0);
+  pdoc.getElementById('cam-up').click(); await tick(30);
+  check('sync nudge works inside the pop-out window', pdoc.getElementById('cam-delay-val').textContent === (+pdoc.getElementById('cam-delay').value) + ' ms'
+        && seen.some(c => c[0] === '/mixer/api/cam/set' && String(c[2]).includes('delay_ms')));
+  H.push({ t: 'cam', s: { ...camBase, running: true, viewers: 1, delay_ms: 500 } }); await tick(1300);
+  H.push({ t: 'cam', s: { ...camBase, running: true, viewers: 1, delay_ms: 500 } }); await tick(20);
+  check('live status still paints controls in the pop-out window', pdoc.getElementById('cam-delay-val').textContent === '500 ms', pdoc.getElementById('cam-delay-val').textContent);
+  hel('cam-btn').click(); await tick(60);
+  check('stop: the player goes back into the card, window closed', !!hd.getElementById('cam-pop') && !pdoc.getElementById('cam-pop') && !hel('cam-pip-ph').classList.contains('on'));
+  delete H.w.documentPictureInPicture;
   check('no script errors (video handshake)', H.errors.length === 0, H.errors);
 
   // picture only: no console feeds (X32 for now)

@@ -1,5 +1,5 @@
 """
-Cam feed (v3.4): picker cam output + delay line (off-hardware).
+Cam feed (v3.4/v3.5): picker cam output + delay line (off-hardware).
 
 The picker slices a second stereo pair out of the same capture for the video encoder, delays it, and
 writes it to a fifo through a bounded queue. The listen-back output must stay bit-exact and never wait
@@ -364,8 +364,21 @@ def test_cam_api():
         check('audio would be available on a WING', cs.get('audio') is True, cs)
         r = c.post('/mixer/api/cam/whep', data=b'v=0\r\n', content_type='application/sdp')
         check('whep with no camera -> 404 (nothing started)', r.status_code == 404 and not mx.cam.running, r.status_code)
-        r = c.post('/mixer/api/cam/set', json={'feed': 'bus2', 'delay_ms': 250, 'quality': '720p20'}).get_json()
-        check('set feed / delay / quality', r.get('ok') and r['cam']['feed'] == 'bus2' and r['cam']['delay_ms'] == 250 and r['cam']['quality'] == '720p20', r)
+        check('v3.5 defaults: Good tier, 128k sound, 5 tiers, 4 sound rates',
+              cs.get('quality') == 'good' and cs.get('audio_bitrate') == '128k' and len(cs.get('qualities', [])) == 5
+              and cs.get('audio_rates') == ['64k', '96k', '128k', '160k'], cs)
+        r = c.post('/mixer/api/cam/set', json={'feed': 'bus2', 'delay_ms': 250, 'quality': 'low'}).get_json()
+        check('set feed / delay / quality', r.get('ok') and r['cam']['feed'] == 'bus2' and r['cam']['delay_ms'] == 250 and r['cam']['quality'] == 'low', r)
+        r = c.post('/mixer/api/cam/set', json={'audio_bitrate': '160k'}).get_json()
+        check('set the video sound bitrate', r.get('ok') and r['cam']['audio_bitrate'] == '160k', r)
+        check('unknown sound bitrate rejected', c.post('/mixer/api/cam/set', json={'audio_bitrate': '999k'}).status_code == 400)
+        ls = st.get('listen') or {}
+        check('listen status: Opus bitrate 128k + choices', ls.get('opus_bitrate') == '128k' and ls.get('opus_rates') == ['64k', '96k', '128k', '160k'], ls)
+        r = c.post('/mixer/api/listen/set', json={'opus_bitrate': '64k'})
+        check('set the Listen low-latency bitrate', r.status_code == 200 and r.get_json()['listen']['opus_bitrate'] == '64k'
+              and mx.listener.opus_bitrate == '64k', r.get_json())
+        check('unknown Listen bitrate rejected', c.post('/mixer/api/listen/set', json={'opus_bitrate': '7k'}).status_code == 400
+              and mx.listener.opus_bitrate == '64k')
         check('delay clamps to 0..3000', c.post('/mixer/api/cam/set', json={'delay_ms': 99999}).get_json()['cam']['delay_ms'] == 3000
               and c.post('/mixer/api/cam/set', json={'delay_ms': -40}).get_json()['cam']['delay_ms'] == 0)
         check('unknown feed rejected', c.post('/mixer/api/cam/set', json={'feed': 'nope'}).status_code == 400)
@@ -374,7 +387,8 @@ def test_cam_api():
         c.post('/mixer/api/cam/set', json={'delay_ms': 320})
         with open(os.path.join(tmp, 'mixer_state.json')) as f:
             sf = json.load(f)
-        check('settings saved in mixer_state.json', sf.get('cam') == {'feed': 'bus2', 'delay_ms': 320, 'quality': '720p20'}, sf.get('cam'))
+        check('settings saved in mixer_state.json', sf.get('cam') == {'feed': 'bus2', 'delay_ms': 320, 'quality': 'low', 'audio_bitrate': '160k'}, sf.get('cam'))
+        check('Listen bitrate saved in mixer_state.json', sf.get('listen') == {'opus_bitrate': '64k'}, sf.get('listen'))
         check('listen feed untouched by cam feed change', mx.feed_id == 'main1', mx.feed_id)
         r = c.delete('/mixer/api/cam/session/not-a-session')
         check('session delete validates the id', r.status_code == 400)
@@ -385,12 +399,23 @@ def test_cam_api():
     # a fresh controller picks the saved values up again
     tmp2, mixer2, mx2, c2 = setup({'mixer_ip': '127.0.0.1', 'mixer_type': 'wing', 'spotify': {'enabled': False},
                                    'cam': {'device': '/nonexistent/video0'}},
-                                  state={'cam': {'feed': 'bus2', 'delay_ms': 320, 'quality': '720p20'}})
+                                  state={'cam': {'feed': 'bus2', 'delay_ms': 320, 'quality': 'low', 'audio_bitrate': '160k'},
+                                         'listen': {'opus_bitrate': '64k'}})
     try:
         cs = mx2.cam.status()
-        check('restart: feed / delay / quality restored', (cs['feed'], cs['delay_ms'], cs['quality']) == ('bus2', 320, '720p20'), cs)
+        check('restart: feed / delay / quality / sound restored', (cs['feed'], cs['delay_ms'], cs['quality'], cs['audio_bitrate']) == ('bus2', 320, 'low', '160k'), cs)
+        check('restart: Listen bitrate restored', mx2.listener.opus_bitrate == '64k', mx2.listener.opus_bitrate)
     finally:
         mx2.wing.stop()
+    # a v3.4 saved tier name falls back to the default tier
+    tmp4, mixer4, mx4, c4 = setup({'mixer_ip': '127.0.0.1', 'mixer_type': 'wing', 'spotify': {'enabled': False},
+                                   'cam': {'device': '/nonexistent/video0'}},
+                                  state={'cam': {'feed': 'main1', 'delay_ms': 0, 'quality': '720p30'}})
+    try:
+        cs = mx4.cam.status()
+        check('old 720p30 setting -> Good tier, 128k sound', cs['quality'] == 'good' and cs['audio_bitrate'] == '128k', cs)
+    finally:
+        mx4.wing.stop()
     # MediaMTX off in the config -> the cam is off and the listener is not told about a cam file
     tmp3, mixer3, mx3, c3 = setup({'mixer_ip': '127.0.0.1', 'mixer_type': 'wing', 'spotify': {'enabled': False},
                                    'rtc': {'enabled': False}})
@@ -402,6 +427,54 @@ def test_cam_api():
         fake.stop()
 
 
+def test_cam_tiers():
+    print('cam: picture tiers (v3.5) -- frame rate, size, preset, bitrate really end up in the stream')
+    from mixer.cam import QUALITIES
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, want_h, want_fps in (('min', 360, 5), ('medium', 720, 15)):
+            out = os.path.join(tmp, f'{name}.mkv')
+            lst, c, ctl = make_cam(tmp, 0, out, lambda: [], quality=name, idle_s=30)
+            c._video_input = ['-re', '-use_wallclock_as_timestamps', '1', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30']
+            cmd = c._cmd(False)
+            q = QUALITIES[name]
+            check(f'{name}: x264 preset {q["preset"]}, bitrate {q["bitrate"]}',
+                  cmd[cmd.index('-preset') + 1] == q['preset'] and cmd[cmd.index('-b:v') + 1] == q['bitrate'], cmd)
+            c.hold(1.0)
+            time.sleep(3.5)
+            c._stop('test')
+            lst._teardown()
+            r = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_frames', '-show_entries',
+                                'stream=width,height,nb_read_frames:format=duration', '-of', 'default=nw=1', out],
+                               capture_output=True, text=True).stdout
+            kv = dict(l.split('=', 1) for l in r.split() if '=' in l)
+            try:
+                h, n, dur = int(kv['height']), int(kv['nb_read_frames']), float(kv['duration'])
+            except (KeyError, ValueError):
+                h, n, dur = 0, 0, 0.0
+            check(f'{name}: {want_h}p output', h == want_h and int(kv.get('width', 0)) == round(want_h * 16 / 9 / 2) * 2, kv)
+            fps = n / dur if dur else 0
+            check(f'{name}: ~{want_fps} fps encoded', abs(fps - want_fps) <= max(1.5, want_fps * 0.2), (n, dur, fps))
+        # the real camera's capture args: always 1280x720 MJPEG at a rate the N930E offers
+        c = Cam({'enabled': True, 'quality': 'low', 'device': '/dev/null'}, Listener(capture_cmd=['true']), lambda: [],
+                probe=lambda: (False, False, 0), ctl_path=os.path.join(tmp, 'x.ctl'))
+        cmd = c._cmd(False)
+        check('low tier: camera opened at 1280x720 @ 20 fps, scaled to 854x480',
+              cmd[cmd.index('-video_size') + 1] == '1280x720' and cmd[cmd.index('-framerate') + 1] == '20'
+              and 'scale=854:480' in cmd[cmd.index('-vf') + 1], cmd)
+        c.quality = 'good'; cmd = c._cmd(True)
+        check('good tier: no scaling, 30 fps, sound at the chosen Opus bitrate',
+              'scale' not in cmd[cmd.index('-vf') + 1] and cmd[cmd.index('-framerate') + 1] == '30'
+              and cmd[cmd.index('-b:a') + 1] == '128k', cmd)
+    lst = Listener(capture_cmd=['true'], rtc_url='rtsp://127.0.0.1:1/x', opus_bitrate='128k')
+    calls = []
+    lst._restart_encoder = lambda why: calls.append(why)
+    lst.running = True
+    ok = lst.set_opus_bitrate('96k'); lst.set_opus_bitrate('96k')
+    check('Listen bitrate change respawns a running encoder once', ok and lst.opus_bitrate == '96k' and len(calls) == 1, calls)
+    check('Listen bitrate: unknown value refused, nothing restarted', not lst.set_opus_bitrate('100k') and len(calls) == 1)
+    lst.running = False
+
+
 def main():
     test_delay_line()
     test_camout_never_blocks()
@@ -411,6 +484,7 @@ def main():
     test_cam_video_only_and_idle()
     test_cam_capture_unavailable()
     test_cam_failure()
+    test_cam_tiers()
     test_cam_api()
     print()
     print('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}')

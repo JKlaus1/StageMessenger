@@ -59,6 +59,7 @@
     #lag-note { flex: 1; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1em; }
     #lag-note .rtc { color: var(--green); font-weight: 800; }
     #mode-btn { flex: none; padding: .25rem .55rem; font-size: .58rem; }
+    .listen-foot select, .cam-opts select { flex: 0 0 auto; padding: .25rem .4rem; font-size: .68rem; border-radius: 8px; }
     #lag-note b { color: var(--text); }
     #lag-note b.hi { color: var(--amber); }
 
@@ -66,7 +67,15 @@
     #cam-btn { flex: 0 0 auto; min-width: 6.2rem; padding: .7rem .8rem; border-radius: 10px; border: 1px solid var(--green);
       background: transparent; color: var(--green); font-weight: 900; font-size: .8rem; letter-spacing: .1em; text-transform: uppercase; }
     #cam-btn.on { background: var(--green); color: #001a0d; }
-    #cam-q { flex: 0 1 8.5rem; }
+    #cam-q { flex: 0 1 12rem; }
+    .cam-opts { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; font-size: .68rem; color: var(--muted); }
+    .cam-opts .sp { flex: 1; }
+    #cam-pip { flex: none; padding: .3rem .6rem; font-size: .62rem; }
+    #cam-pip-ph { display: none; margin-top: .6rem; padding: .8rem; border-radius: 10px; border: 1px dashed var(--border);
+      font-size: .68rem; color: var(--muted); text-align: center; }
+    #cam-pip-ph.on { display: block; }
+    body.pipwin { margin: 0; padding: .5rem; }
+    body.pipwin #cam-video { margin-top: 0; }
     #cam-video { display: none; width: 100%; aspect-ratio: 16 / 9; margin-top: .6rem; border-radius: 10px; background: #000; object-fit: contain; }
     #cam-video.on { display: block; }
     .cam-sync { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; font-size: .68rem; color: var(--muted); }
@@ -510,7 +519,7 @@
     </div>
     <div class="pk"><div><span id="pk-l"></span></div><div><span id="pk-r"></span></div></div>
     <div id="listen-note"></div>
-    <div class="listen-foot"><div id="lag-note"></div><button class="toggle" id="mode-btn" title="Low-latency WebRTC audio, falling back to MP3">Low latency</button></div>
+    <div class="listen-foot"><div id="lag-note"></div><select id="listen-ab" title="Low-latency audio bitrate (applies to everyone listening)"></select><button class="toggle" id="mode-btn" title="Low-latency WebRTC audio, falling back to MP3">Low latency</button></div>
     <audio id="player" preload="none"></audio>
   </section>
 
@@ -521,7 +530,14 @@
       <select id="cam-feed" title="Console feed whose sound goes with the picture"></select>
       <select id="cam-q" title="Picture quality"></select>
     </div>
-    <video id="cam-video" playsinline muted></video>
+    <div class="cam-opts">
+      <select id="cam-ab" title="Bitrate of the sound that comes with the video"></select>
+      <span class="sp"></span>
+      <button class="toggle" id="cam-pip" title="Pop the video out into a floating window">&#10697; Pop out</button>
+    </div>
+    <div id="cam-pip-ph">Video is in the floating window</div>
+    <div id="cam-pop">
+    <video id="cam-video" playsinline muted autopictureinpicture></video>
     <div class="cam-sync">
       <span>A/V sync</span>
       <button class="nudge" id="cam-dn" title="Audio 10 ms earlier">&minus;</button>
@@ -529,6 +545,7 @@
       <button class="nudge" id="cam-up" title="Audio 10 ms later">+</button>
       <span id="cam-delay-val">0 ms</span>
       <button class="toggle" id="cam-snd" title="Sound from the video">Sound off</button>
+    </div>
     </div>
     <div id="cam-note"></div>
   </section>
@@ -729,7 +746,8 @@
   const NBUS = CAP.nbus, NCH = CAP.nch, NAUX = CAP.naux;
   const ALT_TAG = X32 ? 'PLAY' : 'ALT';      // X32: routing REC/PLAY switch plays the WING's MAIN/ALT role
   const MON_FEED = 'mon1';
-  const $ = id => document.getElementById(id);
+  let pipDoc = null;                           // v3.5: the Chrome pop-out window holding the video controls
+  const $ = id => document.getElementById(id) || (pipDoc && pipDoc.getElementById(id));
 
   let S = {};                 // addr -> value (mirror of the WING cache)
   let mix = 'lr';             // 'lr' or bus number (1..16)
@@ -1992,6 +2010,7 @@
   function paintModeBtn() {
     $('mode-btn').textContent = listenPref === 'mp3' ? 'MP3 only' : 'Low latency';
     $('mode-btn').classList.toggle('on', listenPref !== 'mp3');
+    if ($('listen-ab').options.length) $('listen-ab').style.display = listenPref !== 'mp3' ? '' : 'none';
   }
   paintModeBtn();
   $('mode-btn').addEventListener('click', () => {
@@ -2015,8 +2034,19 @@
     setLag('');
     $('listen-btn').classList.remove('on'); $('listen-btn').innerHTML = '&#9654; Listen';
   }
-  $('listen-btn').addEventListener('click', () => wantPlay ? stopPlay() : startPlay());
+  $('listen-btn').addEventListener('click', () => {
+    if (wantPlay) { stopPlay(); return; }
+    if (camWant && camSound) setCamSound(false);       // v3.5: one sound at a time -- Listen takes it back
+    listenResume = false;
+    startPlay();
+  });
   $('resync-btn').addEventListener('click', () => { if (wantPlay) startPlay(); });
+  $('listen-ab').addEventListener('change', async e => {
+    const r = await fetch('/mixer/api/listen/set', { method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opus_bitrate: e.target.value }) }).catch(() => null);
+    // the Pi respawned the encoder: rejoin the new low-latency stream once it is publishing again
+    if (r && r.ok) setTimeout(() => { if (wantPlay && mode === 'rtc') startRTC(); }, 1500);
+  });
   player.addEventListener('error', () => { if (wantPlay && mode === 'mp3') setTimeout(() => wantPlay && startMP3(), 2000); });
   player.addEventListener('ended', () => { if (wantPlay && mode === 'mp3') setTimeout(() => wantPlay && startMP3(), 1000); });
   window.addEventListener('pagehide', () => closeRTC());
@@ -2135,6 +2165,11 @@
   // Separate from the listen-back above: own peer connection, own player, only runs while watched.
   // The A/V sync control delays the SOUND at the Pi (the picture is the later one), so it applies to
   // every viewer and survives restarts. Nothing here touches the listen-back connection.
+  // v3.5: watching takes over the sound -- Listen stops and the video's own (synced) sound plays; it
+  // comes back when the video stops. Picture tiers + sound bitrate are chosen separately. Pop out =
+  // Picture-in-Picture (iPad: floats over other apps and keeps playing); Chrome desktop gets a small
+  // window that also carries the sync controls (Document Picture-in-Picture).
+  let listenResume = false, pipWin = null;
   let camSt = null, camWant = false, cpc = null, cSession = null, cStream = null, cGen = 0, cTimer = null;
   let cDrops = 0, cBytes = 0, cAt = 0, camSound = false, camDelayAt = 0, camDelayT = null, camOptSig = '';
   const camVideo = $('cam-video');
@@ -2147,16 +2182,21 @@
     camSt = st;
     $('cam-card').hidden = !st.available;
     if (!st.available) { if (camWant) stopCam(); return; }
-    const sig = JSON.stringify([st.audio, st.qualities, feeds.map(f => f.id + f.label)]);
+    const sig = JSON.stringify([st.audio, st.qualities, st.audio_rates, feeds.map(f => f.id + f.label)]);
     if (sig !== camOptSig) {                              // rebuild only when the lists change
       camOptSig = sig;
       const fs = $('cam-feed'); fs.innerHTML = '';
       feeds.forEach(f => { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label; fs.appendChild(o); });
       const qs = $('cam-q'); qs.innerHTML = '';
       (st.qualities || []).forEach(q => { const o = document.createElement('option'); o.value = q.id; o.textContent = q.label; qs.appendChild(o); });
+      const as = $('cam-ab'); as.innerHTML = '';
+      (st.audio_rates || []).forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = 'Sound · ' + r; as.appendChild(o); });
     }
     $('cam-feed').style.display = feeds.length ? '' : 'none';      // no console audio (e.g. X32 for now): picture only
     $('cam-snd').style.display = st.audio ? '' : 'none';
+    $('cam-ab').style.display = st.audio && st.audio_rates ? '' : 'none';
+    if (document.activeElement !== $('cam-ab') && st.audio_bitrate) $('cam-ab').value = st.audio_bitrate;
+    $('cam-pip').style.display = pipKind() ? '' : 'none';
     if (document.activeElement !== $('cam-feed')) $('cam-feed').value = st.feed;
     if (document.activeElement !== $('cam-q')) $('cam-q').value = st.quality;
     $('cam-delay').max = st.max_delay || 3000;
@@ -2181,13 +2221,82 @@
     await camPost({ quality: e.target.value });
     if (camWant) startCam();                              // the encoder restarted: reconnect to the new stream
   });
-  $('cam-snd').addEventListener('click', () => {
-    camSound = !camSound; camVideo.muted = !camSound;
-    $('cam-snd').textContent = camSound ? 'Sound on' : 'Sound off'; $('cam-snd').classList.toggle('on', camSound);
-    if (camSound) camVideo.play().catch(() => {});
+  $('cam-ab').addEventListener('change', async e => {
+    await camPost({ audio_bitrate: e.target.value });
+    if (camWant) startCam();                              // same: new encoder, new stream
   });
-  $('cam-btn').addEventListener('click', () => camWant ? stopCam() : startCam());
+  // One sound at a time: the video's sound on = Listen off (and back on when the video's sound goes).
+  function setCamSound(on, user) {
+    camSound = !!on; camVideo.muted = !camSound;
+    $('cam-snd').textContent = camSound ? 'Sound on' : 'Sound off'; $('cam-snd').classList.toggle('on', camSound);
+    if (camSound) {
+      if (wantPlay) { listenResume = true; stopPlay(); }
+      camVideo.play().catch(() => {});
+    } else if (user && listenResume) { listenResume = false; startPlay(); }
+  }
+  $('cam-snd').addEventListener('click', () => setCamSound(!camSound, true));
+  $('cam-btn').addEventListener('click', () => {
+    if (camWant) { stopCam(true); return; }
+    if (camSt && camSt.audio) setCamSound(true);          // take over the sound (inside the tap: may start audio)
+    startCam();
+  });
   window.addEventListener('pagehide', () => closeCam());
+
+  // ── pop out ──
+  function pipKind() {
+    if (window.documentPictureInPicture) return 'doc';    // Chrome / Edge desktop (Safari has no such thing)
+    if (camVideo.webkitSupportsPresentationMode && camVideo.webkitSupportsPresentationMode('picture-in-picture')) return 'webkit';
+    if (document.pictureInPictureEnabled && camVideo.requestPictureInPicture) return 'std';
+    return '';
+  }
+  function pipActive() {
+    return !!(pipWin || document.pictureInPictureElement || camVideo.webkitPresentationMode === 'picture-in-picture');
+  }
+  function paintPip() {
+    const on = pipActive();
+    $('cam-pip').classList.toggle('on', on);
+    $('cam-pip').innerHTML = on ? '&#10697; Pop in' : '&#10697; Pop out';
+    $('cam-pip-ph').classList.toggle('on', !!pipWin);
+  }
+  async function popOut() {
+    const k = pipKind();
+    try {
+      if (k === 'doc') {
+        const w = await window.documentPictureInPicture.requestWindow({ width: 480, height: 330 });
+        document.querySelectorAll('style, link[rel=stylesheet]').forEach(n => w.document.head.appendChild(n.cloneNode(true)));
+        w.document.title = 'Video';
+        w.document.body.className = 'pipwin';
+        const pop = $('cam-pop');
+        pipWin = w; pipDoc = w.document;
+        w.document.body.appendChild(pop);                    // moved, not copied: same player, same controls
+        camVideo.play().catch(() => {});
+        w.addEventListener('pagehide', () => {
+          $('cam-pip-ph').after(pop);                        // back into the card
+          pipWin = null; pipDoc = null; paintPip();
+          if (camWant) camVideo.play().catch(() => {});
+        });
+      } else if (k === 'webkit') {
+        camVideo.webkitSetPresentationMode('picture-in-picture');
+      } else if (k === 'std') {
+        await camVideo.requestPictureInPicture();
+      }
+    } catch (e) { camNote('Pop out failed: ' + (e.message || e)); }
+    paintPip();
+  }
+  function popIn() {
+    try {
+      if (pipWin) pipWin.close();
+      else if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+      else if (camVideo.webkitPresentationMode === 'picture-in-picture') camVideo.webkitSetPresentationMode('inline');
+    } catch (e) {}
+    setTimeout(paintPip, 100);
+  }
+  $('cam-pip').addEventListener('click', () => {
+    if (pipActive()) { popIn(); return; }
+    if (!camWant) { camNote('Start the video first, then pop it out'); return; }
+    popOut();
+  });
+  ['enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged'].forEach(ev => camVideo.addEventListener(ev, paintPip));
 
   function closeCam() {
     cGen++;
@@ -2197,16 +2306,20 @@
     if (cStream) { cStream.getTracks().forEach(t => t.stop()); cStream = null; }
     if (camVideo.srcObject) camVideo.srcObject = null;
   }
-  function stopCam() {
+  function stopCam(user) {
     camWant = false; cDrops = 0;
+    if (pipActive()) popIn();
     closeCam();
     camVideo.classList.remove('on');
+    if (camSound) setCamSound(false);
+    if (listenResume) { listenResume = false; if (user) startPlay(); }
     $('cam-btn').classList.remove('on'); $('cam-btn').innerHTML = '&#9654; Watch';
     camNote(camSt && camSt.running ? `Camera live · ${camSt.viewers} viewer${camSt.viewers === 1 ? '' : 's'}` : '');
   }
   async function startCam() {
     camWant = true;
     $('cam-btn').classList.add('on'); $('cam-btn').innerHTML = '&#9632; Stop';
+    $('cam-pip').style.display = pipKind() ? '' : 'none';
     if (!window.RTCPeerConnection || !window.MediaStream) { camFail('this browser has no WebRTC'); return; }
     closeCam();
     const gen = cGen;
@@ -2261,8 +2374,11 @@
     startCam();
   }
   function camFail(why) {
+    if (pipActive()) popIn();
     closeCam();
     camWant = false;
+    if (camSound) setCamSound(false);
+    if (listenResume) { listenResume = false; startPlay(); }      // give the sound back to Listen
     camVideo.classList.remove('on');
     $('cam-btn').classList.remove('on'); $('cam-btn').innerHTML = '&#9654; Watch';
     camNote('Video unavailable: ' + why);
@@ -2294,6 +2410,7 @@
     cBytes = bytes; cAt = now;
     camNote(w ? `${h}p · ${Math.round(fps)} fps · ${mbps.toFixed(1)} Mbps` + (route ? ' · ' + route : '')
       + (recv && lost / (recv + lost) > 0.01 ? ` · ${(100 * lost / (recv + lost)).toFixed(1)}% lost` : '')
+      + (camSt && camSt.audio && camSt.audio_bitrate ? ` · sound ${camSt.audio_bitrate}` : '')
       + (camSt && camSt.viewers > 1 ? ` · ${camSt.viewers} viewers` : '')
       + (camSt && camSt.audio_issue ? ` · no sound: ${camSt.audio_issue}` : '') : 'Waiting for picture…');
   }
@@ -2363,8 +2480,19 @@
   setInterval(pollLag, 1000);
 
   const pct = d => Math.max(0, Math.min(100, (d + 60) / 60 * 100)) + '%';
+  let listenAbSig = '';
   function paintListen(st) {
     if (!st) return;
+    if (st.opus_rates) {                          // v3.5: low-latency bitrate (one encode, shared by every listener)
+      const sig = st.opus_rates.join();
+      if (sig !== listenAbSig) {
+        listenAbSig = sig;
+        const ls = $('listen-ab'); ls.innerHTML = '';
+        st.opus_rates.forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = r; ls.appendChild(o); });
+      }
+      if (document.activeElement !== $('listen-ab') && st.opus_bitrate) $('listen-ab').value = st.opus_bitrate;
+    }
+    $('listen-ab').style.display = st.opus_rates && listenPref !== 'mp3' ? '' : 'none';
     $('pk-l').style.width = st.running ? pct(st.peak[0]) : '0%';
     $('pk-r').style.width = st.running ? pct(st.peak[1]) : '0%';
     $('listen-note').textContent = st.error ? st.error

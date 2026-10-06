@@ -63,7 +63,7 @@ DEFAULTS = {
         'rtsp':           'rtsp://127.0.0.1:8554/listen',
         'api':            'http://127.0.0.1:9997',
         'whep':           'http://127.0.0.1:8889/listen/whep',
-        'opus_bitrate':   '96k',
+        'opus_bitrate':   '128k',    # starting value; the Listen card's choice is saved and wins (v3.5)
         'turn_key_id':    '',        # Cloudflare Realtime TURN key -- set these in mixer_config.json,
         'turn_api_token': '',        # never in git
         'turn_ttl':       86400,
@@ -75,13 +75,13 @@ DEFAULTS = {
         'device':        '',         # '' = first USB camera under /dev/v4l/by-id
         'rtsp':          'rtsp://127.0.0.1:8554/cam',
         'whep':          'http://127.0.0.1:8889/cam/whep',
-        'audio_bitrate': '96k',
+        'audio_bitrate': '128k',     # Opus for the video's sound (64k | 96k | 128k | 160k)
         'idle_s':        15,         # stop the encoder this long after the last viewer leaves
         'nice':          15,         # ffmpeg priority (listen-back and the DMX engine keep theirs)
         'threads':       2,          # x264 threads
         'gop_s':         2,          # keyframe interval, seconds (YouTube wants <= 4)
         # starting values; changes made on the page are saved in mixer_state.json and win
-        'quality':       '720p30',   # 720p30 | 720p20 | 480p30
+        'quality':       'good',     # high | good | medium | low | min (see mixer/cam.py)
         'feed':          'main1',    # console feed whose audio goes with the picture
         'delay_ms':      0,          # audio delay to line sound up with the (later) video
     },
@@ -251,11 +251,12 @@ class Mixer:
         self._cam_ctl = os.path.join(shm, f'wing_cam_{os.getpid()}')
         cam_cfg = dict(cfg.get('cam') or {})
         cam_cfg.update({k: v for k, v in (self._state_raw.get('cam') or {}).items()
-                        if k in ('quality', 'feed', 'delay_ms')})
+                        if k in ('quality', 'feed', 'delay_ms', 'audio_bitrate')})
         cam_cfg['enabled'] = bool(cam_cfg.get('enabled', True)) and self.rtc_enabled
         self.listener = Listener(bitrate=cfg.get('bitrate', '128k'),
                                  rtc_url=rtc.get('rtsp', '') if self.rtc_enabled else '',
-                                 opus_bitrate=rtc.get('opus_bitrate', '96k'), rtc_probe=self.rtc_probe,
+                                 opus_bitrate=(self._state_raw.get('listen') or {}).get('opus_bitrate')
+                                 or rtc.get('opus_bitrate', '128k'), rtc_probe=self.rtc_probe,
                                  cushion_s=cfg.get('cushion_s', 0.5), max_queue_s=cfg.get('max_queue_s', 1.0),
                                  on_status=lambda st: self.hub.publish({'t': 'listen', 's': st}),
                                  cam_ctl=self._cam_ctl if cam_cfg['enabled'] else '')
@@ -867,6 +868,12 @@ class Mixer:
         except Exception:
             return False, False, 0
 
+    def save_listen_bitrate(self, rate):
+        """The Listen card's low-latency (Opus) bitrate survives restarts (v3.5)."""
+        with self._ovr_lock:
+            self._state_raw = {**self._state_raw, 'listen': {'opus_bitrate': rate}}
+            self._write_state()
+
     def _save_cam(self, d):
         """Page-made video settings (audio feed, delay, quality) survive restarts."""
         with self._ovr_lock:
@@ -1477,7 +1484,23 @@ def api_cam_set():
             return jsonify(ok=False, err='bad delay'), 400
     if 'quality' in d and not cam.set_quality(str(d['quality'])):
         return jsonify(ok=False, err='unknown quality'), 400
+    if 'audio_bitrate' in d and not cam.set_audio_bitrate(str(d['audio_bitrate'])):
+        return jsonify(ok=False, err='unknown audio bitrate'), 400
     return jsonify(ok=True, cam=cam.status())
+
+
+@bp.route('/api/listen/set', methods=['POST'])
+def api_listen_set():
+    """Listen card settings (v3.5): the low-latency Opus bitrate. Restarts the encoder when it changes."""
+    if _not_here('listen'):
+        return _not_here('listen')
+    d = request.get_json(silent=True) or {}
+    if 'opus_bitrate' in d:
+        rate = str(d['opus_bitrate'])
+        if not _mixer.listener.set_opus_bitrate(rate):
+            return jsonify(ok=False, err='unknown bitrate'), 400
+        _mixer.save_listen_bitrate(rate)
+    return jsonify(ok=True, listen=_mixer.listener.status())
 
 
 @bp.route('/api/cam/whep', methods=['POST'])
@@ -1538,7 +1561,7 @@ def init_mixer(app):
     # A fader drag is ~20 POSTs/s: keep the successful ones (and the meter/event plumbing) out of
     # the journal. Anything that was NOT 2xx still gets logged, so rejected control is visible.
     noisy = ('/mixer/api/set', '/mixer/api/events', '/mixer/api/feed', '/mixer/api/node', '/mixer/api/mute',
-             '/mixer/api/cam/set',
+             '/mixer/api/cam/set', '/mixer/api/listen/set',
              '/mixer/api/listenpos', '/mixer/api/sp/tracks', '/mixer/api/sp/playlists', '/mixer/api/sp/search')
     ansi, status = re.compile(r'\x1b\[[0-9;]*m'), re.compile(r'HTTP/[\d.]+" (\d{3}) ')
 

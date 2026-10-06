@@ -101,6 +101,8 @@ def _from_frame_start(buf):
     return b''
 
 
+OPUS_RATES = ['64k', '96k', '128k', '160k']      # Listen card choices for the low-latency stream (v3.5)
+
 _BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
 _RATES = [44100, 48000, 32000]
 
@@ -143,6 +145,21 @@ class Listener:
         self._procs = []
         self._idle_since = None
         self._gen = 0
+
+    def set_opus_bitrate(self, rate):
+        """Change the low-latency stream's bitrate. A running pipeline is respawned (MP3 listeners
+        carry on; WebRTC listeners reconnect -- the page does that by itself)."""
+        rate = str(rate)
+        if rate not in OPUS_RATES:
+            return False
+        if rate != self.opus_bitrate:
+            self.opus_bitrate = rate
+            with self.lock:
+                running = self.running
+            if running and self.rtc_url:
+                self._restart_encoder('opus bitrate ' + rate)
+            self._status()
+        return True
 
     # ── feed selection ──
     def _write_ctl(self):
@@ -224,6 +241,8 @@ class Listener:
             'pair':      list(self.pair),
             'peak':      [round(p, 1) for p in self.peak],
             'overruns':  self.overruns,
+            'opus_bitrate': self.opus_bitrate,
+            'opus_rates':   OPUS_RATES,
         }
 
     def _status(self):
