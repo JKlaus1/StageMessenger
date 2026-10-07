@@ -94,6 +94,11 @@ AES50 A, 81–128 AES50 B, 129–160 card, 161–166 aux in; 169–184 = Local O
 |---|---|
 | go-librespot → `spotify_out` → `xlive_pi` → USB playback **1/2** | arrives as **Card in 1/2**. No console write. Audible only where something is sourced from Card 1/2: *Routing › Aux In Remap = Card 1-4* puts it on **Aux In 1/2** (matches the default pinned strip `spotify.strip.x32 = aux/1`), or route an input block / user-in (`/config/userrout/in/NN` = 129/130) to Card 1-2 for a channel and set `spotify.strip.x32` to that channel (`ch/31` …). |
 
+**X-LIVE: playback source must be USB.** `/-prefs/card/URECplayb` 0 = SD (card inputs to the console come
+from the SD player; the USB return is silently dropped) / 1 = USB. Setup › Card on the console. SD
+*recording* is unaffected. Found the hard way 2026-10-06: Pi streaming (`pcm0p` RUNNING), nothing metered,
+until this was flipped. `/config/routing/IN/AUX = 12` is `CARD1-6` on X32 Rack fw 4.15 (verified working).
+
 Watch-outs: a console whose **PLAY** input blocks are `CARD1-8…` (stock) will put Stage Rig on Ch 1/2
 whenever `routswitch` = PLAY (virtual soundcheck, or an X-LIVE on `URECrout AUTO` going into SD
 playback). go-librespot only opens the USB device while a track plays.

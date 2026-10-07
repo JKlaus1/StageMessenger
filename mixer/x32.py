@@ -50,6 +50,9 @@ Protocol facts verified on an M32C fw 4.06-8 with an X-LIVE card (Oct 2026 probe
     Card prefs: URECsdsel 0 SD1 / 1 SD2, sd1state|sd2state 1 READY / 0 none, sd1info '31 GB - 1h, 23m,
     47s'. errorcode 6 'System error: 6' sat there through every normal operation -> treated as benign.
     PLAY with URECrout AUTO flips routswitch to PLAY (inputs = playback) and STOP flips it back.
+  * /-prefs/card/URECplayb 0 SD / 1 USB = what feeds the console's CARD INPUTS. Must be 1 for anything the
+    Pi plays (Spotify -> Card 1/2) to reach the console; 0 drops the USB return silently (X32 Rack fw 4.15,
+    2026-10-06). /config/routing/IN/AUX 12 = CARD1-6 on fw 4.15.
 """
 import socket
 import struct
