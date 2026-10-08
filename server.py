@@ -95,6 +95,43 @@ def display():
     return send_from_directory('public', 'display.html')
 
 
+# ── Installable app (Android "Install app" / home-screen, full screen) ─────────
+# public/pwa.js links each page to /app.webmanifest?start=<that page's path+query>, so whatever
+# page you install from (an auto-join link, /mixer?view=console, ...) is what the icon opens.
+_PWA = {   # path prefix -> (name, short_name, icon, scope)
+    '/mixer':   ('Stage Messenger Mixer', 'Mixer', 'mixer', '/mixer'),
+    '/control': ('Stage Messenger Control', 'SM Control', 'control', '/'),
+    '/display': ('Stage Monitor', 'Stage Mon', 'messenger', '/'),
+    '/':        ('Stage Messenger', 'Messenger', 'messenger', '/'),
+}
+
+@app.route('/app.webmanifest')
+def app_manifest():
+    import json
+    from urllib.parse import urlsplit, parse_qs
+    start = flask_request.args.get('start', '/')
+    u = urlsplit(start)
+    if u.scheme or u.netloc or not u.path.startswith('/') or start.startswith('//'):
+        start, u = '/', urlsplit('/')
+    key = next(k for k in _PWA if k == '/' or u.path == k or u.path.startswith(k + '/'))
+    name, short, icon, scope = _PWA[key]
+    who = (parse_qs(u.query).get('name') or [''])[0].strip().upper()[:16]
+    if key == '/' and who:                      # one icon per auto-join link
+        name, short = f'Stage Messenger — {who}', who.title()[:12]
+    m = {
+        'id': start, 'name': name, 'short_name': short,
+        'start_url': start, 'scope': scope,
+        'display': 'fullscreen', 'display_override': ['fullscreen', 'standalone'],
+        'orientation': 'any',
+        'background_color': '#0d0d1a', 'theme_color': '#0d0d1a',
+        'icons': [{'src': f'/pwa/{icon}-{px}.png', 'sizes': f'{px}x{px}', 'type': 'image/png',
+                   'purpose': p} for px in (192, 512) for p in ('any', 'maskable')],
+    }
+    resp = app.response_class(json.dumps(m), mimetype='application/manifest+json')
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+
 # ── Socket events ──────────────────────────────────────────────────────────────
 
 @socketio.on('connect')
