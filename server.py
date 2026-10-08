@@ -10,19 +10,8 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'stage-messenger-secret'
 
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
-# ── WING remote mixer + listen-back (/mixer) — optional, never blocks messaging ──
-try:
-    from mixer import init_mixer
-    init_mixer(app)
-except Exception as _e:
-    print(f'[mixer] disabled: {_e}')
-
-# ── Venue WiFi page (/wifi local, /mixer/wifi remote) — optional, never blocks messaging ──
-try:
-    from netwifi import init_netwifi
-    init_netwifi(app)
-except Exception as _e:
-    print(f'[wifi] disabled: {_e}')
+# The remote mixer (/mixer) and the venue WiFi page now live in their own repo: JKlaus1/mixer (:3000).
+# This is the chat only. Default port 3001 so both can run on one Pi.
 
 # ── Device registry ────────────────────────────────────────────────────────────
 # { sid: { name, type, role, room, canSend } }
@@ -104,11 +93,8 @@ def display():
 
 # ── Installable app (Android "Install app" / home-screen, full screen) ─────────
 # public/pwa.js links each page to /app.webmanifest?start=<that page's path+query>, so whatever
-# page you install from (an auto-join link, ...) is what the icon opens. The mixer app always opens
-# the console view, and its name comes from this Pi's mixer_config.json ("app_name", optional
-# "app_short_name"; set with mixer/set_app_name.sh) -- read per request, so no restart needed.
+# page you install from (an auto-join link, ...) is what the icon opens.
 _PWA = {   # path prefix -> (name, short_name, icon, scope)
-    '/mixer':   ('Stage Messenger Mixer', 'Mixer', 'mixer', '/mixer'),
     '/control': ('Stage Messenger Control', 'SM Control', 'control', '/'),
     '/display': ('Stage Monitor', 'Stage Mon', 'messenger', '/'),
     '/':        ('Stage Messenger', 'Messenger', 'messenger', '/'),
@@ -128,17 +114,6 @@ def app_manifest():
     app_id = start
     if key == '/' and who:                      # one icon per auto-join link
         name, short = f'Stage Messenger — {who}', who.title()[:12]
-    if key == '/mixer':                         # one mixer app per Pi, always the console view
-        app_id, start = '/mixer', '/mixer?view=console'
-        try:
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mixer_config.json')) as f:
-                cfg = json.load(f)
-        except Exception:
-            cfg = {}
-        n = str(cfg.get('app_name') or '').strip()[:45]
-        if n:
-            name = n
-            short = (str(cfg.get('app_short_name') or '').strip() or n)[:20]
     m = {
         'id': app_id, 'name': name, 'short_name': short,
         'start_url': start, 'scope': scope,
@@ -339,7 +314,7 @@ def local_ip():
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 3000))
+    port = int(os.environ.get('PORT', 3001))
     ip   = local_ip()
     print(f'\n✅  Stage Messenger  —  http://{ip}:{port}\n')
     print(f'  Landing:   http://{ip}:{port}/')

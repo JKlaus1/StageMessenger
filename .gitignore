@@ -4,5 +4,4 @@ __pycache__/
 *.log
 .env
 .DS_Store
-mixer_config.json
-mixer_state.json
+.venv/
