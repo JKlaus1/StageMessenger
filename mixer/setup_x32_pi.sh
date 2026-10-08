@@ -13,6 +13,8 @@
 #   never commit them:
 #     TURN_KEY_ID=... TURN_API_TOKEN=... bash setup_x32_pi.sh <TOKEN>
 #   Secrets are never printed. Re-running without the TURN vars keeps an existing key.
+#   Optional home-screen app name (Chrome "Install app"): APP_NAME="Presley Mixer" bash setup_x32_pi.sh <TOKEN>
+#   (later: bash ~/stage-messenger/mixer/set_app_name.sh "New Name")
 #
 # Safe to re-run: every step is idempotent. Lightboard (the lighting side) is
 # deliberately NOT installed — see Lightboard/install.sh for that.
@@ -50,7 +52,7 @@ fi
 
 log "3/7  mixer_config.json (console auto-detect, remote enabled, Spotify off, TURN key if given)"
 # Merge: keeps anything already there (camera settings, an earlier TURN key, etc.).
-TURN_KEY_ID="${TURN_KEY_ID:-}" TURN_API_TOKEN="${TURN_API_TOKEN:-}" \
+TURN_KEY_ID="${TURN_KEY_ID:-}" TURN_API_TOKEN="${TURN_API_TOKEN:-}" APP_NAME="${APP_NAME:-}" \
 python3 - "${MSG_DIR}/mixer_config.json" <<'PY'
 import json, os, sys
 p = sys.argv[1]
@@ -62,6 +64,8 @@ c.setdefault('spotify', {})['enabled'] = False   # off until mixer/setup_pi_play
 kid, tok = os.environ.get('TURN_KEY_ID', '').strip(), os.environ.get('TURN_API_TOKEN', '').strip()
 if kid and tok:
     c.setdefault('rtc', {}).update(turn_key_id=kid, turn_api_token=tok)
+if os.environ.get('APP_NAME', '').strip():
+    c['app_name'] = os.environ['APP_NAME'].strip()[:45]
 tmp = p + '.tmp'
 json.dump(c, open(tmp, 'w'), indent=2); os.replace(tmp, p)
 os.chmod(p, 0o600)

@@ -104,7 +104,9 @@ def display():
 
 # ── Installable app (Android "Install app" / home-screen, full screen) ─────────
 # public/pwa.js links each page to /app.webmanifest?start=<that page's path+query>, so whatever
-# page you install from (an auto-join link, /mixer?view=console, ...) is what the icon opens.
+# page you install from (an auto-join link, ...) is what the icon opens. The mixer app always opens
+# the console view, and its name comes from this Pi's mixer_config.json ("app_name", optional
+# "app_short_name"; set with mixer/set_app_name.sh) -- read per request, so no restart needed.
 _PWA = {   # path prefix -> (name, short_name, icon, scope)
     '/mixer':   ('Stage Messenger Mixer', 'Mixer', 'mixer', '/mixer'),
     '/control': ('Stage Messenger Control', 'SM Control', 'control', '/'),
@@ -123,10 +125,22 @@ def app_manifest():
     key = next(k for k in _PWA if k == '/' or u.path == k or u.path.startswith(k + '/'))
     name, short, icon, scope = _PWA[key]
     who = (parse_qs(u.query).get('name') or [''])[0].strip().upper()[:16]
+    app_id = start
     if key == '/' and who:                      # one icon per auto-join link
         name, short = f'Stage Messenger — {who}', who.title()[:12]
+    if key == '/mixer':                         # one mixer app per Pi, always the console view
+        app_id, start = '/mixer', '/mixer?view=console'
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mixer_config.json')) as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+        n = str(cfg.get('app_name') or '').strip()[:45]
+        if n:
+            name = n
+            short = (str(cfg.get('app_short_name') or '').strip() or n)[:20]
     m = {
-        'id': start, 'name': name, 'short_name': short,
+        'id': app_id, 'name': name, 'short_name': short,
         'start_url': start, 'scope': scope,
         'display': 'fullscreen', 'display_override': ['fullscreen', 'standalone'],
         'orientation': 'any',
