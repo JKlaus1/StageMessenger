@@ -548,6 +548,7 @@
     .hb { flex: none; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 7px;
       padding: .3rem .55rem; font-size: .6rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; line-height: 1.1; }
     .hb.on { border-color: var(--green); color: var(--green); }
+    a.hb { display: inline-block; text-decoration: none; }
     .cvo { display: none; }
     #cv-mode { display: none; }
     body.cvm { padding: 0; max-width: none; height: 100dvh; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
@@ -856,6 +857,7 @@
       <button class="hb cvo" id="cv-ls-btn" title="Listen">&#127911;</button>
       <button class="hb cvo" id="cv-mg-btn" title="Mute groups">MG</button>
       <button class="hb cvo" id="cv-set-btn" title="Layout, strip width, classic view">&#9881;</button>
+      <a class="hb" id="wifi-link" href="/mixer/wifi" title="Move the Pi onto a WiFi network">WIFI</a>
       <span id="alt-badge" title="The console is using every channel's ALT input">INPUTS ON ALT</span>
       <button id="solo-clear" title="Clear all solos">SOLO ✕</button>
       <div id="status"><span id="status-dot"></span><span id="status-text">Connecting</span></div>

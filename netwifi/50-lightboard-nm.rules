@@ -1,0 +1,9 @@
+// Allow the lightboard service user (pi) to manage NetworkManager
+// (scan / connect / save WiFi) without an interactive session.
+// Install to: /etc/polkit-1/rules.d/50-lightboard-nm.rules
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.user === "pi") {
+        return polkit.Result.YES;
+    }
+});

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Venue WiFi</title>
+<style>
+  :root{
+    --bg:#0a0a0f; --card:#13131c; --border:#1e1e2e; --text:#d4d4e8; --muted:#6a6a8a;
+    --accent:#e8630a; --green:#27ae60; --red:#c0392b; --amber:#f0a500;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{background:var(--bg);color:var(--text);font-family:system-ui,'Rajdhani',sans-serif;}
+  body{max-width:640px;margin:0 auto;padding:1rem;}
+  h1{font-size:1rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:0.75rem;color:var(--text);}
+  .muted{color:var(--muted);}
+  .top{display:flex;justify-content:space-between;align-items:baseline;}
+  .back{color:var(--muted);font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;text-decoration:none;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:0.85rem 1rem;margin-bottom:0.75rem;}
+  #status .row{display:flex;justify-content:space-between;font-size:0.8rem;margin:0.15rem 0;}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:0.4rem;vertical-align:middle;}
+  .dot.full{background:var(--green);} .dot.bad{background:var(--red);} .dot.unknown{background:var(--muted);}
+  button{font-family:inherit;cursor:pointer;}
+  .btn{width:100%;padding:0.7rem;background:var(--card);border:1px solid var(--border);border-radius:10px;
+       color:var(--text);font-size:0.8rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .btn:disabled{opacity:0.5;}
+  .net{display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.7rem 0.9rem;
+       border:1px solid var(--border);border-radius:10px;margin-bottom:0.4rem;background:var(--card);cursor:pointer;}
+  .net .name{font-size:0.85rem;font-weight:600;word-break:break-all;}
+  .net .meta{font-size:0.65rem;color:var(--muted);letter-spacing:0.05em;}
+  .net.active{border-color:var(--green);}
+  .badge{font-size:0.55rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--green);border:1px solid var(--green);
+         border-radius:6px;padding:0.1rem 0.35rem;}
+  .connect-box{margin-top:0.5rem;display:flex;gap:0.4rem;}
+  .connect-box input{flex:1;background:#0a0a12;border:1px solid var(--border);border-radius:8px;color:var(--text);
+       padding:0.55rem 0.7rem;font-size:0.85rem;font-family:inherit;}
+  .connect-box .go{flex:0 0 auto;padding:0.55rem 1rem;background:var(--accent);border:1px solid var(--accent);
+       border-radius:8px;color:#fff;font-weight:700;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;}
+  #msg{font-size:0.78rem;padding:0.6rem 0.9rem;border-radius:10px;margin-bottom:0.75rem;display:none;}
+  #msg.info{display:block;background:#10233a;border:1px solid #1a3a6a;color:#9bd;}
+  #msg.ok{display:block;background:#0f2a1a;border:1px solid #1a5a3a;color:#7ddaaa;}
+  #msg.err{display:block;background:#2a0f0f;border:1px solid #5a1a1a;color:#f99;}
+  .saved-item{display:flex;justify-content:space-between;align-items:center;font-size:0.8rem;padding:0.4rem 0;border-bottom:1px solid var(--border);}
+  .saved-item:last-child{border-bottom:none;}
+  .forget{background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);
+          font-size:0.6rem;letter-spacing:0.08em;text-transform:uppercase;padding:0.3rem 0.6rem;}
+  .label{font-size:0.6rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin:0.5rem 0 0.4rem;}
+</style>
+</head>
+<body>
+  <div class="top"><h1>Venue WiFi</h1><a class="back" href="/mixer">&larr; Mixer</a></div>
+
+  <div class="card" id="status">
+    <div class="row"><span class="muted">Pi</span><span id="st-host">—</span></div>
+    <div class="row"><span class="muted">Network</span><span id="st-ssid">—</span></div>
+    <div class="row"><span class="muted">IP</span><span id="st-ip">—</span></div>
+    <div class="row"><span class="muted">Internet</span><span id="st-conn"><span class="dot unknown"></span>—</span></div>
+  </div>
+
+  <div id="msg"></div>
+  <div id="portal-action" style="display:none;margin-bottom:0.75rem;">
+    <button class="btn primary" id="portal-btn">Complete portal on Pi screen</button>
+  </div>
+
+  <button class="btn primary" id="scan-btn" style="margin-bottom:0.75rem;">Scan for networks</button>
+
+  <div id="net-list"></div>
+
+  <div class="label" style="margin-top:1.25rem;">Saved networks</div>
+  <div class="card" id="saved-list"><span class="muted" style="font-size:0.78rem;">—</span></div>
+
+<script>
+  // Same page is served at /wifi (local) and /mixer/wifi (remote); the API sits under whichever one loaded it.
+  const API = location.pathname.replace(/\/+$/, '') + '/api';
+  let KIOSK = false;   // the Pi has a touchscreen kiosk to show a captive portal on
+  const $ = id => document.getElementById(id);
+  let selectedSsid = null;
+  let pollingConnect = false;
+  let lastAttempt = null;   // {ssid, secure, password} of the most recent connect try
+
+  function showMsg(kind, text){ const m=$('msg'); m.className=kind; m.textContent=text; }
+  function clearMsg(){ const m=$('msg'); m.className=''; m.textContent=''; }
+  function showPortalBtn(on){ $('portal-action').style.display = (on && KIOSK) ? 'block' : 'none'; }
+
+  $('portal-btn').addEventListener('click', portalLogin);
+  async function portalLogin(){
+    if(!lastAttempt) return;
+    showPortalBtn(false);
+    pollingConnect = true;
+    showMsg('info', 'Opening the venue login on the Pi’s touchscreen — go tap through it there. This page will update once you’re online.');
+    try{
+      await fetch(API + '/portal-login', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ssid:lastAttempt.ssid, password:lastAttempt.password})
+      });
+    }catch(e){ /* status poll takes over */ }
+  }
+
+  // ── Live status (self-scheduling, survives tunnel blips) ──────────────
+  async function refreshStatus(){
+    try{
+      const r = await fetch(API + '/status', {cache:'no-store'});
+      const d = await r.json();
+      KIOSK = !!d.kiosk;
+      if(d.hostname){ $('st-host').textContent = d.hostname + '.local'; }
+      $('st-ssid').textContent = d.ssid || '—';
+      $('st-ip').textContent   = d.ip   || '—';
+      const full = d.connectivity === 'full';
+      $('st-conn').innerHTML =
+        '<span class="dot ' + (full?'full':(d.connectivity==='unknown'?'unknown':'bad')) + '"></span>' +
+        (d.connectivity || '—');
+      handleConnectState(d.connect);
+    }catch(e){ /* tunnel may be mid-switch; keep polling */ }
+    finally{ setTimeout(refreshStatus, pollingConnect ? 2500 : 8000); }
+  }
+
+  function handleConnectState(c){
+    if(!c) return;
+    const s = c.status;
+    if(s==='connecting' || s==='checking'){
+      pollingConnect = true; showPortalBtn(false);
+      showMsg('info', (c.detail || 'Working…'));
+    }else if(s==='portal'){
+      pollingConnect = true; showPortalBtn(false);
+      showMsg('info', c.detail || 'Tap through the login on the Pi’s touchscreen.');
+    }else if(s==='success'){
+      if(pollingConnect){ showMsg('ok', c.detail || 'Connected.'); loadSaved(); }
+      pollingConnect = false; showPortalBtn(false);
+    }else if(s==='no_internet'){
+      if(pollingConnect){
+        showMsg('err', c.detail || 'No internet — reverted.');
+        if(lastAttempt) showPortalBtn(true);   // offer to finish a captive portal on the Pi screen
+      }
+      pollingConnect = false;
+    }else if(s==='portal_timeout'){
+      if(pollingConnect){ showMsg('err', c.detail || 'Portal not completed — reverted.'); }
+      pollingConnect = false; showPortalBtn(false);
+    }else if(s==='failed'){
+      if(pollingConnect){ showMsg('err', c.detail || 'Connection failed.'); }
+      pollingConnect = false; showPortalBtn(false);
+    }
+  }
+
+  // ── Scan ──────────────────────────────────────────────────────────────
+  $('scan-btn').addEventListener('click', scan);
+  async function scan(){
+    const btn=$('scan-btn'); btn.disabled=true; btn.textContent='Scanning…';
+    try{
+      const r = await fetch(API + '/scan', {cache:'no-store'});
+      const d = await r.json();
+      renderNets(d.networks || []);
+    }catch(e){ showMsg('err','Scan failed.'); }
+    finally{ btn.disabled=false; btn.textContent='Scan for networks'; }
+  }
+
+  function renderNets(nets){
+    const wrap=$('net-list'); wrap.innerHTML='';
+    if(!nets.length){ wrap.innerHTML='<div class="muted" style="font-size:0.8rem;">No networks found.</div>'; return; }
+    nets.forEach(n=>{
+      const row=document.createElement('div');
+      row.className='net' + (n.in_use?' active':'');
+      const lock = n.secure ? '🔒' : '🔓';
+      const bars = n.signal>=70?'▂▄▆█':n.signal>=50?'▂▄▆':n.signal>=30?'▂▄':'▂';
+      row.innerHTML =
+        '<div><div class="name">'+escapeHtml(n.ssid)+'</div>'+
+        '<div class="meta">'+lock+'  '+bars+'  '+n.signal+'%</div></div>'+
+        (n.in_use?'<span class="badge">Connected</span>':'');
+      row.addEventListener('click', ()=>selectNet(n, row));
+      wrap.appendChild(row);
+    });
+  }
+
+  function selectNet(n, row){
+    clearMsg();
+    document.querySelectorAll('.connect-box').forEach(b=>b.remove());
+    selectedSsid = n.ssid;
+    const box=document.createElement('div');
+    box.className='connect-box';
+    box.innerHTML = n.secure
+      ? '<input type="password" id="pw" placeholder="Password" autocomplete="off"><button class="go" id="go">Connect</button>'
+      : '<button class="go" id="go" style="flex:1;">Connect (open)</button>';
+    row.after(box);
+    $('go').addEventListener('click', ()=>connect(n.ssid, n.secure));
+    const pw=$('pw'); if(pw){ pw.focus(); pw.addEventListener('keydown', e=>{ if(e.key==='Enter') connect(n.ssid,n.secure); }); }
+  }
+
+  async function connect(ssid, secure){
+    const pw = $('pw');
+    const password = (secure && pw) ? pw.value : '';
+    if(secure && !password){ pw.focus(); return; }
+    lastAttempt = {ssid, secure, password};
+    showPortalBtn(false);
+    showMsg('info', 'Connecting to ' + ssid + '… keep this page open. If you’re on the WiFi being switched, or the tunnel, it may blink while the Pi switches networks — it’ll come back.');
+    pollingConnect = true;
+    try{
+      const r = await fetch(API + '/connect', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ssid, password})
+      });
+      const d = await r.json();
+      if(!d.ok){ showMsg('err', d.error || 'Could not start.'); pollingConnect=false; }
+    }catch(e){ /* request itself may drop as the network switches; status poll takes over */ }
+  }
+
+  // ── Saved networks ────────────────────────────────────────────────────
+  async function loadSaved(){
+    try{
+      const r = await fetch(API + '/saved', {cache:'no-store'});
+      const d = await r.json();
+      const wrap=$('saved-list');
+      if(!d.saved || !d.saved.length){ wrap.innerHTML='<span class="muted" style="font-size:0.78rem;">None saved yet.</span>'; return; }
+      wrap.innerHTML='';
+      d.saved.forEach(name=>{
+        const item=document.createElement('div');
+        item.className='saved-item';
+        item.innerHTML='<span>'+escapeHtml(name)+'</span>';
+        const b=document.createElement('button');
+        b.className='forget'; b.textContent='Forget';
+        b.addEventListener('click', ()=>forget(name));
+        item.appendChild(b);
+        wrap.appendChild(item);
+      });
+    }catch(e){}
+  }
+  async function forget(name){
+    try{
+      await fetch(API + '/forget', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
+      loadSaved();
+    }catch(e){}
+  }
+
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  refreshStatus();
+  loadSaved();
+</script>
+</body>
+</html>

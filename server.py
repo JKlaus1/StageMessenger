@@ -17,6 +17,13 @@ try:
 except Exception as _e:
     print(f'[mixer] disabled: {_e}')
 
+# ── Venue WiFi page (/wifi local, /mixer/wifi remote) — optional, never blocks messaging ──
+try:
+    from netwifi import init_netwifi
+    init_netwifi(app)
+except Exception as _e:
+    print(f'[wifi] disabled: {_e}')
+
 # ── Device registry ────────────────────────────────────────────────────────────
 # { sid: { name, type, role, room, canSend } }
 connected_devices = {}

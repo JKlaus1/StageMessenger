@@ -130,6 +130,9 @@ else
   sudo cloudflared service install "$TOKEN"
 fi
 
+log "WiFi page by hostname (polkit for nmcli, mDNS, port-80 redirect -> /wifi)"
+sudo bash "${MSG_DIR}/netwifi/install_netwifi.sh"
+
 log "Enable + start"
 sudo systemctl daemon-reload
 sudo systemctl enable --now avahi-daemon stage-messenger mediamtx cloudflared
@@ -143,4 +146,5 @@ echo
 echo "Pi hostname: $(hostname)   addresses: $(hostname -I)"
 echo
 echo "Local:   http://$(hostname).local:3000/mixer   (same network as the Pi)"
+echo "WiFi:    http://$(hostname).local/             (set up a new network; same network as the Pi)"
 echo "Reboot once so eth0/WiFi come up in their final roles:   sudo reboot"
