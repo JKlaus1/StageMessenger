@@ -246,6 +246,49 @@ def click_time(path):
     return (ffprobe_start(path, 'a:0') or 0.0) + (pk // 2) / 48000.0
 
 
+def test_cam_sub_blend():
+    """v4.2: the Listen "+ Subs" also goes into the video's console sound (picker 'blend' line)."""
+    print('cam: + Subs blend (picker + cam control line + Mixer wiring)')
+    with tempfile.TemporaryDirectory() as tmp:
+        f = os.path.join(tmp, 'c')
+        open(f, 'w').write('4 5 120 /dev/shm/x y.pcm\nblend 10 11 0.5\n')
+        check('parse: pair, delay, fifo (spaces ok) + blend', picker.parse_cam_ctl(f) == (4, 5, 120 * 48, '/dev/shm/x y.pcm', (10, 11, 0.5)),
+              picker.parse_cam_ctl(f))
+        open(f, 'w').write('4 5 0 /p.pcm\n')
+        check('parse: no 2nd line -> blend None (old format)', picker.parse_cam_ctl(f) == (4, 5, 0, '/p.pcm', None))
+        open(f, 'w').write('4 5 0 /p.pcm\nblend 1 2 x\nblend 1 2 0\n')
+        check('parse: bad / zero gain blend ignored', picker.parse_cam_ctl(f)[4] is None)
+        open(f, 'w').write('off\nblend 1 2 1\n')
+        check('parse: off stays off', picker.parse_cam_ctl(f) is None)
+
+        N, g = 9600, 0.5
+        out, cam, dt, err = run_picker(tmp, FAKE_RAMP, [str(N), '0.8'], cam_line=f'2 3 0 FIFO\nblend 10 11 {g}')
+        L, C = frames_of(out), frames_of(cam)
+        check('blend: listen pair untouched', len(L) == N and all(L[i] == (val(0, i), val(1, i)) for i in range(0, N, 97)))
+        exp = lambda i: tuple(int(round(val(ch, i) + g * (val(10, i) + val(11, i)) / 2)) for ch in (2, 3))
+        ok = len(C) >= N - 480 and all(abs(C[i][0] - exp(i)[0]) <= 1 and abs(C[i][1] - exp(i)[1]) <= 1
+                                       for i in range(480, min(len(C), N), 59))
+        check('blend: cam = pair + gain*(SL+SR)/2 after the 10 ms ramp', ok, (C[480:482], [exp(480), exp(481)]))
+        check('blend: no picker errors', 'Traceback' not in err and 'blend failed' not in err, err[-200:])
+
+        ctl = os.path.join(tmp, 'cam.ctl')
+        lst = Listener(capture_cmd=['false'], bitrate='64k', cam_ctl=ctl)
+        feeds = lambda: [{'id': 'main1', 'usb': [1, 2]}, {'id': 'main2', 'usb': [3, 4]}, {'id': 'bus1', 'usb': [5, 6]}]
+        want = {'v': (2, 3, 0.5)}
+        c = Cam({'enabled': True, 'feed': 'main1'}, lst, feeds, probe=lambda: (False, False, 0), ctl_path=ctl,
+                video_input=LAVFI, blend=lambda fid: want['v'] if fid == 'main1' else None)
+        c.running, c.audio_kind, c._fifo = True, 'console', '/tmp/v.pcm'
+        c._write_ctl()
+        check('cam ctl: Main LR + subs -> blend line', open(ctl).read() == '0 1 0 /tmp/v.pcm\nblend 2 3 0.500000\n', open(ctl).read())
+        check('cam status says subs on', c.status()['subs'] is True)
+        want['v'] = None; c.blend_changed()
+        check('cam ctl: subs off -> plain line', open(ctl).read() == '0 1 0 /tmp/v.pcm\n', open(ctl).read())
+        want['v'] = (2, 3, 2.0); c.set_feed('bus1')
+        check('cam ctl: another feed -> no blend', open(ctl).read() == '4 5 0 /tmp/v.pcm\n', open(ctl).read())
+        c.running = False; c._write_ctl()
+        check('cam ctl: off when not running', open(ctl).read() == 'off\n')
+
+
 def make_cam(tmp, delay_ms, out_file, feeds, secs_capture=10, **cfg):
     ctl = os.path.join(tmp, 'cam.ctl')
     lst = Listener(capture_cmd=[sys.executable, '-c', FAKE_RT, str(secs_capture)], bitrate='64k', cam_ctl=ctl)
@@ -539,6 +582,18 @@ def test_cam_api():
         check('unknown sound bitrate rejected', c.post('/mixer/api/cam/set', json={'audio_bitrate': '999k'}).status_code == 400)
         ls = st.get('listen') or {}
         check('listen status: Opus bitrate 128k + choices', ls.get('opus_bitrate') == '128k' and ls.get('opus_rates') == ['64k', '96k', '128k', '160k'], ls)
+        seen = []
+        orig = mx.cam.blend_changed
+        mx.cam.blend_changed = lambda: (seen.append(mx.cam._blend()), orig())
+        mx.cam.feed = 'main1'
+        c.post('/mixer/api/listen/set', json={'sub_on': True, 'sub_db': 6})
+        b = mx.cam._blend()
+        check('v4.2: Listen + Subs reaches the video (Main 2 pair, +6 dB)', seen and b and abs(b[2] - 10 ** 0.3) < 1e-3
+              and b[:2] == mx._blend_for('main1', mx.feeds())[:2], (seen, b))
+        c.post('/mixer/api/listen/set', json={'sub_on': False})
+        check('v4.2: + Subs off -> video sound plain again', mx.cam._blend() is None and seen[-1] is None, seen)
+        mx.cam.blend_changed = orig
+        mx.cam.feed = 'bus2'                          # back to what the checks below expect
         r = c.post('/mixer/api/listen/set', json={'opus_bitrate': '64k'})
         check('set the Listen low-latency bitrate', r.status_code == 200 and r.get_json()['listen']['opus_bitrate'] == '64k'
               and mx.listener.opus_bitrate == '64k', r.get_json())
@@ -579,7 +634,7 @@ def test_cam_api():
         check('remove: gone, choice back to automatic', r.get('ok') and not any(x['id'] == cid for x in r['cam']['sources']) and mx.cam.choice == '', r.get('cam', {}).get('choice'))
         check('remove unknown -> 400', c.post('/mixer/api/cam/remove', json={'id': 'nope'}).status_code == 400)
         c.post('/mixer/api/cam/set', json={'delay_ms': 320})
-        check('Listen bitrate saved in mixer_state.json', sf.get('listen') == {'opus_bitrate': '64k'}, sf.get('listen'))
+        check('Listen bitrate saved in mixer_state.json', sf.get('listen') == {'opus_bitrate': '64k', 'sub_on': False, 'sub_db': 6.0}, sf.get('listen'))
         check('listen feed untouched by cam feed change', mx.feed_id == 'main1', mx.feed_id)
         r = c.delete('/mixer/api/cam/session/not-a-session')
         check('session delete validates the id', r.status_code == 400)
@@ -952,6 +1007,7 @@ def main():
     test_camout_never_blocks()
     test_picker_end_to_end()
     test_picker_stalled_cam_reader()
+    test_cam_sub_blend()
     test_cam_pipeline()
     test_cam_video_only_and_idle()
     test_cam_capture_unavailable()

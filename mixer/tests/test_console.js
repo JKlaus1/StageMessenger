@@ -368,6 +368,34 @@ const sets = (P, a) => P.posts.filter(p => p.url === '/mixer/api/set' && p.body 
   check('switch builds the console', R.d.body.classList.contains('cvm') && keys(R.d).length === 4);
   check('no script errors (switch)', R.errors.length === 0, R.errors);
 
+  // v4.2: header SOLO next to CLASSIC, console choice (Auto / WING / X32), video follows "+ Subs"
+  console.log('v4.2 header / console choice / video + Subs');
+  const V = load(fs.readFileSync(path.join(FX, 'x32.html'), 'utf8'), snap, API);
+  await tick(80);
+  const vd = V.d, cons = v => vd.querySelector(`#cv-cons button[data-v="${v}"]`);
+  check('SOLO sits just left of CLASSIC', vd.getElementById('solo-clear').nextElementSibling.id === 'view-btn');
+  check('pinned console: choice greyed out, X32 shown', [...vd.querySelectorAll('#cv-cons button')].every(b => b.disabled)
+        && cons('x32').classList.contains('sel') && /pinned/.test(vd.getElementById('cv-cons-note').textContent));
+  V.push({ t: 'cpref', v: { v: 'auto', pinned: false, note: '', console: 'x32' } }); await tick();
+  check('auto: AUTO selected, buttons enabled', cons('auto').classList.contains('sel') && !cons('wing').disabled);
+  V.posts.length = 0;
+  cons('wing').click(); await tick();
+  check('tap WING posts the choice', V.posts.some(p => p.url === '/mixer/api/console/pref' && p.body.pref === 'wing'), V.posts);
+  check('WING selected + looking note', cons('wing').classList.contains('sel') && /looking/.test(vd.getElementById('cv-cons-note').textContent));
+  V.push({ t: 'cpref', v: { v: 'wing', pinned: false, note: 'no WING found yet \u2013 staying on M32C, still looking', console: 'x32' } }); await tick();
+  check('not-found note shown', /no WING found yet/.test(vd.getElementById('cv-cons-note').textContent));
+  V.push({ t: 'feed', id: 'mon1' }); await tick();
+  check('+ Subs hidden: Listen on Monitor 1, no video', vd.getElementById('blend-row').hidden);
+  const cam = Object.assign({}, snap.cam, { enabled: true, available: true, audio: true, feed: 'main1', active: 'u1', choice: 'u1',
+    sources: [{ id: 'u1', name: 'Cam', kind: 'usb', online: true, mic: false, auto: false, rotate: '0', fixed: false }] });
+  V.push({ t: 'cam', s: cam }); await tick();
+  check('+ Subs shown: the video sound is Main LR (it follows the slider too)', !vd.getElementById('blend-row').hidden);
+  V.push({ t: 'cam', s: Object.assign({}, cam, { feed: 'mon1' }) }); await tick();
+  check('+ Subs hidden again: video on Monitor 1', vd.getElementById('blend-row').hidden);
+  V.push({ t: 'feed', id: 'main1' }); await tick();
+  check('+ Subs shown: Listen back on Main LR', !vd.getElementById('blend-row').hidden);
+  check('no script errors (v4.2)', V.errors.length === 0, V.errors);
+
   console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
   process.exit(fails ? 1 : 0);
 })();

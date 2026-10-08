@@ -284,7 +284,9 @@ class Mixer:
         self._gen = 0                                 # driver generation: callbacks from a swapped-out driver are dropped
         self.finder = Finder(cfg.get('mixer_iface', 'eth0'), cfg.get('mixer_scan') or [])
         self.pinned = str(cfg.get('mixer_ip') or '').strip()
-        self.want = forced_type(cfg)
+        self.cfg_want = forced_type(cfg)
+        self.want = self._pref_want(self._state_raw.get('console_pref'))   # v4.2: page choice wins over the config
+        self.pref_note = ''
         self._rec_pub = {}                                        # throttle for 10 Hz etime / sdfree pushes
         self._rec_tail = set()                                    # throttled addrs awaiting a trailing publish
         found = self._find(sweep=False)          # quick at boot; the watcher sweeps the subnet
@@ -326,7 +328,8 @@ class Mixer:
         self.select_feed(self.feed_id, publish=False)               # writes the route (blend) for the start
         self.cam = Cam(cam_cfg, self.listener, self.feeds, self.cam_probe, self._cam_ctl,
                        on_status=lambda st: self.hub.publish({'t': 'cam', 's': st}),
-                       save=self._save_cam, out_url=cam_cfg.get('rtsp', 'rtsp://127.0.0.1:8554/cam'))
+                       save=self._save_cam, out_url=cam_cfg.get('rtsp', 'rtsp://127.0.0.1:8554/cam'),
+                       blend=lambda fid: self._blend_for(fid, self.feeds()))   # v4.2: video follows "+ Subs"
         if self.cam.enabled and cam_cfg.get('probe', True):
             self.cam.start_probe()                    # Wi-Fi cameras online / offline, auto-rotate (v3.8)
         self.spotify = None                           # the Spotify card is optional: never blocks the mixer
@@ -383,6 +386,52 @@ class Mixer:
         threading.Thread(target=self.ensure_patch, kwargs={'force': True}, daemon=True).start()
         return True
 
+    # ── v4.2: which console to use (page setting: Auto / WING / X32; Pi-wide) ──
+    def _pref_want(self, pref):
+        """'auto' -> None (search for any), 'wing' / 'x32' -> that type, missing -> mixer_type from the config."""
+        if pref == 'auto':
+            return None
+        return pref if pref in ('wing', 'x32') else self.cfg_want
+
+    def console_pref(self):
+        return {'v': self.want or 'auto', 'pinned': bool(self.pinned), 'note': self.pref_note,
+                'console': self.console}
+
+    def set_console_pref(self, pref):
+        """Save the choice and switch now if that console answers. False for a bad value / pinned IP."""
+        pref = str(pref).lower()
+        pref = {'m32': 'x32'}.get(pref, pref)
+        if pref not in ('auto', 'wing', 'x32') or self.pinned:
+            return False
+        with self._ovr_lock:
+            self._state_raw = {**self._state_raw, 'console_pref': pref}
+            self._write_state()
+        self.want = self._pref_want(pref)
+        self.pref_note = 'looking\u2026' if self.want and self.want != self.console else ''
+        self.hub.publish({'t': 'cpref', 'v': self.console_pref()})
+        threading.Thread(target=self._pref_switch, daemon=True, name='console-pref').start()
+        return True
+
+    def _pref_switch(self):
+        want = self.want
+        f = self._find(sweep=True)
+        if want != self.want:
+            return                                    # changed again meanwhile: that call handles it
+        if f and (f['kind'] != self.console or f['ip'] != self.ip) and (not want or f['kind'] == want):
+            # auto: only move when the current console is gone; a chosen type moves as soon as it answers
+            if want or not (self.wing.connected and time.time() - self.wing.last_rx <= 2 * self.wing.KA + 1):
+                print(f"[mixer] console choice {want or 'auto'}: switching to {f['model']} {f['ip']}", flush=True)
+                self.pref_note = ''
+                self.swap(f)
+                self.hub.publish({'t': 'cpref', 'v': self.console_pref()})
+                return
+        if want and self.console != want:
+            other = 'X32/M32' if want == 'x32' else 'WING'
+            self.pref_note = f'no {other} found yet \u2013 staying on {self.caps["model"]}, still looking'
+        else:
+            self.pref_note = ''
+        self.hub.publish({'t': 'cpref', 'v': self.console_pref()})
+
     def set_sub_blend(self, on=None, db=None):
         if on is not None:
             self.sub_on = bool(on)
@@ -394,6 +443,9 @@ class Mixer:
             self._state_raw = {**self._state_raw, 'listen': lst}
             self._write_state()
         self.select_feed(self.feed_id, publish=False)
+        cam = getattr(self, 'cam', None)
+        if cam:
+            cam.blend_changed()                           # v4.2: the video's Main LR sound follows it too
 
     # ── console: find / attach / watch / swap (v3.3) ──
     def _find(self, sweep=True):
@@ -484,12 +536,13 @@ class Mixer:
         while True:
             time.sleep(every)
             d = self.wing
-            if d.connected and time.time() - d.last_rx <= 2 * d.KA + 1:
+            wrong = bool(self.want) and self.console != self.want      # v4.2: the page asked for the other type
+            if d.connected and time.time() - d.last_rx <= 2 * d.KA + 1 and not wrong:
                 quiet_since = time.time()
                 continue                              # liveness replies arrive every KA s
             if self.pinned and self.want:
                 continue                              # fully configured: the driver reconnects by itself
-            if time.time() - quiet_since < every:
+            if time.time() - quiet_since < every and not wrong:
                 continue                              # give a fresh driver a moment to hear its console
             n += 1
             f = self._find(sweep=(n % 4 == 1))        # broadcast every pass, subnet sweep every 4th
@@ -502,10 +555,15 @@ class Mixer:
                 continue                              # same console: the driver will pick it back up
             self.swap(f)
             quiet_since, n = time.time(), 0
+            if self.pref_note:
+                self.pref_note = ''
+                self.hub.publish({'t': 'cpref', 'v': self.console_pref()})
 
     def swap(self, info):
         """Hot-swap to the console in `info` (discovery result). Pages reload when the caps change."""
         with self._swap_lock:
+            if info['kind'] == self.console and info['ip'] == self.ip and self.found:
+                return                                # v4.2: watcher + console choice raced to the same console
             old_drv, old_m, old = self.wing, self.meters, f"{self.caps['model']} {self.ip or '-'}"
             self._gen += 1                            # silence the old driver's callbacks right away
             old_drv.stop(); old_m.stop()
@@ -1258,6 +1316,7 @@ class Mixer:
             'recs':   self.rec_sessions,
             'sp':     self.spotify.snapshot() if self.spotify else None,
             'layouts': self.layouts(),
+            'cpref':  self.console_pref(),
         }
 
 
@@ -1366,6 +1425,17 @@ def api_set():
 def api_feed():
     d = request.get_json(silent=True) or {}
     return jsonify(ok=_mixer.select_feed(str(d.get('id', ''))))
+
+
+@bp.route('/api/console/pref', methods=['POST'])
+def api_console_pref():
+    """v4.2: Auto / WING / X32 -- which console this Pi uses (for when both are on the network)."""
+    d = request.get_json(silent=True) or {}
+    if _mixer.pinned:
+        return jsonify(ok=False, err='console IP is pinned in mixer_config.json (use set_console.sh)'), 409
+    if not _mixer.set_console_pref(d.get('pref', '')):
+        return jsonify(ok=False, err='pref must be auto, wing or x32'), 400
+    return jsonify(ok=True, cpref=_mixer.console_pref())
 
 
 @bp.route('/api/patch', methods=['POST'])

@@ -113,12 +113,11 @@ class Finder:
             targets.append(str(net[1].network.broadcast_address))
         self.last_where = (f'{self.iface} {net[1].network}' if net else
                            (f'{self.iface} (no IPv4 address)' if self.iface else 'configured addresses'))
-        found = self._ask(local, targets)
+        keep = (lambda fs: [f for f in fs if f['kind'] == want]) if want else (lambda fs: fs)
+        found = keep(self._ask(local, targets))       # v4.2: filter first, so "only the other type answered" still sweeps
         if not found and sweep and net and net[1].network.prefixlen >= SWEEP_MAX_PREFIX:
             hosts = [str(h) for h in net[1].network.hosts() if str(h) != local and str(h) not in targets]
-            found = self._ask(local, hosts)
-        if want:
-            found = [f for f in found if f['kind'] == want]
+            found = keep(self._ask(local, hosts))
         return found
 
     @staticmethod

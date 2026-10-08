@@ -23,6 +23,8 @@ also slices a SECOND stereo pair out of the same capture, delays it by delay_ms 
 adjustable) and writes it to the fifo for the video encoder. The listen-back path above is written
 FIRST and is never waited on: the cam side has its own bounded queue and writer thread and drops
 audio when its reader stalls, so a stuck video encoder can't add a microsecond to the listen feed.
+v4.2: an optional second line  "blend SL SR GAIN"  mixes the sub pair into the cam pair exactly like the
+listen blend above (same ramp, same numpy routine; without numpy the cam pair stays plain L/R).
 """
 import collections
 import errno
@@ -111,13 +113,25 @@ BYTES_PER_S = 48000 * 6                 # stereo s24le @ 48 kHz
 
 
 def parse_cam_ctl(path):
-    """-> (L, R, delay_frames, fifo) or None when the cam output is off."""
+    """-> (L, R, delay_frames, fifo, blend) or None when the cam output is off.
+    blend = (SL, SR, gain) from an optional 2nd line "blend SL SR GAIN" (gain linear, > 0), else None."""
     try:
-        parts = open(path).read().split(None, 3)
+        lines = open(path).read().splitlines()
     except OSError:
         return None
+    parts = lines[0].split(None, 3) if lines else []
     if len(parts) < 4 or parts[0] == 'off':
         return None
+    blend = None
+    for extra in lines[1:]:
+        b = extra.split()
+        if len(b) == 4 and b[0] == 'blend':
+            try:
+                g = float(b[3])
+                if g > 0:
+                    blend = (max(0, min(CHANNELS - 1, int(b[1]))), max(0, min(CHANNELS - 1, int(b[2]))), min(g, 16.0))
+            except ValueError:
+                pass
     try:
         l, r = int(parts[0]), int(parts[1])
         ms = max(0, min(MAX_DELAY_MS, int(float(parts[2]))))
@@ -126,7 +140,7 @@ def parse_cam_ctl(path):
     fifo = parts[3].strip()
     if not fifo:
         return None
-    return (max(0, min(CHANNELS - 1, l)), max(0, min(CHANNELS - 1, r)), ms * 48, fifo)
+    return (max(0, min(CHANNELS - 1, l)), max(0, min(CHANNELS - 1, r)), ms * 48, fifo, blend)
 
 
 class DelayLine:
@@ -267,6 +281,7 @@ def main():
     cam = None                           # (L, R, delay_frames, fifo) while the cam output is on
     cam_out, cam_delay = None, DelayLine()
     cam_mtime = None
+    cam_gain, cam_sub = 0.0, (0, 0)      # v4.2 cam sub blend: gain actually applied (ramps like listen's)
 
     def cam_poll():
         """Apply the cam control file (cheap: one stat per 100 ms). Never raises."""
@@ -332,12 +347,25 @@ def main():
             cap.kill(); sys.exit(0)
         if cam is not None and cam_out is not None:      # after the listen write: listen never waits on this
             try:
-                cl, cr, dframes, _ = cam
-                co = bytearray(n * 6)
-                lo2, ro2 = cl * 3, cr * 3
-                for k in range(3):
-                    co[k::6] = buf[lo2 + k:n * FRAME:FRAME]
-                    co[3 + k::6] = buf[ro2 + k:n * FRAME:FRAME]
+                cl, cr, dframes, _, cblend = cam
+                ctarget = cblend[2] if (cblend and np is not None) else 0.0
+                if cblend:
+                    cam_sub = cblend[:2]
+                co = None
+                if ctarget > 0 or (cam_gain > 0 and np is not None):
+                    try:
+                        co = blend_block(buf, n, (cl, cr), cam_sub[0], cam_sub[1], cam_gain, ctarget)
+                    except Exception as e:   # plain pair below; the cam side never takes listen down
+                        err.write(f'C blend failed: {e}\n'); err.flush()
+                        co, ctarget = None, 0.0
+                        cam = (cl, cr, dframes, cam[3], None)    # don't retry every 10 ms
+                cam_gain = ctarget
+                if co is None:
+                    co = bytearray(n * 6)
+                    lo2, ro2 = cl * 3, cr * 3
+                    for k in range(3):
+                        co[k::6] = buf[lo2 + k:n * FRAME:FRAME]
+                        co[3 + k::6] = buf[ro2 + k:n * FRAME:FRAME]
                 cam_out.put(cam_delay.process(co, dframes * 6) if dframes or cam_delay.len else bytes(co))
             except Exception as e:
                 err.write(f'C {e}\n'); err.flush()

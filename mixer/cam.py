@@ -338,11 +338,12 @@ def find_device(configured=''):
 class Cam:
     def __init__(self, cfg, listener, feeds, probe, ctl_path, on_status=None, save=None,
                  out_url='rtsp://127.0.0.1:8554/cam', video_input=None, output=None, net_probe=None,
-                 accel=None):
+                 accel=None, blend=None):
         self.cfg = dict(cfg or {})
         self.enabled = bool(self.cfg.get('enabled', True))
         self.listener = listener
         self.feeds = feeds                        # () -> [{'id', 'usb': [l, r]} ...] (1-based); [] = no console audio
+        self.blend = blend or (lambda fid: None)  # v4.2: fid -> (SL, SR, gain) zero-based, or None (the Listen "+ Subs")
         self.probe = probe                        # () -> (api_ok, ready, readers) for the MediaMTX 'cam' path
         self.ctl = ctl_path                       # the picker's cam control file
         self.on_status = on_status or (lambda st: None)
@@ -419,13 +420,28 @@ class Cam:
         except (TypeError, ValueError):
             return 0
 
+    def _console_feed(self):
+        """Feed id the console sound comes from ('mic' falls back to Main LR when the camera has no mic)."""
+        return 'main1' if self.feed == 'mic' else self.feed
+
     def _pair(self):
         """Console pair for the chosen feed ('mic' falls back to Main LR when the camera has no mic)."""
-        want = 'main1' if self.feed == 'mic' else self.feed
+        want = self._console_feed()
         for f in self.feeds() or []:
             if f['id'] == want:
                 return f['usb'][0] - 1, f['usb'][1] - 1
         return None
+
+    def _blend(self):
+        try:
+            return self.blend(self._console_feed())
+        except Exception:
+            return None
+
+    def blend_changed(self):
+        """v4.2: the Listen "+ Subs" setting changed -- the video's console sound follows it live."""
+        self._write_ctl()
+        self._publish()
 
     def _audio_plan(self, src):
         """'mic' (the camera's own mic), 'console' (a WING pair via the picker) or '' (picture only)."""
@@ -736,6 +752,7 @@ class Cam:
             'viewers':   self.readers,
             'audio':     self.audio if self.running else bool(self._audio_plan(act)),
             'feed':      self.feed,
+            'subs':      bool(self._blend()) and (self.audio_kind if self.running else self._audio_plan(act)) == 'console',
             'delay_ms':  self.delay_ms,
             'quality':   self.quality,
             'qualities': [{'id': k, 'label': v['label']} for k, v in QUALITIES.items()],
@@ -757,9 +774,13 @@ class Cam:
                 pass
 
     def _write_ctl(self, off=False):
-        """The picker's cam line: 'L R delay_ms fifo' while running with audio, else 'off'."""
+        """The picker's cam line: 'L R delay_ms fifo' while running with audio, else 'off'.
+        v4.2: plus 'blend SL SR GAIN' when the Listen "+ Subs" applies to this feed."""
         pair = None if off or not (self.running and self.audio_kind == 'console' and self._fifo) else self._pair()
         line = 'off\n' if pair is None else f'{pair[0]} {pair[1]} {self.delay_ms} {self._fifo}\n'
+        b = self._blend() if pair is not None else None
+        if b:
+            line += f'blend {int(b[0])} {int(b[1])} {float(b[2]):.6f}\n'
         try:
             tmp = self.ctl + '.tmp'
             with open(tmp, 'w') as f:

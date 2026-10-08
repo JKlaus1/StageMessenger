@@ -289,6 +289,7 @@
     .seg button { border: 0; background: transparent; color: var(--muted); padding: .55rem .9rem; font-size: .7rem; font-weight: 900; letter-spacing: .08em; }
     .seg button.sel { background: var(--green); color: #001a0d; }
     .seg button.sel.alt { background: var(--amber); color: #1a1000; }
+    .seg button:disabled { opacity: .45; }
     .auto-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem; margin-top: .45rem; }
     .auto-row label { font-size: .56rem; font-weight: 800; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
     .auto-row select { width: 100%; margin-top: .15rem; padding: .4rem; font-size: .74rem; }
@@ -563,6 +564,8 @@
     body.cvm > .card, body.cvm > footer { display: none !important; }
     body.cvm #link-banner { margin: .25rem .4rem; }
     #cv { display: none; }
+    /* v4.2: header badges sized like .hb -- SOLO / ALT showing up must not make the bar taller */
+    #solo-clear, #alt-badge { flex: none; padding: .3rem .55rem; font-size: .6rem; line-height: 1.1; border-radius: 7px; white-space: nowrap; }
     body.cvm #cv { display: flex; flex: 1; min-height: 0; background: var(--cv-bg); touch-action: pan-x; }
     .cv-strips { flex: 1; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain;
       scroll-snap-type: x proximity; scrollbar-width: thin; touch-action: pan-x; }
@@ -853,13 +856,13 @@
     <h1 id="title">WING Mixer</h1>
     <div id="cv-mode"></div>
     <div class="hdr-right">
+      <button id="solo-clear" title="Clear all solos">SOLO ✕</button>
       <button class="hb" id="view-btn">CONSOLE</button>
       <button class="hb cvo" id="cv-ls-btn" title="Listen">&#127911;</button>
       <button class="hb cvo" id="cv-mg-btn" title="Mute groups">MG</button>
       <button class="hb cvo" id="cv-set-btn" title="Layout, strip width, classic view">&#9881;</button>
       <a class="hb" id="wifi-link" href="/mixer/wifi" title="Move the Pi onto a WiFi network">WIFI</a>
       <span id="alt-badge" title="The console is using every channel's ALT input">INPUTS ON ALT</span>
-      <button id="solo-clear" title="Clear all solos">SOLO ✕</button>
       <div id="status"><span id="status-dot"></span><span id="status-text">Connecting</span></div>
     </div>
   </header>
@@ -875,7 +878,7 @@
     <div class="pk"><div><span id="pk-l"></span></div><div><span id="pk-r"></span></div></div>
     <div id="listen-note"></div>
     <div class="listen-foot"><div id="lag-note"></div><select id="listen-ab" title="Low-latency audio bitrate (applies to everyone listening)"></select><button class="toggle" id="mode-btn" title="Low-latency WebRTC audio, falling back to MP3">Low latency</button></div>
-    <div class="vol-row blend-row off" id="blend-row" hidden title="Blend the sub feed into Main LR (applies to everyone listening)"><button class="toggle" id="blend-btn">+ Subs</button><input type="range" id="blend-db" min="-30" max="12" step="0.5" value="0" title="Sub level relative to the console's sub feed"><span class="vv" id="blend-val">0.0 dB</span></div>
+    <div class="vol-row blend-row off" id="blend-row" hidden title="Blend the sub feed into Main LR -- Listen and the video's sound (applies to everyone)"><button class="toggle" id="blend-btn">+ Subs</button><input type="range" id="blend-db" min="-30" max="12" step="0.5" value="0" title="Sub level relative to the console's sub feed"><span class="vv" id="blend-val">0.0 dB</span></div>
     <div class="vol-row amb-row" id="amb-row" hidden title="Which channel's input feeds the ambient listen (applies to everyone)"><span>Mic</span><select id="amb-sel"></select></div>
     <div class="vol-row"><span>Volume</span><input type="range" id="listen-vol" min="0" max="400" step="5" value="100" title="Volume on this device (over 100% boosts it)"><span class="vv" id="listen-vol-val">100%</span></div>
     <audio id="player" preload="none"></audio>
@@ -1188,6 +1191,8 @@
     <div class="note small">Or pinch the faders with two fingers.</div>
     <div class="cv-row"><span>Bus list</span><button class="btn" id="cv-sof-edit">Choose / reorder&hellip;</button></div>
     <div class="note small">The right-hand column (sends on fader) for this layout.</div>
+    <div class="cv-row"><span>Console</span><div class="seg" id="cv-cons"><button data-v="auto">AUTO</button><button data-v="wing">WING</button><button data-v="x32">X32</button></div></div>
+    <div class="note small" id="cv-cons-note">Whole Pi (everyone). Auto uses whichever console it finds; pick one when both are on the network.</div>
     <div class="cv-row"><button class="btn" id="cv-classic">&#8592; Classic view</button></div>
     <div class="note small">Hold a layer button (1&ndash;3) to choose what is on it. Double-tap a fader for 0 dB. Tap a bus / matrix name to mix its sends on the faders.</div>
   </div></div>
@@ -2489,7 +2494,8 @@
   const fmtSubDb = v => (v > 0 ? '+' : '') + Number(v).toFixed(1) + ' dB';
   let blendDrag = false, blendTimer = null;
   function paintListenRows() {
-    const showBlend = feedId === 'main1' && feeds.some(f => f.id === 'main2');
+    const camMain = !!(camSt && camSt.available && camSt.audio && (camSt.feed === 'main1' || (camSt.feed === 'mic' && camSt.audio_kind === 'console')));
+    const showBlend = (feedId === 'main1' || camMain) && feeds.some(f => f.id === 'main2');   // v4.2: video follows it too
     $('blend-row').hidden = !showBlend;
     if (blendSt) {
       $('blend-btn').classList.toggle('on', !!blendSt.on);
@@ -2724,6 +2730,7 @@
   function paintCam(st) {
     if (!st) return;
     camSt = st;
+    paintListenRows();                                   // v4.2: "+ Subs" also shows for the video's Main LR
     $('cam-card').hidden = !st.available;
     if (!st.available) { if (camWant) stopCam(); return; }
     const srcs = st.sources || [];
@@ -3769,6 +3776,24 @@
     else if (a.startsWith('/mgrp/')) { paintMuteGroups(); eachRow(paintRow); }
   }
 
+  // ── v4.2: console choice (Auto / WING / X32), Pi-wide ──
+  let cpref = null;
+  function paintCpref(c) {
+    if (!c) return;
+    cpref = c;
+    document.querySelectorAll('#cv-cons button').forEach(b => {
+      b.classList.toggle('sel', b.dataset.v === c.v); b.disabled = !!c.pinned;
+    });
+    $('cv-cons-note').textContent = c.pinned
+      ? 'The console address is pinned in mixer_config.json (set_console.sh changes it).'
+      : (c.note ? 'Console: ' + c.note + '. ' : '') + 'Whole Pi (everyone). Auto uses whichever console it finds; pick one when both are on the network.';
+  }
+  document.querySelectorAll('#cv-cons button').forEach(b => b.addEventListener('click', () => {
+    if (cpref && cpref.pinned) return;
+    paintCpref(Object.assign({}, cpref || {}, { v: b.dataset.v, note: b.dataset.v !== 'auto' && b.dataset.v !== CAP.console ? 'looking\u2026' : '' }));
+    postJSON('/mixer/api/console/pref', { pref: b.dataset.v });
+  }));
+
   function applySnap(m) {
     const SS = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return '1'; } },
                  set(k, v) { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch (e) {} } };
@@ -3787,6 +3812,7 @@
     ORDER = m.order || []; applyOrder();
     recM = m.recm || {}; recS = m.recs || {}; paintAlt();
     if ('sp' in m) applySp(m.sp);
+    if (m.cpref) paintCpref(m.cpref);
     for (let n = 1; n <= 2; n++) recSeen[n] = [S[`/cards/wlive/${n}/$stat/etime`] || 0, Date.now()];
     paintRec();
     if (typeof m.listen_target === 'number' && m.listen_target > 0) listenTarget = m.listen_target;
@@ -3835,6 +3861,7 @@
       else if (m.t === 'recs') { recS[m.c] = m.v || []; paintRec(); }
       else if (m.t === 'sp') applySp(m.v);
       else if (m.t === 'layouts') cvLayoutsMsg(m);
+      else if (m.t === 'cpref') paintCpref(m.v);
     };
   }
   $('link-reload').addEventListener('click', () => location.reload());

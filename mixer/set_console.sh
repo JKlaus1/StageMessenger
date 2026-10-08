@@ -4,7 +4,7 @@
 #   bash ~/stage-messenger/mixer/set_console.sh wing|x32        only accept that type, still found automatically
 #   bash ~/stage-messenger/mixer/set_console.sh wing|x32 <ip>   pin type + address (old behaviour; no searching)
 # Edits only mixer_type + mixer_ip in mixer_config.json (every other key -- TURN, Spotify search, remote
-# -- is kept), restarts stage-messenger and shows the mixer's startup lines. Run with  ssh -t  (sudo).
+# -- is kept) and clears the page's ⚙ Console choice (v4.2) in mixer_state.json, restarts stage-messenger and shows the mixer's startup lines. Run with  ssh -t  (sudo).
 set -e
 cd "$(dirname "$0")/.."
 TYPE="$1"; IP="$2"
@@ -26,6 +26,17 @@ with open(tmp, 'w') as f:
     json.dump(c, f, indent=2)
 os.replace(tmp, p)
 print(f"now: mixer_type={c['mixer_type']} mixer_ip={c.get('mixer_ip') or '(found automatically)'}  (other keys kept)")
+st = 'mixer_state.json'                       # v4.2: drop the page's Auto/WING/X32 choice so this wins
+if os.path.exists(st):
+    try:
+        d = json.load(open(st))
+        if d.pop('console_pref', None) is not None:
+            with open(st + '.tmp', 'w') as f:
+                json.dump(d, f)
+            os.replace(st + '.tmp', st)
+            print("cleared the console choice made on the page (⚙ Console)")
+    except Exception as e:
+        print(f"could not clear the page's console choice: {e}")
 PY
 sudo systemctl restart stage-messenger
 echo "restarted -- waiting for the console to load..."

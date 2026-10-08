@@ -102,6 +102,47 @@ def main():
         check('last used type wins when its address changed', (lambda f: f and f['kind'] == 'x32')(mx._find(sweep=False)))
         mx._state_raw = sr
 
+        print('v4.2 console choice (page: Auto / WING / X32) with both answering')
+        st = c.get('/mixer/api/state').get_json()
+        check('snapshot carries the choice (auto, not pinned)', st.get('cpref', {}).get('v') == 'auto'
+              and st['cpref']['pinned'] is False, st.get('cpref'))
+        drain(q)
+        r = c.post('/mixer/api/console/pref', json={'pref': 'x32'})
+        check('choose X32 -> ok', r.status_code == 200 and r.get_json()['cpref']['v'] == 'x32', r.get_json())
+        check('switched to the M32C @ .3 right away', wait_for(lambda: mx.console == 'x32' and mx.ip == B and mx.wing.loaded, 8),
+              (mx.console, mx.ip))
+        check('pages told (cpref + snap with M32C caps)', (lambda ms: any(m['t'] == 'cpref' for m in ms)
+              and any(m['t'] == 'snap' and m['caps']['console'] == 'x32' for m in ms))(drain(q)))
+        sf = json.load(open(os.path.join(tmp, 'mixer_state.json')))
+        check('choice saved in mixer_state.json', sf.get('console_pref') == 'x32', sf.get('console_pref'))
+        time.sleep(2.5)
+        check('watcher keeps the chosen M32C (WING still answering)', mx.console == 'x32' and mx.ip == B)
+        r = c.post('/mixer/api/console/pref', json={'pref': 'wing'})
+        check('choose WING -> back to the WING @ .2', r.status_code == 200 and
+              wait_for(lambda: mx.console == 'wing' and mx.ip == A and mx.wing.loaded, 8), (mx.console, mx.ip))
+        r = c.post('/mixer/api/console/pref', json={'pref': 'auto'})
+        time.sleep(2)
+        check('Auto: the connected WING is kept', r.status_code == 200 and mx.console == 'wing' and mx.ip == A
+              and mx.console_pref()['v'] == 'auto', (mx.console, mx.ip))
+        stop_x32(fx2); fx2 = None
+        r = c.post('/mixer/api/console/pref', json={'pref': 'x32'})
+        check('X32 chosen but none answering: stays on the WING with a note',
+              wait_for(lambda: 'still looking' in mx.console_pref()['note'], 6) and mx.console == 'wing', mx.console_pref())
+        fx2 = FakeX32(host=B).start()
+        check('watcher switches when the chosen X32 shows up', wait_for(lambda: mx.console == 'x32' and mx.ip == B
+              and mx.wing.loaded, 12), (mx.console, mx.ip))
+        check('note cleared after the switch', mx.console_pref()['note'] == '', mx.console_pref())
+        r = c.post('/mixer/api/console/pref', json={'pref': 'mackie'})
+        check('bad choice -> 400', r.status_code == 400)
+        mx.pinned = '10.1.1.1'
+        r = c.post('/mixer/api/console/pref', json={'pref': 'wing'})
+        check('pinned IP -> 409, choice unchanged', r.status_code == 409 and mx.console_pref()['v'] == 'x32')
+        mx.pinned = ''
+        c.post('/mixer/api/console/pref', json={'pref': 'wing'})
+        check('back on the WING @ .2 for the rest', wait_for(lambda: mx.console == 'wing' and mx.ip == A and mx.wing.loaded, 8))
+        check("mixer_type x32 in config, page says auto -> auto", mx._pref_want('auto') is None
+              and mx._pref_want(None) == mx.cfg_want and mx._pref_want('wing') == 'wing')
+
         print('discovery')
         Finder = mixer.discover.Finder
         got = Finder('', [A, B], timeout=0.5).discover(sweep=False)
@@ -126,6 +167,9 @@ def main():
             check('subnet sweep finds what broadcast missed (in < 2.5 s)', ('x32', '127.0.0.77') in
                   [(x['kind'], x['ip']) for x in g] and dt < 2.5, (g, round(dt, 2)))
             check('no sweep when asked not to', Finder('fake0', timeout=0.4).discover(sweep=False) == [])
+            g = Finder('fake0', [A], timeout=0.5).discover(want='x32')
+            check('v4.2: only the other type answered the broadcast -> still sweeps for the wanted one',
+                  ('x32', '127.0.0.77') in [(x['kind'], x['ip']) for x in g] and all(x['kind'] == 'x32' for x in g), g)
         finally:
             mixer.discover.iface_net = orig
             stop_x32(fx3)
