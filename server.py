@@ -49,6 +49,48 @@ def append_log(kind, frm, message, targets, color):
     return entry
 
 
+# ── Lights bridge (Lightboard /api/ai/command) ─────────────────────────────
+# A message starting with LIGHTS_PREFIX ("!black out the bars") is NOT shown
+# on the displays. It is sent to Lightboard, which turns it into live scene
+# changes (Settings → AI → "Stage Messenger can adjust lights" must be on and
+# the sender on the allowed list; the control page is always allowed). The
+# one-line reply comes back as a message from LIGHTS to the sender's own
+# device and the control page.
+LIGHTBOARD_URL = os.environ.get('LIGHTBOARD_URL', 'http://127.0.0.1:5000').rstrip('/')
+LIGHTS_PREFIX  = '!'
+LIGHTS_COLOR   = '#6a3fb5'
+LIGHTS_TIMEOUT = 25        # s — Haiku round trip is ~1-2 s; manuals are not involved here
+
+
+def lights_command(text, sender, source, reply_room):
+    """Runs in a thread. Posts to Lightboard, relays the reply."""
+    import json as _json
+    from urllib import request as _rq, error as _err
+    body = _json.dumps({'text': text, 'sender': sender, 'source': source}).encode()
+    req  = _rq.Request(LIGHTBOARD_URL + '/api/ai/command', data=body,
+                       headers={'Content-Type': 'application/json'}, method='POST')
+    try:
+        with _rq.urlopen(req, timeout=LIGHTS_TIMEOUT) as r:
+            res = _json.loads(r.read().decode() or '{}')
+    except _err.HTTPError as e:
+        try:
+            res = _json.loads(e.read().decode() or '{}')
+        except Exception:
+            res = {}
+        res.setdefault('reply', f'Lights: HTTP {e.code}')
+    except Exception as e:
+        res = {'reply': 'Lights offline — ' + (type(e).__name__)}
+    reply = (res.get('reply') or res.get('error') or 'Lights: no reply')[:160]
+    payload = {'message': reply, 'subtitle': '', 'color': LIGHTS_COLOR,
+               'duration': 8000, 'from': 'LIGHTS'}
+    if reply_room:
+        socketio.emit('message', payload, room=reply_room)
+    socketio.emit('message', payload, room='control-clients')
+    entry = append_log('lights', 'LIGHTS', reply, [sender], LIGHTS_COLOR)
+    socketio.emit('log-entry', entry, room='control-clients')
+    print(f'[LX] {sender} ({source}): "{text}" → {reply}')
+
+
 def device_list():
     """Return serialisable list of connected devices."""
     return [
@@ -236,6 +278,19 @@ def handle_send_message(data):
     is_sender  = device and device.get('canSend')
 
     if not is_control and not is_sender:
+        return
+
+    # Lights command? Intercept before it reaches any display.
+    raw = (data.get('message') or '').strip()
+    if raw.startswith(LIGHTS_PREFIX) and len(raw) > len(LIGHTS_PREFIX):
+        text   = raw[len(LIGHTS_PREFIX):].strip()
+        sender = device['name'] if device else 'Operator'
+        source = 'control' if is_control else 'messenger'
+        room   = device['room'] if device else None
+        entry  = append_log('lights', sender, LIGHTS_PREFIX + text, ['lights'], LIGHTS_COLOR)
+        socketio.emit('log-entry', entry, room='control-clients')
+        threading.Thread(target=lights_command, args=(text, sender, source, room),
+                         daemon=True, name='lights-cmd').start()
         return
 
     targets = data.get('targets', ['all'])

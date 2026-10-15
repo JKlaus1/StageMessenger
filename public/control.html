@@ -409,7 +409,7 @@
   <div class="label">Message</div>
   <div class="input-wrap" style="margin-bottom:0.5rem">
     <input type="text" id="message-input"
-           placeholder="Type a message…"
+           placeholder="Type a message…  (!lights command)"
            maxlength="160"
            autocomplete="off" autocorrect="off"
            autocapitalize="characters" spellcheck="false">
@@ -420,6 +420,7 @@
   </div>
 
   <div class="quick-grid">
+    <button class="quick-btn" id="lights-btn" data-msg="!">💡 LIGHTS…</button>
     <button class="quick-btn" data-msg="LOUDER">📢 LOUDER</button>
     <button class="quick-btn" data-msg="SOFTER">🔉 SOFTER</button>
     <button class="quick-btn" data-msg="LAST CHORUS">🎵 LAST CHORUS</button>
@@ -630,6 +631,7 @@
       btn.addEventListener('click', () => {
         msgInput.value = btn.dataset.msg;
         charCount.textContent = `${msgInput.value.length}/160`;
+        if (btn.id === 'lights-btn') { msgInput.focus(); return; }   // prefill "!", type the request
         sendMessage();
       });
     });
@@ -638,7 +640,8 @@
     function sendMessage() {
       const msg = msgInput.value.trim();
       if (!msg || !socket.connected) return;
-      if (sendBtn.classList.contains('no-target')) return;
+      const isLights = msg.startsWith('!');          // lights command → needs no target
+      if (!isLights && sendBtn.classList.contains('no-target')) return;
 
       const targets = sendToAll ? ['all'] : [...selectedRooms];
 
