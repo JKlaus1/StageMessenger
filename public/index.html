@@ -841,9 +841,13 @@
     // ── Sender char count ──────────────────────────────────────────────────────
     const senderInput     = document.getElementById('sender-msg-input');
     const senderCharCount = document.getElementById('sender-char-count');
-    senderInput.addEventListener('input', () => {
-      senderCharCount.textContent = `${senderInput.value.length}/160`;
-    });
+    // 160 for display messages; "!…" lights commands may run to 1000.
+    function updateSenderCharCount() {
+      const max = senderInput.value.startsWith('!') ? 1000 : 160;
+      senderInput.maxLength = max;
+      senderCharCount.textContent = `${senderInput.value.length}/${max}`;
+    }
+    senderInput.addEventListener('input', updateSenderCharCount);
 
     // ── Key selector ─────────────────────────────────────────────────────────
     let selectedKey  = null;
@@ -912,12 +916,12 @@
       document.querySelectorAll('.majmin-btn').forEach(b =>
         b.classList.toggle('active', b.dataset.mode === 'maj'));
       senderInput.value = '';
-      document.getElementById('sender-char-count').textContent = '0/160';
+      updateSenderCharCount();
     });
 
     document.getElementById('clear-sender-msg-btn').addEventListener('click', () => {
       senderInput.value = '';
-      document.getElementById('sender-char-count').textContent = '0/160';
+      updateSenderCharCount();
     });
 
     // ── Send ───────────────────────────────────────────────────────────────────

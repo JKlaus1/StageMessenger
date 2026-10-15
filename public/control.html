@@ -622,15 +622,21 @@
     // ── Char count ─────────────────────────────────────────────────────────────
     const msgInput  = document.getElementById('message-input');
     const charCount = document.getElementById('char-count');
-    msgInput.addEventListener('input', () => {
-      charCount.textContent = `${msgInput.value.length}/160`;
-    });
+    // Display messages stay at 160 (they go on the stage monitors); a lights
+    // command ("!…") is read by Lightboard, not shown, so it may run long.
+    const MSG_MAX = 160, LIGHTS_MAX = 1000;
+    function updateCharCount() {
+      const max = msgInput.value.startsWith('!') ? LIGHTS_MAX : MSG_MAX;
+      msgInput.maxLength = max;
+      charCount.textContent = `${msgInput.value.length}/${max}`;
+    }
+    msgInput.addEventListener('input', updateCharCount);
 
     // ── Quick messages ─────────────────────────────────────────────────────────
     document.querySelectorAll('.quick-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         msgInput.value = btn.dataset.msg;
-        charCount.textContent = `${msgInput.value.length}/160`;
+        updateCharCount();
         if (btn.id === 'lights-btn') { msgInput.focus(); return; }   // prefill "!", type the request
         sendMessage();
       });
@@ -665,12 +671,12 @@
 
     document.getElementById('clear-msg-btn').addEventListener('click', () => {
       msgInput.value = '';
-      charCount.textContent = '0/160';
+      updateCharCount();
     });
 
     document.getElementById('clear-msg-btn').addEventListener('click', () => {
       msgInput.value = '';
-      charCount.textContent = '0/160';
+      updateCharCount();
     });
 
     // ── Clear ──────────────────────────────────────────────────────────────────
